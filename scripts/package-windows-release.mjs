@@ -1,0 +1,2 @@
+process.env.ARCSUB_RELEASE_TARGET = process.env.ARCSUB_RELEASE_TARGET || 'windows-x64';
+await import('./package-release.mjs');
