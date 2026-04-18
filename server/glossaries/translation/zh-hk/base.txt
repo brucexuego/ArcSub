@@ -1,0 +1,4 @@
+# Hong Kong Traditional Chinese overrides for subtitle translation
+speech recognition=語音識別
+voice activity detection=語音活動檢測
+speaker diarization=講者分離

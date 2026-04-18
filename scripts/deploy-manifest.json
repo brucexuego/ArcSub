@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "major": 22,
+    "windowsLatestUrl": "https://nodejs.org/dist/latest-v22.x/node-v22.20.0-win-x64.zip",
+    "linuxLatestUrl": "https://nodejs.org/dist/latest-v22.x/node-v22.20.0-linux-x64.tar.xz"
+  },
+  "python": {
+    "minimumVersion": "3.12.0",
+    "windowsVersion": "3.12.9",
+    "windowsEmbedUrl": "https://www.python.org/ftp/python/3.12.9/python-3.12.9-embed-amd64.zip",
+    "getPipUrl": "https://bootstrap.pypa.io/get-pip.py"
+  },
+  "tools": {
+    "ffmpeg": {
+      "windowsUrl": "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v4.4.1/ffmpeg-4.4.1-win-64.zip"
+    },
+    "yt-dlp": {
+      "windowsUrl": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+      "linuxUrl": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux",
+      "linuxAarch64Url": "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64"
+    }
+  },
+  "assets": {
+    "required": [
+      {
+        "id": "silero-vad",
+        "targetRelativePath": "silero_vad.onnx",
+        "sourceUrl": "https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx?download=true",
+        "category": "vad"
+      },
+      {
+        "id": "ecapa-tdnn",
+        "targetRelativePath": "ecapa-tdnn.onnx",
+        "sourceUrl": "https://huggingface.co/AXERA-TECH/3D-Speaker/resolve/main/ecapa-tdnn.onnx?download=true",
+        "category": "speaker_embedding"
+      }
+    ],
+    "conditional": [
+      {
+        "id": "pyannote-community-1",
+        "category": "pyannote",
+        "requiresHfToken": true,
+        "note": "Prepared via PyannoteDiarizationService when HF_TOKEN and Python/OpenVINO conversion prerequisites are available."
+      }
+    ]
+  }
+}

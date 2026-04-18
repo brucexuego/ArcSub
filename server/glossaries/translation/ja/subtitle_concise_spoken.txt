@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Concise spoken overrides for ja subtitle translation
+thank you=ありがとう
+thank you very much=どうもありがとう
+I do not know=わからない
+I understand=わかった
+all right=いいよ
+wait a second=ちょっと待って
+are you okay?=大丈夫？
+what happened?=どうしたの？
+let us go=行こう
+it is okay=大丈夫
+please do not worry=心配しないで
+come on=ほら
+no problem=大丈夫
+let me think=ちょっと考えさせて

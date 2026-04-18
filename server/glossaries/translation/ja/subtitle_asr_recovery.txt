@@ -1,0 +1,29 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# ASR recovery overrides for ja subtitle translation
+utterance=発話
+speaker label=話者ラベル
+speaker turn=話者交替
+timecode=タイムコード
+word timestamp=単語タイムスタンプ
+filler word=フィラー
+background noise=背景ノイズ
+overlap speech=発話の重なり
+speaker overlap=話者の重なり
+inaudible=聞き取れない
+pause=間
+misrecognition=誤認識
+homophone=同音語
+misheard word=聞き間違い語
+dropped word=脱落語句
+repeated word=重複語
+truncated word=途中切れ語
+unclear speech=不明瞭音声
+cross-talk=クロストーク
+false start=言いさし
+self-correction=自己修正
+disfluency=非流暢性
+hesitation=ためらい
+partial word=不完全語
+cut-off=途中切れ
+speaker change=話者切り替え

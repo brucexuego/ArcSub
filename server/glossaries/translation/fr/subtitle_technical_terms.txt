@@ -1,0 +1,7 @@
+# French technical-term overrides for subtitle translation
+pull request=pull request
+repository=dépôt
+deployment=déploiement
+inference=inférence
+token=jeton
+latency=latence

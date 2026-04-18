@@ -1,0 +1,7 @@
+# German technical-term overrides for subtitle translation
+pull request=Pull Request
+repository=Repository
+deployment=Bereitstellung
+inference=Inferenz
+token=Token
+latency=Latenz

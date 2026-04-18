@@ -1,0 +1,7 @@
+# Shared brand/model names preserved during Chinese ASR recovery
+OpenAI=OpenAI
+Codex=Codex
+OpenVINO=OpenVINO
+Whisper=Whisper
+Qwen=Qwen
+Gemma=Gemma

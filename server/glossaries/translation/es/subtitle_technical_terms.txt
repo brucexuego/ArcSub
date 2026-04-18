@@ -1,0 +1,7 @@
+# Spanish technical-term overrides for subtitle translation
+pull request=pull request
+repository=repositorio
+deployment=despliegue
+inference=inferencia
+token=token
+latency=latencia

@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Concise spoken overrides for zh-hant subtitle translation
+thank you=謝啦
+thank you very much=真的很謝謝你
+I do not know=我不知道
+I understand=我懂了
+all right=好啊
+wait a second=等一下
+are you okay?=你還好嗎？
+what happened?=怎麼了？
+let us go=走吧
+it is okay=沒關係
+please do not worry=別擔心
+come on=拜託
+no problem=沒問題
+let me think=我想一下

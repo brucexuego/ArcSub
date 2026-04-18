@@ -1,0 +1,61 @@
+import path from "path";
+import fs from "fs-extra";
+import { PathManager } from "./path_manager.js";
+import { AudioProcessor } from "./audio_processor.js";
+import { OpenvinoBackend } from "./openvino_backend.js";
+
+export class SpeakerEmbeddingService {
+  private static compiledModel: any | null = null;
+  private static inputName: string | null = null;
+  private static modelPath = path.join(PathManager.getModelsPath(), "ecapa-tdnn.onnx");
+
+  /**
+   * Initializes the OpenVINO compiled model on AUTO device selection.
+   */
+  static async init() {
+    if (this.compiledModel) return;
+    if (!(await fs.pathExists(this.modelPath))) {
+      throw new Error(`[Embedding] model not found: ${this.modelPath}`);
+    }
+
+    const device = OpenvinoBackend.getBaselineModelDevice();
+    console.log(`[Embedding] Compiling model with OpenVINO device: ${device}`);
+    this.compiledModel = await OpenvinoBackend.compileModel(this.modelPath, device);
+    this.inputName = OpenvinoBackend.getPortName(this.compiledModel.input(0), "input");
+    console.log("[Embedding] OpenVINO model ready");
+  }
+
+  /**
+   * Extract embedding vector using OpenVINO runtime.
+   */
+  static async getEmbedding(samples: Float32Array): Promise<number[]> {
+    await this.init();
+    if (!this.compiledModel || !this.inputName) throw new Error("Embedding compiled model missing");
+
+    try {
+      const rawFeatures = await AudioProcessor.extractFeatures(samples);
+      const currentFrames = rawFeatures.length / 80;
+      const targetFrames = 360;
+
+      let finalFeatures: Float32Array;
+      if (currentFrames < targetFrames) {
+        finalFeatures = new Float32Array(targetFrames * 80);
+        finalFeatures.set(rawFeatures);
+      } else {
+        finalFeatures = rawFeatures.slice(0, targetFrames * 80);
+      }
+
+      const tensor = await OpenvinoBackend.createTensor("f32", [1, targetFrames, 80], finalFeatures);
+      const inferRequest = this.compiledModel.createInferRequest();
+      const results = inferRequest.infer({ [this.inputName]: tensor });
+      const output = OpenvinoBackend.getTensorData(Object.values(results)[0]) as Float32Array | null;
+      if (!output) {
+        throw new Error("Embedding output tensor is empty.");
+      }
+      return Array.from(output);
+    } catch (err: any) {
+      console.error("[Embedding] inference failed:", err?.message || err);
+      return new Array(192).fill(0);
+    }
+  }
+}

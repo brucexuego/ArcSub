@@ -1,0 +1,31 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Base for ja subtitle translation
+code review=コードレビュー
+algorithm=アルゴリズム
+access right=アクセス権
+address=アドレス
+address resolution protocol=アドレス解決プロトコル
+adapter=アダプター
+codebase=コードベース
+workflow=ワークフロー
+runtime=ランタイム
+endpoint=エンドポイント
+default=デフォルト
+project=プロジェクト
+settings=設定
+subtitle=字幕
+translation=翻訳
+machine translation=機械翻訳
+speech recognition=音声認識
+voice recognition=音声認識
+speaker identification=話者識別
+voice activity detection=音声活動検出
+speaker diarization=話者分離
+prompt=プロンプト
+timestamp=タイムスタンプ
+segment=セグメント
+transcript=書き起こし
+transcription=文字起こし
+alignment=アライメント
+model=モデル

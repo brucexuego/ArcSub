@@ -1,0 +1,31 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Base for zh-hans subtitle translation
+code review=代码审查
+algorithm=算法
+access right=访问权
+address=地址
+address resolution protocol=地址解析协议
+adapter=适配器
+codebase=代码库
+workflow=工作流
+runtime=运行时
+endpoint=端点
+default=默认
+project=项目
+settings=设置
+subtitle=字幕
+translation=翻译
+machine translation=机器翻译
+speech recognition=语音识别
+voice recognition=语音识别
+speaker identification=说话人识别
+voice activity detection=语音活动检测
+speaker diarization=说话人分离
+prompt=提示词
+timestamp=时间戳
+segment=片段
+transcript=转录文本
+transcription=转录
+alignment=对齐
+model=模型

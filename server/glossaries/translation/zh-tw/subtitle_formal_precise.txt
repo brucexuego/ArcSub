@@ -1,0 +1,3 @@
+# Locale-specific formal precise overrides for Taiwan Traditional Chinese subtitle translation
+please wait=請稍候
+as soon as possible=儘速

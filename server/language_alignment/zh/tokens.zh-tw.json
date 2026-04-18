@@ -1,0 +1,17 @@
+{
+  "standaloneTokens": [
+    "\u5c0d",
+    "\u5c0d\u554a",
+    "\u5c0d\u5440",
+    "\u6c92\u6709"
+  ],
+  "shortTailTokens": [
+    "\u55ce",
+    "\u904e"
+  ],
+  "continuationTokens": [
+    "\u55ce",
+    "\u904e",
+    "\u9084"
+  ]
+}

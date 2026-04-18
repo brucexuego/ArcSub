@@ -1,0 +1,3 @@
+# Locale-specific formal precise overrides for Mainland Simplified Chinese subtitle translation
+please wait=请稍等
+as soon as possible=尽快

@@ -1,0 +1,14 @@
+# Finnish base glossary for subtitle translation
+code review=koodikatselmointi
+codebase=koodikanta
+workflow=työnkulku
+runtime=suoritusaika
+endpoint=päätepiste
+default=oletus
+project=projekti
+settings=asetukset
+subtitle=tekstitys
+translation=käännös
+speech recognition=puheentunnistus
+voice activity detection=puheaktiivisuuden tunnistus
+speaker diarization=puhujan diarisaatio

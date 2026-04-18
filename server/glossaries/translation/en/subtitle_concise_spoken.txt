@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Concise spoken overrides for en subtitle translation
+thank you=thank you
+thank you very much=thank you very much
+I do not know=I do not know
+I understand=I understand
+all right=all right
+wait a second=wait a second
+are you okay?=are you okay?
+what happened?=what happened?
+let us go=let us go
+it is okay=it is okay
+please do not worry=please do not worry
+come on=come on
+no problem=no problem
+let me think=let me think

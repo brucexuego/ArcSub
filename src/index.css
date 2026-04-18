@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Inter:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Noto Sans TC", ui-sans-serif, system-ui, sans-serif;
+  --color-surface: #0b1326;
+  --color-surface-container-lowest: #0f1728;
+  --color-surface-container-low: #10182b;
+  --color-surface-container: #131b2e;
+  --color-surface-container-high: #171f33;
+  --color-surface-container-highest: #2d3449;
+  --color-primary: #c3c0ff;
+  --color-primary-container: #4f46e5;
+  --color-secondary: #b7c8e1;
+  --color-tertiary: #4edea3;
+  --color-outline: #918fa1;
+  --color-error: #ff6b7a;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-secondary font-sans antialiased;
+  }
+
+  select {
+    color-scheme: dark;
+  }
+
+  option {
+    @apply bg-surface-container-high text-white;
+  }
+}
+
+.glass-panel {
+  background: rgba(23, 31, 51, 0.7);
+  backdrop-filter: blur(12px);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #2d3449;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #464555;
+}

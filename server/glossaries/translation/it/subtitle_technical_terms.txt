@@ -1,0 +1,7 @@
+# Italian technical-term overrides for subtitle translation
+pull request=pull request
+repository=repository
+deployment=distribuzione
+inference=inferenza
+token=token
+latency=latenza

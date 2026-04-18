@@ -1,0 +1,14 @@
+# Spanish base glossary for subtitle translation
+code review=revisión de código
+codebase=base de código
+workflow=flujo de trabajo
+runtime=tiempo de ejecución
+endpoint=punto final
+default=predeterminado
+project=proyecto
+settings=configuración
+subtitle=subtítulo
+translation=traducción
+speech recognition=reconocimiento de voz
+voice activity detection=detección de actividad de voz
+speaker diarization=diarización de hablantes

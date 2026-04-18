@@ -1,0 +1,13 @@
+{
+  "key": "en",
+  "aliases": ["en", "en-us", "en-gb", "en-ca", "en-au"],
+  "alignmentProfileId": "en-jonatas-xlsr53-english-v1",
+  "clipPaddingSec": 0.32,
+  "minRunConfidence": 0.42,
+  "minOverallConfidence": 0.52,
+  "minOverallAlignedRatio": 0.55,
+  "progressLabel": "English forced alignment",
+  "maxRunGapSec": 0.42,
+  "minRunTokenLength": 2
+}
+

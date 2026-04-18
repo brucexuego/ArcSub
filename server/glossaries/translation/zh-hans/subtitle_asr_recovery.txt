@@ -1,0 +1,29 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# ASR recovery overrides for zh-hans subtitle translation
+utterance=话语
+speaker label=说话人标签
+speaker turn=说话人切换
+timecode=时间码
+word timestamp=字词时间戳
+filler word=赘词
+background noise=背景噪声
+overlap speech=重叠语音
+speaker overlap=说话人重叠
+inaudible=听不清楚
+pause=停顿
+misrecognition=误识别
+homophone=同音词
+misheard word=听错字词
+dropped word=漏字词
+repeated word=重复字词
+truncated word=截断字词
+unclear speech=语音不清
+cross-talk=交叉说话
+false start=起头修正
+self-correction=自我修正
+disfluency=言语不流畅
+hesitation=犹豫停顿
+partial word=残缺字词
+cut-off=中途截断
+speaker change=说话者切换

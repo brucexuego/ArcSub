@@ -1,0 +1,7 @@
+{
+  "key": "zh",
+  "aliases": ["zh", "zh-cn", "zh-tw"],
+  "segmenterLocale": "zh",
+  "noSpaceScript": true,
+  "timingMerge": true
+}

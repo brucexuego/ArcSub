@@ -1,0 +1,506 @@
+import type { CloudTranslateProvider } from '../../cloud_translate_provider.js';
+import {
+  usesJsonStrictAlignment,
+  usesTemplateValidatedQualityChecks,
+  type TranslationQualityMode,
+} from './translation_quality_policy.js';
+
+export type CloudTranslationStrategy = 'plain' | 'forced_alignment' | 'context_window';
+
+export interface CloudTranslationLineSafeUnit {
+  index: number;
+  marker: string;
+  prefix: string;
+  content: string;
+  speakerTag: string | null;
+}
+
+export interface CloudTranslationJsonRepairResult {
+  text: string;
+  missingCount: number;
+  warnings?: string[];
+}
+
+export interface CloudTranslationContextChunk {
+  start: number;
+  length: number;
+}
+
+export interface CloudTranslationContextConfig {
+  enabled: boolean;
+  targetLines: number;
+  minTargetLines: number;
+  contextWindow: number;
+  charBudget: number;
+  maxSplitDepth: number;
+}
+
+export interface CloudTranslationProviderResult {
+  text: string;
+  meta: {
+    endpointUrl: string;
+    fallbackUsed: boolean;
+    fallbackType: string | null;
+    requestWarnings?: string[];
+  };
+}
+
+export interface CloudTranslationProviderRequest {
+  provider: CloudTranslateProvider;
+  endpointUrl: string;
+  key?: string;
+  model?: string;
+}
+
+export interface CloudTranslationOrchestratorInput {
+  text: string;
+  targetLang: string;
+  glossary?: string;
+  prompt?: string;
+  promptTemplateId?: string;
+  enableJsonLineRepair: boolean;
+  qualityMode: TranslationQualityMode;
+  supportsContextMode: boolean;
+  isConnectionTest?: boolean;
+  providerRequest: CloudTranslationProviderRequest;
+  signal?: AbortSignal;
+}
+
+export interface CloudTranslationOrchestratorDeps {
+  getCloudContextConfig(): CloudTranslationContextConfig;
+  getRemoteBatchSize(): number;
+  getRetryConfig(): {
+    maxRetries: number;
+    baseRetryMs: number;
+    rateLimitRetryMs: number;
+  };
+  throwIfAborted(signal?: AbortSignal): void;
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+  mapConnectionError(error: unknown): string;
+  isRetryableError(error: unknown): boolean;
+  isProviderHttpError(error: unknown): error is { status: number; retryAfterMs: number | null };
+  isProviderContentFilterError(error: unknown): boolean;
+  requestTranslationByProvider(
+    provider: CloudTranslateProvider,
+    endpointUrl: string,
+    options: {
+      text: string;
+      targetLang: string;
+      glossary?: string;
+      prompt?: string;
+      promptTemplateId?: string;
+      key?: string;
+      model?: string;
+      isConnectionTest?: boolean;
+      lineSafeMode?: boolean;
+      systemPromptOverride?: string;
+      disableSystemPrompt?: boolean;
+      signal?: AbortSignal;
+    },
+    onProgress?: (message: string) => void
+  ): Promise<CloudTranslationProviderResult>;
+  buildLineSafeUnits(text: string): CloudTranslationLineSafeUnit[];
+  stripStructuredPrefix(value: string): string;
+  buildLineSafeInput(units: CloudTranslationLineSafeUnit[]): string;
+  parseLineSafeOutput(output: string, units: CloudTranslationLineSafeUnit[]): string | null;
+  normalizeTargetLanguageOutput(output: string, targetLang: string): string;
+  repairLineAlignmentWithJsonMap(
+    provider: CloudTranslateProvider,
+    endpointUrl: string,
+    units: CloudTranslationLineSafeUnit[],
+    options: {
+      targetLang: string;
+      glossary?: string;
+      promptTemplateId?: string;
+      key?: string;
+      model?: string;
+    },
+    onProgress?: (message: string) => void,
+    signal?: AbortSignal
+  ): Promise<CloudTranslationJsonRepairResult | null>;
+  rebindByLineIndex(units: CloudTranslationLineSafeUnit[], translatedText: string): string | null;
+  buildCloudContextInput(
+    units: CloudTranslationLineSafeUnit[],
+    start: number,
+    length: number,
+    contextWindow: number
+  ): {
+    text: string;
+    targetUnits: CloudTranslationLineSafeUnit[];
+  };
+  buildCloudContextSystemPrompt(input: {
+    targetLang: string;
+    glossary?: string;
+    promptTemplateId?: string;
+    prompt?: string;
+  }): string;
+  parseCloudContextOutput(raw: string, targetUnits: CloudTranslationLineSafeUnit[]): string | null;
+  buildCloudContextChunks(
+    units: CloudTranslationLineSafeUnit[],
+    targetLines: number,
+    charBudget: number
+  ): CloudTranslationContextChunk[];
+}
+
+export interface CloudTranslationOrchestratorResult {
+  output: string;
+  warnings: string[];
+  retryCount: number;
+  lastError: string | null;
+  fallbackUsed: boolean;
+  fallbackType: string | null;
+  endpointUsed: string;
+  cloudStrategy: CloudTranslationStrategy;
+  cloudContextChunkCount: number;
+  cloudContextFallbackCount: number;
+  sourceLineCount: number;
+  sourceHasStructuredPrefixes: boolean;
+  sourceSpeakerTaggedLineCount: number;
+  relaxedWholeRequestApplied: boolean;
+  relaxedWholeRequestFallback: boolean;
+}
+
+export async function runCloudTranslationOrchestrator(
+  input: CloudTranslationOrchestratorInput,
+  deps: CloudTranslationOrchestratorDeps,
+  onProgress?: (message: string) => void
+): Promise<CloudTranslationOrchestratorResult> {
+  deps.throwIfAborted(input.signal);
+
+  const lineSafeUnits = deps.buildLineSafeUnits(input.text);
+  const sourceLineCount = String(input.text).split('\n').length;
+  const sourceHasStructuredPrefixes = lineSafeUnits.some((unit) => Boolean(unit.prefix));
+  const sourceSpeakerTaggedLineCount = lineSafeUnits.filter((unit) => Boolean(unit.speakerTag)).length;
+  const useLineSafeMode = sourceLineCount > 1;
+  const useCloudForcedAlignment = useLineSafeMode && input.enableJsonLineRepair && usesJsonStrictAlignment(input.qualityMode);
+  const cloudContextConfig = deps.getCloudContextConfig();
+  const useCloudContextMode =
+    !useCloudForcedAlignment &&
+    useLineSafeMode &&
+    usesTemplateValidatedQualityChecks(input.qualityMode) &&
+    cloudContextConfig.enabled &&
+    input.supportsContextMode;
+
+  const { maxRetries, baseRetryMs, rateLimitRetryMs } = deps.getRetryConfig();
+
+  const warnings: string[] = [];
+  const addWarning = (code: string) => {
+    if (!warnings.includes(code)) warnings.push(code);
+  };
+
+  let retryCount = 0;
+  let lastError: string | null = null;
+  let output = '';
+  let fallbackUsed = false;
+  let fallbackType: string | null = null;
+  let endpointUsed = input.providerRequest.endpointUrl;
+  let cloudStrategy: CloudTranslationStrategy = useCloudForcedAlignment
+    ? 'forced_alignment'
+    : useCloudContextMode
+      ? 'context_window'
+      : 'plain';
+  let cloudContextChunkCount = 0;
+  let cloudContextFallbackCount = 0;
+
+  const requestCloudTranslation = async (requestOptions: {
+    text: string;
+    lineSafeMode: boolean;
+    promptOverride?: string;
+    progressMessage?: string;
+    disableSystemPrompt?: boolean;
+  }) => {
+    let attempt = 0;
+    while (true) {
+      deps.throwIfAborted(input.signal);
+      try {
+        onProgress?.(requestOptions.progressMessage || `Calling translation provider (${input.providerRequest.provider})...`);
+        const result = await deps.requestTranslationByProvider(
+          input.providerRequest.provider,
+          endpointUsed,
+          {
+            text: requestOptions.text,
+            targetLang: input.targetLang,
+            glossary: input.glossary,
+            prompt: requestOptions.promptOverride ?? input.prompt,
+            promptTemplateId: input.promptTemplateId,
+            key: input.providerRequest.key,
+            model: input.providerRequest.model,
+            lineSafeMode: requestOptions.lineSafeMode,
+            isConnectionTest: input.isConnectionTest,
+            systemPromptOverride: String(requestOptions.promptOverride ?? input.prompt ?? '').trim(),
+            disableSystemPrompt: requestOptions.disableSystemPrompt === true,
+            signal: input.signal,
+          },
+          onProgress
+        );
+        for (const warning of result.meta.requestWarnings || []) {
+          addWarning(warning);
+        }
+        if (result.meta.fallbackUsed) {
+          fallbackUsed = true;
+          fallbackType = result.meta.fallbackType;
+          addWarning('provider_fallback_applied');
+        }
+        endpointUsed = result.meta.endpointUrl;
+        lastError = null;
+        return result.text;
+      } catch (error) {
+        lastError = deps.mapConnectionError(error);
+        if (!deps.isRetryableError(error) || attempt >= maxRetries) {
+          throw error;
+        }
+        attempt += 1;
+        retryCount += 1;
+        addWarning('transient_retry_applied');
+        const retryDelay =
+          deps.isProviderHttpError(error) && error.status === 429
+            ? Math.max(error.retryAfterMs || 0, rateLimitRetryMs * attempt)
+            : baseRetryMs * attempt;
+        const status = deps.isProviderHttpError(error) ? error.status : 'network';
+        onProgress?.(`Retrying translation request (${attempt}/${maxRetries}) after transient error (${status})...`);
+        await deps.sleep(retryDelay, input.signal);
+      }
+    }
+  };
+
+  const translateSingleCloudUnit = async (unit: CloudTranslationLineSafeUnit) => {
+    cloudContextFallbackCount += 1;
+    addWarning('cloud_context_single_line_fallback');
+    let raw = '';
+    try {
+      raw = await requestCloudTranslation({
+        text: deps.stripStructuredPrefix(unit.content),
+        lineSafeMode: false,
+        progressMessage: `Retrying cloud translation as single line (${unit.index})...`,
+      });
+    } catch (error) {
+      if (!deps.isProviderContentFilterError(error)) {
+        throw error;
+      }
+      addWarning('line_json_map_policy_source_fallback');
+      const fallback = deps.stripStructuredPrefix(unit.content);
+      return unit.prefix ? `${unit.prefix}${fallback}` : fallback;
+    }
+    const normalized = deps.normalizeTargetLanguageOutput(raw, input.targetLang).replace(/\s*\n+\s*/g, ' ').trim();
+    return unit.prefix ? `${unit.prefix}${normalized}` : normalized;
+  };
+
+  const processCloudLineSafeChunk = async (units: CloudTranslationLineSafeUnit[]): Promise<string> => {
+    const providerInputText = deps.buildLineSafeInput(units);
+    let chunkOutput = '';
+    try {
+      chunkOutput = await requestCloudTranslation({
+        text: providerInputText,
+        lineSafeMode: true,
+        progressMessage: `Calling translation provider (${input.providerRequest.provider})...`,
+      });
+    } catch (error) {
+      if (!deps.isProviderContentFilterError(error)) {
+        throw error;
+      }
+
+      if (input.enableJsonLineRepair) {
+        const repaired = await deps.repairLineAlignmentWithJsonMap(
+          input.providerRequest.provider,
+          endpointUsed,
+          units,
+          {
+            targetLang: input.targetLang,
+            glossary: input.glossary,
+            promptTemplateId: input.promptTemplateId,
+            key: input.providerRequest.key,
+            model: input.providerRequest.model,
+          },
+          onProgress,
+          input.signal
+        );
+
+        if (repaired) {
+          for (const warning of repaired.warnings || []) {
+            addWarning(warning);
+          }
+          addWarning('line_json_map_repair_applied');
+          if (repaired.missingCount > 0) {
+            addWarning('line_json_map_partial_fallback');
+          }
+          return deps.normalizeTargetLanguageOutput(repaired.text, input.targetLang);
+        }
+      }
+
+      if (units.length > 1) {
+        const midpoint = Math.ceil(units.length / 2);
+        const left = await processCloudLineSafeChunk(units.slice(0, midpoint));
+        const right = await processCloudLineSafeChunk(units.slice(midpoint));
+        return [left, right].filter(Boolean).join('\n');
+      }
+
+      return translateSingleCloudUnit(units[0]);
+    }
+    chunkOutput = deps.normalizeTargetLanguageOutput(chunkOutput, input.targetLang);
+
+    const restored = deps.parseLineSafeOutput(chunkOutput, units);
+    if (restored !== null) {
+      addWarning('line_safe_alignment_applied');
+      return deps.normalizeTargetLanguageOutput(restored, input.targetLang);
+    }
+
+    if (input.enableJsonLineRepair) {
+      const repaired = await deps.repairLineAlignmentWithJsonMap(
+        input.providerRequest.provider,
+        endpointUsed,
+        units,
+        {
+          targetLang: input.targetLang,
+          glossary: input.glossary,
+          promptTemplateId: input.promptTemplateId,
+          key: input.providerRequest.key,
+          model: input.providerRequest.model,
+        },
+        onProgress,
+        input.signal
+      );
+
+      if (repaired) {
+        for (const warning of repaired.warnings || []) {
+          addWarning(warning);
+        }
+        addWarning('line_json_map_repair_applied');
+        if (repaired.missingCount > 0) {
+          addWarning('line_json_map_partial_fallback');
+        }
+        return deps.normalizeTargetLanguageOutput(repaired.text, input.targetLang);
+      }
+    } else {
+      addWarning('line_json_map_repair_disabled');
+    }
+
+    const rebound = deps.rebindByLineIndex(units, chunkOutput);
+    if (rebound !== null) {
+      addWarning('line_index_rebind_applied');
+      return deps.normalizeTargetLanguageOutput(rebound, input.targetLang);
+    }
+
+    addWarning('line_alignment_repair_failed');
+    return chunkOutput;
+  };
+
+  const runCloudLineSafeFlow = async () => {
+    const remoteBatchSize = deps.getRemoteBatchSize();
+    if (lineSafeUnits.length > remoteBatchSize) {
+      const totalBatches = Math.ceil(lineSafeUnits.length / remoteBatchSize);
+      const merged: string[] = [];
+      for (let offset = 0; offset < lineSafeUnits.length; offset += remoteBatchSize) {
+        const batchUnits = lineSafeUnits.slice(offset, offset + remoteBatchSize);
+        const batchIndex = Math.floor(offset / remoteBatchSize) + 1;
+        onProgress?.(`Translating remote subtitle batch (${batchIndex}/${totalBatches})...`);
+        const chunk = await processCloudLineSafeChunk(batchUnits);
+        merged.push(...chunk.split('\n'));
+      }
+      output = merged.join('\n');
+    } else {
+      output = await processCloudLineSafeChunk(lineSafeUnits);
+    }
+  };
+
+  const processCloudContextChunk = async (
+    start: number,
+    length: number,
+    contextWindow: number,
+    splitDepth: number
+  ): Promise<string> => {
+    const { text: chunkInput, targetUnits } = deps.buildCloudContextInput(lineSafeUnits, start, length, contextWindow);
+    if (targetUnits.length === 0) return '';
+
+    cloudContextChunkCount += 1;
+    const raw = await requestCloudTranslation({
+      text: chunkInput,
+      lineSafeMode: false,
+      promptOverride: deps.buildCloudContextSystemPrompt({
+        targetLang: input.targetLang,
+        glossary: input.glossary,
+        promptTemplateId: input.promptTemplateId,
+        prompt: input.prompt,
+      }),
+      progressMessage: `Calling translation provider (${input.providerRequest.provider}) with cloud context window...`,
+      disableSystemPrompt: false,
+    });
+
+    const restored = deps.parseCloudContextOutput(raw, targetUnits);
+    if (restored !== null) {
+      return deps.normalizeTargetLanguageOutput(restored, input.targetLang);
+    }
+
+    addWarning('cloud_context_parse_failed');
+
+    if (targetUnits.length === 1) {
+      return translateSingleCloudUnit(targetUnits[0]);
+    }
+
+    const nextContextWindow = Math.max(0, contextWindow - 1);
+    if (splitDepth < cloudContextConfig.maxSplitDepth) {
+      addWarning('cloud_context_chunk_split');
+      const leftLength = Math.max(1, Math.ceil(length / 2));
+      const rightLength = Math.max(0, length - leftLength);
+      const merged = [await processCloudContextChunk(start, leftLength, nextContextWindow, splitDepth + 1)];
+      if (rightLength > 0) {
+        merged.push(await processCloudContextChunk(start + leftLength, rightLength, nextContextWindow, splitDepth + 1));
+      }
+      return merged.join('\n');
+    }
+
+    addWarning('cloud_context_split_depth_exhausted');
+    const fallbackLines: string[] = [];
+    for (const unit of targetUnits) {
+      fallbackLines.push(await translateSingleCloudUnit(unit));
+    }
+    return fallbackLines.join('\n');
+  };
+
+  const runCloudContextFlow = async () => {
+    const chunks = deps.buildCloudContextChunks(
+      lineSafeUnits,
+      Math.max(cloudContextConfig.targetLines, cloudContextConfig.minTargetLines),
+      cloudContextConfig.charBudget
+    );
+    const totalChunks = chunks.length;
+    const merged: string[] = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      onProgress?.(`Translating remote subtitle batch with cloud context (${index + 1}/${totalChunks})...`);
+      merged.push(await processCloudContextChunk(chunk.start, chunk.length, cloudContextConfig.contextWindow, 0));
+    }
+    output = merged.join('\n');
+  };
+
+  if (useCloudForcedAlignment) {
+    await runCloudLineSafeFlow();
+  } else if (useCloudContextMode) {
+    await runCloudContextFlow();
+  } else {
+    output = await requestCloudTranslation({
+      text: input.text,
+      lineSafeMode: false,
+      progressMessage: `Calling translation provider (${input.providerRequest.provider})...`,
+    });
+  }
+
+  output = deps.normalizeTargetLanguageOutput(output, input.targetLang);
+
+  return {
+    output,
+    warnings,
+    retryCount,
+    lastError,
+    fallbackUsed,
+    fallbackType,
+    endpointUsed,
+    cloudStrategy,
+    cloudContextChunkCount,
+    cloudContextFallbackCount,
+    sourceLineCount,
+    sourceHasStructuredPrefixes,
+    sourceSpeakerTaggedLineCount,
+    relaxedWholeRequestApplied: false,
+    relaxedWholeRequestFallback: false,
+  };
+}

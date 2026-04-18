@@ -1,0 +1,76 @@
+.env*
+!.env.example
+
+# Runtime root
+runtime/
+# Private materials
+
+.private/
+.agents/
+
+# Local Data Storage
+Projects/
+models/
+db.json
+metadata.json
+metadata_sample.json
+
+# Tool & Cache
+tools/
+.vscode/
+!.vscode/
+.vscode/*
+!.vscode/settings.json
+.idea/
+.cursor/
+*.swp
+
+# yt-dlp / ffmpeg temporary files
+*.part
+*.ytdl
+*.f[1-9]*
+*.f[1-9][0-9]*
+
+# OS Metadata
+.DS_Store
+Thumbs.db
+
+# Local Test Scripts (Root)
+check_addon.js
+check_exports.js
+test_whisper_import.js
+
+# Performance & Dist
+dist/
+build/
+.release/
+logs/
+node_modules/
+.arcsub-bootstrap/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python helper artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.spec
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Temp / crash artifacts
+tmp/
+.tmp*/
+*.tmp
+*.dmp
+*.stackdump
+
+# TypeScript / test coverage artifacts
+*.tsbuildinfo
+.coverage
+coverage/

@@ -1,0 +1,2 @@
+# Locale-specific concise spoken overrides for Taiwan Traditional Chinese subtitle translation
+I am sorry=抱歉啦

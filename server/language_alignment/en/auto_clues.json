@@ -1,0 +1,6 @@
+{
+  "stopwords": ["the", "and", "you", "that", "this", "with", "have", "are", "not", "but", "for", "your", "what", "just", "they", "from"],
+  "priorityWords": ["im", "youre", "were", "theyre", "its", "dont", "didnt", "cant", "really", "people", "think", "going"],
+  "rawMarkers": ["\\b(?:the|and|you|that|this|with|have|are|not|but|for|your|what|just|they|from)\\b"],
+  "minScore": 3
+}

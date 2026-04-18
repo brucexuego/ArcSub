@@ -1,0 +1,13 @@
+{
+  "key": "ja",
+  "aliases": ["ja", "jp"],
+  "segmenterLocale": "ja",
+  "noSpaceScript": true,
+  "timingMerge": true,
+  "alignmentProfileId": "ja-ntqai-surface-v1",
+  "clipPaddingSec": 0.2,
+  "minRunConfidence": 0.5,
+  "minOverallConfidence": 0.56,
+  "minOverallAlignedRatio": 0.07,
+  "localAsrPrompt": "以下は日本語の街頭インタビューです。翻訳せず、日本語のまま自然に書き起こしてください。英語の番組名や固有名詞は原文に近い表記を保ってください。"
+}

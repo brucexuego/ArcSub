@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Formal precise overrides for en subtitle translation
+thank you=thank you
+I am sorry=I am sorry
+I understand=I understand
+please confirm=please confirm
+we need to=we need to
+for example=for example
+according to=according to
+please do not worry=please do not worry
+it is okay=it is okay
+please note=please note
+however=however
+therefore=therefore
+in addition=in addition
+as a result=as a result

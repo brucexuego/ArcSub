@@ -1,0 +1,13 @@
+{
+  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "clipPaddingSec": 0.18,
+  "minRunConfidence": 0.44,
+  "minOverallConfidence": 0.48,
+  "minOverallAlignedRatio": 0.12,
+  "progressLabel": "Chinese (Traditional) forced alignment",
+  "maxRunGapSec": 0.3,
+  "minRunTokenLength": 1,
+  "maxContinuationGapSec": 0.08,
+  "maxContinuationDurationSec": 1.35,
+  "maxContinuationChars": 9
+}

@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Concise spoken overrides for zh-hans subtitle translation
+thank you=谢啦
+thank you very much=真的很谢谢你
+I do not know=我不知道
+I understand=我懂了
+all right=好啊
+wait a second=等一下
+are you okay?=你还好吗？
+what happened?=怎么了？
+let us go=走吧
+it is okay=没关系
+please do not worry=别担心
+come on=拜托
+no problem=没问题
+let me think=我想一下

@@ -1,0 +1,7 @@
+# Korean technical-term overrides for subtitle translation
+pull request=풀 리퀘스트
+repository=리포지토리
+deployment=배포
+inference=추론
+token=토큰
+latency=지연 시간

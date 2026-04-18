@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Formal precise overrides for zh-hans subtitle translation
+thank you=谢谢您
+I am sorry=很抱歉
+I understand=我明白了
+please confirm=请确认
+we need to=我们需要
+for example=例如
+according to=根据
+please do not worry=请不必担心
+it is okay=没有问题
+please note=请注意
+however=然而
+therefore=因此
+in addition=此外
+as a result=因此

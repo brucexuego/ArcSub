@@ -1,0 +1,14 @@
+# Portuguese base glossary for subtitle translation
+code review=revisão de código
+codebase=base de código
+workflow=fluxo de trabalho
+runtime=tempo de execução
+endpoint=ponto de extremidade
+default=padrão
+project=projeto
+settings=configurações
+subtitle=legenda
+translation=tradução
+speech recognition=reconhecimento de fala
+voice activity detection=deteção de atividade de voz
+speaker diarization=diarização de locutores

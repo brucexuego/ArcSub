@@ -1,0 +1,1 @@
+# Locale-specific technical-term overrides for Macau Traditional Chinese subtitle translation

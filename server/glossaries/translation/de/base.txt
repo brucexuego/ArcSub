@@ -1,0 +1,14 @@
+# German base glossary for subtitle translation
+code review=Code-Review
+codebase=Codebasis
+workflow=Arbeitsablauf
+runtime=Laufzeit
+endpoint=Endpunkt
+default=Standard
+project=Projekt
+settings=Einstellungen
+subtitle=Untertitel
+translation=Übersetzung
+speech recognition=Spracherkennung
+voice activity detection=Sprachaktivitätserkennung
+speaker diarization=Sprecherdiarisierung

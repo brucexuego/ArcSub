@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "youtube",
+  "description": "YouTube parser tuning, playback headers, and bot-detection fallback parser.",
+  "priority": 100,
+  "match": {
+    "hostSuffixes": ["youtube.com", "youtu.be"]
+  },
+  "ytDlp": {
+    "impersonate": "chrome",
+    "extractorArgs": ["youtube:player_client=android_vr,android,web"]
+  },
+  "playback": {
+    "match": {
+      "hostSuffixes": ["googlevideo.com", "youtube.com", "youtu.be"]
+    },
+    "headers": {
+      "Referer": "https://www.youtube.com/",
+      "Origin": "https://www.youtube.com"
+    }
+  },
+  "parse": {
+    "fallbackOn": ["bot_detection"]
+  },
+  "handlers": {
+    "parse": "../handlers/youtube.ts"
+  }
+}

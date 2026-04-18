@@ -1,0 +1,1 @@
+# Locale-specific technical-term overrides for Hong Kong Traditional Chinese subtitle translation

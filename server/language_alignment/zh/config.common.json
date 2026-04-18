@@ -1,0 +1,19 @@
+{
+  "key": "zh",
+  "aliases": ["zh", "zh-cn", "zh-tw"],
+  "segmenterLocale": "zh",
+  "noSpaceScript": true,
+  "timingMerge": true,
+  "scriptPattern": "[\\u3400-\\u9fff]",
+  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "clipPaddingSec": 0.2,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.5,
+  "minOverallAlignedRatio": 0.16,
+  "progressLabel": "Chinese forced alignment",
+  "maxRunGapSec": 0.32,
+  "minRunTokenLength": 1,
+  "maxContinuationGapSec": 0.1,
+  "maxContinuationDurationSec": 1.5,
+  "maxContinuationChars": 10
+}

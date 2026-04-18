@@ -1,0 +1,7 @@
+# Finnish technical-term overrides for subtitle translation
+pull request=pull request
+repository=versionhallintavarasto
+deployment=käyttöönotto
+inference=päättely
+token=token
+latency=viive

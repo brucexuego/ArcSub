@@ -1,0 +1,14 @@
+# Korean base glossary for subtitle translation
+code review=코드 리뷰
+codebase=코드베이스
+workflow=워크플로
+runtime=런타임
+endpoint=엔드포인트
+default=기본값
+project=프로젝트
+settings=설정
+subtitle=자막
+translation=번역
+speech recognition=음성 인식
+voice activity detection=음성 활동 감지
+speaker diarization=화자 분리

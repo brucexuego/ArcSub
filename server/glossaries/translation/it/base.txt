@@ -1,0 +1,14 @@
+# Italian base glossary for subtitle translation
+code review=revisione del codice
+codebase=base di codice
+workflow=flusso di lavoro
+runtime=runtime
+endpoint=endpoint
+default=predefinito
+project=progetto
+settings=impostazioni
+subtitle=sottotitolo
+translation=traduzione
+speech recognition=riconoscimento vocale
+voice activity detection=rilevamento dell'attività vocale
+speaker diarization=diarizzazione dei parlanti

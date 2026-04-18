@@ -1,0 +1,6 @@
+{
+  "stopwords": ["ja", "on", "ei", "se", "etta", "olen", "mutta", "kun", "nyt", "tama", "sitten"],
+  "priorityWords": ["mulla", "oikein", "kylla", "siella", "ihan", "paljon", "suomessa"],
+  "rawMarkers": ["[\\u00e4\\u00f6]"],
+  "minScore": 3
+}

@@ -1,0 +1,31 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Base for en subtitle translation
+code review=code review
+algorithm=algorithm
+access right=access right
+address=address
+address resolution protocol=address resolution protocol
+adapter=adapter
+codebase=codebase
+workflow=workflow
+runtime=runtime
+endpoint=endpoint
+default=default
+project=project
+settings=settings
+subtitle=subtitle
+translation=translation
+machine translation=machine translation
+speech recognition=speech recognition
+voice recognition=voice recognition
+speaker identification=speaker identification
+voice activity detection=voice activity detection
+speaker diarization=speaker diarization
+prompt=prompt
+timestamp=timestamp
+segment=segment
+transcript=transcript
+transcription=transcription
+alignment=alignment
+model=model

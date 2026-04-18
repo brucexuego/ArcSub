@@ -1,0 +1,31 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Base for zh-hant subtitle translation
+code review=程式碼審查
+algorithm=演算法
+access right=存取權
+address=位址
+address resolution protocol=位址解析協定
+adapter=轉接器
+codebase=程式碼庫
+workflow=工作流程
+runtime=執行階段
+endpoint=端點
+default=預設
+project=專案
+settings=設定
+subtitle=字幕
+translation=翻譯
+machine translation=機器翻譯
+speech recognition=語音辨識
+voice recognition=語音辨識
+speaker identification=語者識別
+voice activity detection=語音活動偵測
+speaker diarization=語者分離
+prompt=提示詞
+timestamp=時間戳記
+segment=片段
+transcript=逐字稿
+transcription=轉錄
+alignment=對齊
+model=模型

@@ -1,0 +1,1 @@
+# Locale-specific formal precise overrides for Spanish subtitle translation

@@ -1,0 +1,2 @@
+# Brazilian Portuguese overrides for subtitle translation
+voice activity detection=detecção de atividade de voz

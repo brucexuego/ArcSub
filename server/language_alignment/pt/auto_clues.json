@@ -1,0 +1,6 @@
+{
+  "stopwords": ["que", "nao", "uma", "para", "com", "mas", "como", "isso", "sou", "estou", "gente", "voce"],
+  "priorityWords": ["porque", "muito", "tambem", "agora", "portugal", "brasil", "trabalho"],
+  "rawMarkers": ["[\\u00e3\\u00f5\\u00e7]", "[\\u00e1\\u00e2\\u00ea\\u00e9\\u00ed\\u00f3\\u00f4\\u00fa]"],
+  "minScore": 3
+}

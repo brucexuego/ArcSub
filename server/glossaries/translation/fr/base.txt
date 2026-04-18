@@ -1,0 +1,14 @@
+# French base glossary for subtitle translation
+code review=revue de code
+codebase=base de code
+workflow=flux de travail
+runtime=runtime
+endpoint=point de terminaison
+default=par défaut
+project=projet
+settings=paramètres
+subtitle=sous-titre
+translation=traduction
+speech recognition=reconnaissance vocale
+voice activity detection=détection d'activité vocale
+speaker diarization=diarisation des locuteurs

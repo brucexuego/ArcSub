@@ -1,0 +1,16 @@
+{
+  "key": "ko",
+  "aliases": ["ko", "ko-kr"],
+  "segmenterLocale": "ko",
+  "noSpaceScript": true,
+  "timingMerge": false,
+  "scriptPattern": "[\\uac00-\\ud7af]",
+  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "clipPaddingSec": 0.22,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.52,
+  "minOverallAlignedRatio": 0.22,
+  "progressLabel": "Korean forced alignment",
+  "maxRunGapSec": 0.38,
+  "minRunTokenLength": 1
+}

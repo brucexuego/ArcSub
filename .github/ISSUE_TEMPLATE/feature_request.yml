@@ -1,0 +1,43 @@
+name: Feature Request
+description: Suggest an improvement for ArcSub.
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for workflow improvements, UX feedback, and feature ideas.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Or Workflow Gap
+      description: What is difficult, missing, or unclear today?
+      placeholder: Switching between local models takes too many steps when I notice the wrong model after starting a task.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Change
+      description: Describe the behavior you want instead.
+      placeholder: Stop should fully cancel the current backend task so I can switch models and restart immediately.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Optional. Mention workarounds or alternative designs.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Optional screenshots, mockups, or usage context.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions before opening this request.
+          required: true

@@ -1,0 +1,6 @@
+{
+  "stopwords": ["que", "de", "la", "el", "y", "no", "es", "pero", "para", "con", "una", "como"],
+  "priorityWords": ["porque", "hoy", "estoy", "muy", "tengo", "quiero", "gente"],
+  "rawMarkers": ["[\\u00bf\\u00a1\\u00f1]", "[\\u00e1\\u00e9\\u00ed\\u00f3\\u00fa]"],
+  "minScore": 3
+}

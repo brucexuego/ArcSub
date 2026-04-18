@@ -1,0 +1,76 @@
+# Getting Started
+
+ArcSub is a subtitle workstation for:
+
+- downloading or importing media
+- speech to text
+- subtitle translation
+- review and export
+
+## Choose a Path
+
+### Packaged Release
+
+Windows
+
+1. Extract the packaged release
+2. Run:
+
+```powershell
+.\deploy.ps1
+.\start.production.ps1
+```
+
+Linux
+
+1. Extract the packaged release
+2. Run:
+
+```bash
+./deploy.sh
+./start.production.sh
+```
+
+### Source Repository
+
+If you are working from this repository instead of a packaged release:
+
+Windows
+
+```powershell
+npm install
+.\start.ps1
+```
+
+Linux
+
+```bash
+npm install
+./start.sh
+```
+
+The source start scripts clean up stale dev processes and then launch `npm run dev`.
+
+## First-Time Setup
+
+After ArcSub opens:
+
+1. Go to **Settings**
+2. Prepare at least one speech-to-text source
+3. Prepare at least one translation source
+4. If you want pyannote diarization, enter your `HF_TOKEN` and install it there
+
+## Normal Workflow
+
+1. Import or download media
+2. Run **Speech to Text**
+3. Run **Text Translation**
+4. Review in **Player**
+5. Export subtitles
+
+## Read Next
+
+- [installation.md](./installation.md)
+- [usage.md](./usage.md)
+- [faq.md](./faq.md)
+- [env-configuration.md](./env-configuration.md)

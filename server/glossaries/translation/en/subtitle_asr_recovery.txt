@@ -1,0 +1,29 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# ASR recovery overrides for en subtitle translation
+utterance=utterance
+speaker label=speaker label
+speaker turn=speaker turn
+timecode=timecode
+word timestamp=word timestamp
+filler word=filler word
+background noise=background noise
+overlap speech=overlap speech
+speaker overlap=speaker overlap
+inaudible=inaudible
+pause=pause
+misrecognition=misrecognition
+homophone=homophone
+misheard word=misheard word
+dropped word=dropped word
+repeated word=repeated word
+truncated word=truncated word
+unclear speech=unclear speech
+cross-talk=cross-talk
+false start=false start
+self-correction=self-correction
+disfluency=disfluency
+hesitation=hesitation
+partial word=partial word
+cut-off=cut-off
+speaker change=speaker change

@@ -1,0 +1,1 @@
+# Shared base glossary for all translation targets

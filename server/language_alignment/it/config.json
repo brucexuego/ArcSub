@@ -1,0 +1,12 @@
+{
+  "key": "it",
+  "aliases": ["it", "it-it"],
+  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "clipPaddingSec": 0.24,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.54,
+  "minOverallAlignedRatio": 0.34,
+  "progressLabel": "Italian forced alignment",
+  "maxRunGapSec": 0.44,
+  "minRunTokenLength": 2
+}

@@ -1,0 +1,6 @@
+{
+  "stopwords": ["che", "non", "sono", "per", "con", "una", "come", "ma", "oggi", "anche", "nel", "della"],
+  "priorityWords": ["allora", "perche", "voglio", "questa", "quello", "italia", "lavoro"],
+  "rawMarkers": ["[\\u00e0\\u00e8\\u00e9\\u00ec\\u00f2\\u00f9]"],
+  "minScore": 3
+}

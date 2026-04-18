@@ -1,0 +1,8 @@
+# Shared brand/model names preserved during ASR recovery
+ArcSub=ArcSub
+OpenAI=OpenAI
+Codex=Codex
+OpenVINO=OpenVINO
+Whisper=Whisper
+Qwen=Qwen
+Gemma=Gemma

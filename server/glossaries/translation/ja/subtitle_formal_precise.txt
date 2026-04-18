@@ -1,0 +1,17 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Formal precise overrides for ja subtitle translation
+thank you=ありがとうございます
+I am sorry=申し訳ありません
+I understand=承知しました
+please confirm=ご確認ください
+we need to=する必要があります
+for example=例えば
+according to=によれば
+please do not worry=ご心配には及びません
+it is okay=問題ありません
+please note=ご留意ください
+however=ただし
+therefore=したがって
+in addition=さらに
+as a result=その結果

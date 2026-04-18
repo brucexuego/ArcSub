@@ -1,0 +1,6 @@
+{
+  "stopwords": ["ich", "und", "nicht", "die", "das", "ist", "wir", "mit", "aber", "auch", "ein", "eine"],
+  "priorityWords": ["nicht", "eigentlich", "vielleicht", "einfach", "natuerlich", "uber", "fuer", "schon"],
+  "rawMarkers": ["[\\u00e4\\u00f6\\u00fc\\u00df]"],
+  "minScore": 3
+}
