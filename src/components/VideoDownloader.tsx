@@ -14,7 +14,7 @@ interface VideoDownloaderProps {
   onNext: () => void;
 }
 
-const VIDEO_UPLOAD_EXTENSIONS = new Set(['mp4', 'mkv', 'mov', 'avi', 'wmv', 'webm', 'm4v', 'flv', 'ts']);
+const VIDEO_UPLOAD_EXTENSIONS = new Set(['mp4', 'mkv', 'mov', 'avi', 'wmv', 'webm', 'm4v', 'flv', 'ts', 'mpeg', 'mpg', 'm2ts', 'mts', '3gp', 'ogv', 'vob']);
 const VIDEO_UPLOAD_ACCEPT = '.mp4,.mkv,.mov,.avi,.wmv,.webm,.m4v,.flv,.ts';
 
 function getSourceModeCopy(language: Language) {
@@ -48,7 +48,7 @@ function getSourceModeCopy(language: Language) {
       msgUploading: '正在上傳影片並建立標準音檔...',
       msgReady: '影片與標準音檔已就緒。',
       errModeLockedOnline: '此專案已鎖定線上來源，無法使用本地上傳。',
-      errUnsupportedFormat: '僅支援上傳：mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts。',
+      errUnsupportedFormat: '僅支援上傳：mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts, mpeg, mpg, m2ts, mts, 3gp, ogv, vob。',
       errUploadFailed: '影片上傳失敗。',
       errParseDisabled: '目前是本地上傳模式，無法解析線上網址。',
       errDownloadDisabled: '此專案已鎖定本地上傳模式，無法進行線上下載。',
@@ -82,7 +82,7 @@ function getSourceModeCopy(language: Language) {
       msgUploading: '正在上传视频并生成标准音频...',
       msgReady: '视频与标准音频已就绪。',
       errModeLockedOnline: '此项目已锁定线上来源，无法使用本地上传。',
-      errUnsupportedFormat: '仅支持上传：mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts。',
+      errUnsupportedFormat: '仅支持上传：mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts, mpeg, mpg, m2ts, mts, 3gp, ogv, vob。',
       errUploadFailed: '视频上传失败。',
       errParseDisabled: '当前为本地上传模式，无法解析线上网址。',
       errDownloadDisabled: '此项目已锁定本地上传模式，无法进行线上下载。',
@@ -116,7 +116,7 @@ function getSourceModeCopy(language: Language) {
       msgUploading: 'Uploading video and creating standardized audio...',
       msgReady: 'Video and standardized audio are ready.',
       errModeLockedOnline: 'This project is locked to online source mode. Local upload is disabled.',
-      errUnsupportedFormat: 'Supported upload formats: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts.',
+      errUnsupportedFormat: 'Supported upload formats: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts, mpeg, mpg, m2ts, mts, 3gp, ogv, vob.',
       errUploadFailed: 'Video upload failed.',
       errParseDisabled: 'Local upload mode is active. Online URL parsing is disabled.',
       errDownloadDisabled: 'This project is locked to local upload mode. Online download is disabled.',
@@ -150,7 +150,7 @@ function getSourceModeCopy(language: Language) {
       msgUploading: '動画をアップロードし、標準音声を生成しています...',
       msgReady: '動画と標準音声の準備が完了しました。',
       errModeLockedOnline: 'このプロジェクトはオンラインソースに固定されているため、ローカルアップロードは無効です。',
-      errUnsupportedFormat: 'アップロード対応形式: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts。',
+      errUnsupportedFormat: 'アップロード対応形式: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts, mpeg, mpg, m2ts, mts, 3gp, ogv, vob。',
       errUploadFailed: '動画アップロードに失敗しました。',
       errParseDisabled: '現在はローカルアップロードモードのため、オンラインURL解析は無効です。',
       errDownloadDisabled: 'このプロジェクトはローカルアップロードモードに固定されているため、オンラインダウンロードは無効です。',
@@ -184,7 +184,7 @@ function getSourceModeCopy(language: Language) {
       msgUploading: 'Video wird hochgeladen und standardisiertes Audio wird erzeugt...',
       msgReady: 'Video und standardisiertes Audio sind bereit.',
       errModeLockedOnline: 'Dieses Projekt ist auf Online-Quelle gesperrt. Lokaler Upload ist deaktiviert.',
-      errUnsupportedFormat: 'Unterstützte Upload-Formate: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts.',
+      errUnsupportedFormat: 'Unterstützte Upload-Formate: mp4, mkv, mov, avi, wmv, webm, m4v, flv, ts, mpeg, mpg, m2ts, mts, 3gp, ogv, vob.',
       errUploadFailed: 'Video-Upload fehlgeschlagen.',
       errParseDisabled: 'Lokaler Upload-Modus ist aktiv. Online-URL-Analyse ist deaktiviert.',
       errDownloadDisabled: 'Dieses Projekt ist auf lokalen Upload-Modus gesperrt. Online-Download ist deaktiviert.',

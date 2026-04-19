@@ -3,7 +3,23 @@ import multer from 'multer';
 import path from 'path';
 import { PathManager } from '../path_manager.js';
 
-const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const UPLOAD_VIDEO_EXTENSIONS = new Set([
+  '.mp4', '.mkv', '.mov', '.avi', '.wmv', '.webm', '.m4v', '.flv', '.ts',
+  '.mpeg', '.mpg', '.m2ts', '.mts', '.3gp', '.ogv', '.vob',
+]);
+
+function getConfiguredMaxUploadBytes() {
+  const raw = String(process.env.APP_UPLOAD_MAX_BYTES || '').trim();
+  if (!raw) return DEFAULT_MAX_UPLOAD_BYTES;
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MAX_UPLOAD_BYTES;
+  }
+
+  return parsed;
+}
 
 function sanitizeUploadFilename(originalName: string) {
   const utf8Name = Buffer.from(originalName, 'latin1').toString('utf8');
@@ -21,6 +37,8 @@ function sanitizeUploadFilename(originalName: string) {
 }
 
 export function createUploadHandlers() {
+  const maxUploadBytes = getConfiguredMaxUploadBytes();
+
   const uploadStorage = multer.diskStorage({
     destination: (req, file, cb) => {
       try {
@@ -46,13 +64,13 @@ export function createUploadHandlers() {
   const upload = multer({
     storage: uploadStorage,
     limits: {
-      fileSize: MAX_UPLOAD_BYTES,
+      fileSize: maxUploadBytes,
       files: 1,
     },
     fileFilter: (req, file, cb) => {
       const ext = path.extname(file.originalname).toLowerCase();
       const allowed = [
-        '.mp4', '.mkv', '.mov', '.avi', '.wmv', '.webm', '.m4v', '.flv', '.ts',
+        ...UPLOAD_VIDEO_EXTENSIONS,
         '.mp3', '.wav', '.aac', '.m4a', '.flac',
         '.srt', '.vtt', '.ass', '.ssa',
       ];

@@ -16,6 +16,13 @@ const UPLOAD_VIDEO_EXTENSIONS = new Set([
   '.m4v',
   '.flv',
   '.ts',
+  '.mpeg',
+  '.mpg',
+  '.m2ts',
+  '.mts',
+  '.3gp',
+  '.ogv',
+  '.vob',
 ]);
 
 function getProjectManager() {
@@ -162,7 +169,8 @@ export function registerProjectRoutes(app: express.Express, handlers: ProjectRou
       }
 
       const VideoService = await getVideoService();
-      const audioPath = await VideoService.extractAudio(file.path, project.id);
+      const playbackVideoPath = await VideoService.ensureBrowserPlayableVideo(file.path, project.id);
+      const audioPath = await VideoService.extractAudio(playbackVideoPath, project.id);
       const inferredTitle = path.parse(String(file.originalname || file.filename || project.name || 'uploaded_video')).name.trim();
 
       return res.json({
@@ -172,7 +180,7 @@ export function registerProjectRoutes(app: express.Express, handlers: ProjectRou
           originalname: file.originalname,
           size: file.size,
         },
-        videoPath: PathManager.toClientPath(file.path),
+        videoPath: PathManager.toClientPath(playbackVideoPath),
         audioPath: PathManager.toClientPath(audioPath),
         videoTitle: inferredTitle || project.name || 'uploaded_video',
         sourceMode: 'upload',

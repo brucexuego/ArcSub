@@ -33,6 +33,17 @@ import type {
 
 export type { DownloadProgress } from '../video_sites/types.js';
 
+const DIRECT_MP4_VIDEO_CODECS = new Set(['h264', 'av1']);
+const DIRECT_MP4_AUDIO_CODECS = new Set(['aac', 'mp3']);
+const DIRECT_WEBM_VIDEO_CODECS = new Set(['vp8', 'vp9', 'av1']);
+const DIRECT_WEBM_AUDIO_CODECS = new Set(['opus', 'vorbis']);
+
+type BrowserPlaybackProbe = {
+  formatName: string;
+  videoCodec: string;
+  audioCodec: string;
+};
+
 function attachMetadataDebug(
   metadata: VideoMetadataResult,
   siteRuleId: string | null,
@@ -265,5 +276,137 @@ export class VideoService {
         resolve(audioPath);
       });
     });
+  }
+
+  private static async inspectBrowserPlaybackCompatibility(videoPath: string): Promise<BrowserPlaybackProbe> {
+    await this.ensureVideoToolsReady();
+    const { ffmpeg } = getVideoTools();
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn(ffmpeg, ['-hide_banner', '-i', videoPath]);
+      let stderr = '';
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', () => {
+        const formatMatch = stderr.match(/Input #0,\s*([^,]+(?:,[^,]+)*)\s*,\s*from\b/i);
+        const videoCodecMatch = stderr.match(/Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Video:\s*([^,\s]+)/i);
+        const audioCodecMatch = stderr.match(/Stream #\d+:\d+(?:\[[^\]]+\])?(?:\([^)]+\))?: Audio:\s*([^,\s]+)/i);
+
+        const formatName = String(formatMatch?.[1] || '').trim().toLowerCase();
+        const videoCodec = String(videoCodecMatch?.[1] || '').trim().toLowerCase();
+        const audioCodec = String(audioCodecMatch?.[1] || '').trim().toLowerCase();
+
+        if (!formatName || !videoCodec) {
+          reject(new Error(`Unable to inspect media format for ${path.basename(videoPath)}`));
+          return;
+        }
+
+        resolve({ formatName, videoCodec, audioCodec });
+      });
+    });
+  }
+
+  private static isDirectBrowserPlayable(probe: BrowserPlaybackProbe) {
+    const format = probe.formatName;
+    const videoCodec = probe.videoCodec;
+    const audioCodec = probe.audioCodec;
+
+    const isMp4Family = /(mov|mp4|m4a|3gp|3g2|mj2)/i.test(format);
+    if (isMp4Family) {
+      const videoOk = DIRECT_MP4_VIDEO_CODECS.has(videoCodec);
+      const audioOk = !audioCodec || DIRECT_MP4_AUDIO_CODECS.has(audioCodec);
+      return videoOk && audioOk;
+    }
+
+    const isWebm = /\bwebm\b/i.test(format);
+    if (isWebm) {
+      const videoOk = DIRECT_WEBM_VIDEO_CODECS.has(videoCodec);
+      const audioOk = !audioCodec || DIRECT_WEBM_AUDIO_CODECS.has(audioCodec);
+      return videoOk && audioOk;
+    }
+
+    return false;
+  }
+
+  private static shouldAttemptMp4Remux(probe: BrowserPlaybackProbe) {
+    const videoCodec = probe.videoCodec;
+    const audioCodec = probe.audioCodec;
+    const videoOk = DIRECT_MP4_VIDEO_CODECS.has(videoCodec);
+    const audioOk = !audioCodec || DIRECT_MP4_AUDIO_CODECS.has(audioCodec);
+    return videoOk && audioOk;
+  }
+
+  static async ensureBrowserPlayableVideo(videoPath: string, projectId: string): Promise<string> {
+    await this.ensureVideoToolsReady();
+    const { ffmpeg } = getVideoTools();
+    const assetsDir = path.join(PathManager.getProjectPath(projectId), 'assets');
+    const outputPath = path.join(assetsDir, 'source.mp4');
+
+    await fs.ensureDir(assetsDir);
+
+    const probe = await this.inspectBrowserPlaybackCompatibility(videoPath);
+    if (this.isDirectBrowserPlayable(probe)) {
+      return videoPath;
+    }
+
+    const runFfmpeg = (args: string[]) =>
+      new Promise<void>((resolve, reject) => {
+        const proc = spawn(ffmpeg, args);
+        let stderr = '';
+
+        proc.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+
+        proc.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
+        });
+      });
+
+    const remuxArgs = [
+      '-hide_banner',
+      '-i', videoPath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-c', 'copy',
+      '-movflags', '+faststart',
+      '-y',
+      outputPath,
+    ];
+
+    if (this.shouldAttemptMp4Remux(probe)) {
+      try {
+        await runFfmpeg(remuxArgs);
+        return outputPath;
+      } catch (remuxError) {
+        console.warn(`[VideoService] MP4 remux failed for ${path.basename(videoPath)}. Falling back to transcode.`, remuxError);
+      }
+    }
+
+    const transcodeArgs = [
+      '-hide_banner',
+      '-i', videoPath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      '-movflags', '+faststart',
+      '-y',
+      outputPath,
+    ];
+
+    await runFfmpeg(transcodeArgs);
+    return outputPath;
   }
 }
