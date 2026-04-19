@@ -6,6 +6,11 @@
 
 如果這個 repository 已經發布安裝包，請先到 [Releases](../../releases/latest) 下載。
 
+目前 `v0.9.0` 的資產：
+
+- `ArcSub-v0.9.0-windows-x64.zip`
+- `ArcSub-v0.9.0-linux-x64.tar.gz`
+
 ## 建議平台
 
 - Windows

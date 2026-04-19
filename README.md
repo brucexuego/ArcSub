@@ -5,14 +5,14 @@ ArcSub is a local-first subtitle workstation for downloading media, converting s
 ## Languages
 
 - English: [README.md](./README.md)
-- Traditional Chinese: [README.zh-TW.md](./README.zh-TW.md)
-- Japanese: [README.ja.md](./README.ja.md)
+- 繁體中文: [README.zh-TW.md](./README.zh-TW.md)
+- 日本語: [README.ja.md](./README.ja.md)
 
 ## Documentation
 
 - English: [docs/en/getting-started.md](./docs/en/getting-started.md)
-- Traditional Chinese: [docs/zh-TW/getting-started.md](./docs/zh-TW/getting-started.md)
-- Japanese: [docs/ja/getting-started.md](./docs/ja/getting-started.md)
+- 繁體中文: [docs/zh-TW/getting-started.md](./docs/zh-TW/getting-started.md)
+- 日本語: [docs/ja/getting-started.md](./docs/ja/getting-started.md)
 
 ## Screenshots
 
@@ -30,10 +30,10 @@ Speech to Text: choose a recognition model, configure advanced features, and pre
 
 When packaged assets are published for this repository, download them from [Releases](../../releases/latest).
 
-Expected assets:
+Current `v0.9.0` assets:
 
-- `ArcSub-windows-x64.zip`
-- `ArcSub-linux-x64.tar.gz`
+- `ArcSub-v0.9.0-windows-x64.zip`
+- `ArcSub-v0.9.0-linux-x64.tar.gz`
 
 ### Packaged Release
 
@@ -95,6 +95,8 @@ ArcSub supports local models, but installation is split into stages:
 ## More Documents
 
 - Docs index: [docs/README.md](./docs/README.md)
+- Releases: [Releases](../../releases/latest)
+- Discussions: [Discussions](../../discussions)
 - Contributing: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - Code of Conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - Security: [SECURITY.md](./SECURITY.md)

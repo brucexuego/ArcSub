@@ -6,6 +6,11 @@
 
 この repository で release asset が公開されている場合は、まず [Releases](../../releases/latest) から取得してください。
 
+現在の `v0.9.0` アセット：
+
+- `ArcSub-v0.9.0-windows-x64.zip`
+- `ArcSub-v0.9.0-linux-x64.tar.gz`
+
 ## 推奨プラットフォーム
 
 - Windows

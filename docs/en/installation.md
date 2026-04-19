@@ -6,6 +6,11 @@ This page is mainly for normal packaged use.
 
 If release assets are available for this repository, start from [Releases](../../releases/latest).
 
+Current `v0.9.0` assets:
+
+- `ArcSub-v0.9.0-windows-x64.zip`
+- `ArcSub-v0.9.0-linux-x64.tar.gz`
+
 ## Recommended Platform
 
 - Windows

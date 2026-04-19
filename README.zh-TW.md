@@ -5,14 +5,14 @@ ArcSub 是一款 local-first 的字幕工作台，用來下載媒體、進行語
 ## 語言
 
 - English: [README.md](./README.md)
-- Traditional Chinese: [README.zh-TW.md](./README.zh-TW.md)
-- Japanese: [README.ja.md](./README.ja.md)
+- 繁體中文: [README.zh-TW.md](./README.zh-TW.md)
+- 日本語: [README.ja.md](./README.ja.md)
 
 ## 文件
 
 - English: [docs/en/getting-started.md](./docs/en/getting-started.md)
-- Traditional Chinese: [docs/zh-TW/getting-started.md](./docs/zh-TW/getting-started.md)
-- Japanese: [docs/ja/getting-started.md](./docs/ja/getting-started.md)
+- 繁體中文: [docs/zh-TW/getting-started.md](./docs/zh-TW/getting-started.md)
+- 日本語: [docs/ja/getting-started.md](./docs/ja/getting-started.md)
 
 ## 畫面截圖
 
@@ -30,10 +30,10 @@ Speech to Text：選擇辨識模型、設定進階選項，並為後續字幕翻
 
 如果這個 repository 已經發布安裝包，請先到 [Releases](../../releases/latest) 下載。
 
-預期資產：
+目前 `v0.9.0` 的資產：
 
-- `ArcSub-windows-x64.zip`
-- `ArcSub-linux-x64.tar.gz`
+- `ArcSub-v0.9.0-windows-x64.zip`
+- `ArcSub-v0.9.0-linux-x64.tar.gz`
 
 ### 正式使用
 
@@ -95,6 +95,8 @@ ArcSub 支援本地模型，但安裝分成不同階段：
 ## 更多文件
 
 - 文件總覽: [docs/README.md](./docs/README.md)
+- 版本發布: [Releases](../../releases/latest)
+- 討論區: [Discussions](../../discussions)
 - 貢獻指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
 - 行為準則: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - 安全性: [SECURITY.md](./SECURITY.md)
