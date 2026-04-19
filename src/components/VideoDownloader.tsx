@@ -15,7 +15,7 @@ interface VideoDownloaderProps {
 }
 
 const VIDEO_UPLOAD_EXTENSIONS = new Set(['mp4', 'mkv', 'mov', 'avi', 'wmv', 'webm', 'm4v', 'flv', 'ts', 'mpeg', 'mpg', 'm2ts', 'mts', '3gp', 'ogv', 'vob']);
-const VIDEO_UPLOAD_ACCEPT = '.mp4,.mkv,.mov,.avi,.wmv,.webm,.m4v,.flv,.ts';
+const VIDEO_UPLOAD_ACCEPT = '.mp4,.mkv,.mov,.avi,.wmv,.webm,.m4v,.flv,.ts,.mpeg,.mpg,.m2ts,.mts,.3gp,.ogv,.vob';
 
 function getSourceModeCopy(language: Language) {
   const maps = {

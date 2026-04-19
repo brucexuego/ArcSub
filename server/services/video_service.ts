@@ -344,6 +344,9 @@ export class VideoService {
     const { ffmpeg } = getVideoTools();
     const assetsDir = path.join(PathManager.getProjectPath(projectId), 'assets');
     const outputPath = path.join(assetsDir, 'source.mp4');
+    const tempOutputPath = path.join(assetsDir, `source.${Date.now()}.tmp.mp4`);
+    const normalizedOutputPath = path.resolve(outputPath);
+    const normalizedInputPath = path.resolve(videoPath);
 
     await fs.ensureDir(assetsDir);
 
@@ -351,6 +354,10 @@ export class VideoService {
     if (this.isDirectBrowserPlayable(probe)) {
       return videoPath;
     }
+
+    const ffmpegOutputPath = normalizedInputPath === normalizedOutputPath
+      ? tempOutputPath
+      : outputPath;
 
     const runFfmpeg = (args: string[]) =>
       new Promise<void>((resolve, reject) => {
@@ -378,7 +385,7 @@ export class VideoService {
       '-c', 'copy',
       '-movflags', '+faststart',
       '-y',
-      outputPath,
+      ffmpegOutputPath,
     ];
 
     if (this.shouldAttemptMp4Remux(probe)) {
@@ -403,10 +410,15 @@ export class VideoService {
       '-b:a', '192k',
       '-movflags', '+faststart',
       '-y',
-      outputPath,
+      ffmpegOutputPath,
     ];
 
     await runFfmpeg(transcodeArgs);
+
+    if (ffmpegOutputPath !== outputPath) {
+      await fs.move(ffmpegOutputPath, outputPath, { overwrite: true });
+    }
+
     return outputPath;
   }
 }
