@@ -1679,52 +1679,71 @@ export class TranslationService {
     sourceLang?: string;
     translationQualityMode?: TranslationQualityMode;
   }) {
-    const modelPath = getLocalModelInstallDir(input.localModel);
-    const messages = this.buildLocalTranslationMessages({
-      text: input.sourceText,
+    const counts = await this.countTranslateGemmaInputTokensBatch({
+      localModel: input.localModel,
+      modelStrategy: input.modelStrategy,
+      sourceTexts: [input.sourceText],
       targetLang: input.targetLang,
       sourceLang: input.sourceLang,
-      modelStrategy: input.modelStrategy,
-      promptStyle: resolveLocalTranslationProfile(
-        input.localModel,
-        input.modelStrategy,
-        input.translationQualityMode || 'plain_probe'
-      ).effectivePromptStyle,
+      translationQualityMode: input.translationQualityMode,
     });
+    return Math.max(0, Math.floor(Number(counts[0]) || 0));
+  }
 
-    const prompt = messages
-      ? ''
-      : this.buildLocalTranslationPrompt({
-          text: input.sourceText,
-          sourceText: input.sourceText,
+  private static async countTranslateGemmaInputTokensBatch(input: {
+    localModel: LocalModelDefinition;
+    modelStrategy: LocalTranslateModelStrategy;
+    sourceTexts: string[];
+    targetLang: string;
+    sourceLang?: string;
+    translationQualityMode?: TranslationQualityMode;
+  }) {
+    const modelPath = getLocalModelInstallDir(input.localModel);
+    const profile = resolveLocalTranslationProfile(
+      input.localModel,
+      input.modelStrategy,
+      input.translationQualityMode || 'plain_probe'
+    );
+
+    const entries = input.sourceTexts
+      .map((rawText) => String(rawText || '').trim())
+      .filter(Boolean)
+      .map((sourceText) => {
+        const messages = this.buildLocalTranslationMessages({
+          text: sourceText,
+          targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
+          modelStrategy: input.modelStrategy,
+          promptStyle: profile.effectivePromptStyle,
+        });
+        if (messages && messages.length > 0) {
+          return { messages: messages as unknown as Array<Record<string, unknown>> };
+        }
+
+        const prompt = this.buildLocalTranslationPrompt({
+          text: sourceText,
+          sourceText,
           targetLang: input.targetLang,
           sourceLang: input.sourceLang,
           glossary: '',
           promptTemplateId: '',
           lineSafeMode: false,
           modelStrategy: input.modelStrategy,
-          promptStyle: resolveLocalTranslationProfile(
-            input.localModel,
-            input.modelStrategy,
-            input.translationQualityMode || 'plain_probe'
-          ).effectivePromptStyle,
+          promptStyle: profile.effectivePromptStyle,
           strictMode: false,
           translationQualityMode: input.translationQualityMode,
           promptOverride: '',
           disableSystemPrompt: false,
         });
+        return { prompt };
+      });
+    if (entries.length === 0) return [];
 
     const counts = await OpenvinoRuntimeManager.countHfInputTokens({
       modelPath,
-      entries: [
-        messages && messages.length > 0
-          ? { messages: messages as unknown as Array<Record<string, unknown>> }
-          : {
-              prompt,
-            },
-      ],
+      entries,
     });
-    return Math.max(0, Math.floor(Number(counts[0]) || 0));
+    return counts.map((value) => Math.max(0, Math.floor(Number(value) || 0)));
   }
 
   private static async splitLineSafeUnitsForTranslateGemma(
@@ -1751,52 +1770,51 @@ export class TranslationService {
       this.getEnvNumber('TRANSLATEGEMMA_INPUT_TOKEN_BUDGET', batchingProfile?.tokenBudget ?? 960, 128, 4096)
     );
 
-    const tokenCache = new Map<string, number>();
-    const getTokenCount = async (candidate: LineSafeUnit[]) => {
-      const cacheKey = candidate
-        .map((unit) => `${unit.index}:${this.stripStructuredPrefix(unit.content)}`)
-        .join('\n');
-      if (tokenCache.has(cacheKey)) return tokenCache.get(cacheKey)!;
+    const batches: LineSafeUnit[][] = [];
+    let currentStart = 0;
+    while (currentStart < units.length) {
+      const candidateSourceTexts: string[] = [];
+      const candidateLineCounts: number[] = [];
+      const candidateCharCounts: number[] = [];
 
-      const sourceText = candidate.map((unit) => this.stripStructuredPrefix(unit.content).trim()).join('\n');
-      const count = await this.countTranslateGemmaInputTokens({
+      let mergedText = '';
+      let mergedChars = 0;
+      for (let end = currentStart; end < units.length; end += 1) {
+        const normalized = this.stripStructuredPrefix(units[end].content).trim();
+        mergedText = mergedText ? `${mergedText}\n${normalized}` : normalized;
+        mergedChars += Math.max(1, normalized.length) + 1;
+        candidateSourceTexts.push(mergedText);
+        candidateLineCounts.push(end - currentStart + 1);
+        candidateCharCounts.push(mergedChars);
+      }
+
+      const candidateTokenCounts = await this.countTranslateGemmaInputTokensBatch({
         localModel: input.localModel,
         modelStrategy: input.modelStrategy,
-        sourceText,
+        sourceTexts: candidateSourceTexts,
         targetLang: input.targetLang,
         sourceLang: input.sourceLang,
         translationQualityMode: qualityMode,
       });
-      tokenCache.set(cacheKey, count);
-      return count;
-    };
 
-    const batches: LineSafeUnit[][] = [];
-    let current: LineSafeUnit[] = [];
-    let currentChars = 0;
-
-    for (const unit of units) {
-      const unitChars = Math.max(1, this.stripStructuredPrefix(unit.content).trim().length) + 1;
-      const candidate = [...current, unit];
-      const candidateChars = currentChars + unitChars;
-      const candidateTokenCount = await getTokenCount(candidate);
-      const exceedsCurrent =
-        current.length > 0 &&
-        (candidate.length > maxLines || candidateChars > charBudget || candidateTokenCount > tokenBudget);
-
-      if (exceedsCurrent) {
-        batches.push(current);
-        current = [unit];
-        currentChars = unitChars;
-        continue;
+      let bestRelativeEnd = -1;
+      for (let index = 0; index < candidateSourceTexts.length; index += 1) {
+        const lineCount = candidateLineCounts[index];
+        const charCount = candidateCharCounts[index];
+        const tokenCount = candidateTokenCounts[index] ?? Number.POSITIVE_INFINITY;
+        if (lineCount > maxLines || charCount > charBudget || tokenCount > tokenBudget) {
+          break;
+        }
+        bestRelativeEnd = index;
       }
 
-      current = candidate;
-      currentChars = candidateChars;
-    }
+      if (bestRelativeEnd < 0) {
+        bestRelativeEnd = 0;
+      }
 
-    if (current.length > 0) {
-      batches.push(current);
+      const absoluteEnd = currentStart + bestRelativeEnd;
+      batches.push(units.slice(currentStart, absoluteEnd + 1));
+      currentStart = absoluteEnd + 1;
     }
 
     return batches;

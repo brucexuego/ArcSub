@@ -3253,6 +3253,9 @@ export class OpenvinoRuntimeManager {
         temperature: 0.2,
         top_p: 0.95,
       };
+      if (primaryConfig.apply_chat_template === false) {
+        fallbackConfig.apply_chat_template = false;
+      }
       const primaryMessage = String(primaryError instanceof Error ? primaryError.message : primaryError || '');
       const helperStateError =
         /another generation is already in progress|translation pipeline is not loaded|translate helper request timed out/i.test(
