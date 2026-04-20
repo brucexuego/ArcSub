@@ -266,6 +266,60 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
     notes: ['Qwen3 4B needs aggressive micro-batching and no-repeat control for subtitle translation to avoid line collapse and pass-through.'],
   },
   {
+    id: 'local-translategemma-4b-it',
+    repoIds: ['google/translategemma-4b-it'],
+    promptStyleOverrides: {
+      plain_probe: 'translategemma_google',
+      template_validated: 'translategemma_google',
+      json_strict: 'translategemma_google',
+    },
+    lineSafeBatching: {
+      plain_probe: {
+        maxLines: 4,
+        charBudget: 320,
+        tokenBudget: 960,
+      },
+      template_validated: {
+        maxLines: 4,
+        charBudget: 320,
+        tokenBudget: 960,
+      },
+      json_strict: {
+        maxLines: 2,
+        charBudget: 160,
+        tokenBudget: 640,
+      },
+    },
+    notes: ['TranslateGemma uses structured translation messages instead of ArcSub generic system-prompt wrappers.', 'Subtitle translation should stay in small contiguous batches so line coverage can be validated externally.'],
+  },
+  {
+    id: 'local-vllm-translategemma-4b-it',
+    repoIds: ['Infomaniak-AI/vllm-translategemma-4b-it'],
+    promptStyleOverrides: {
+      plain_probe: 'translategemma_vllm',
+      template_validated: 'translategemma_vllm',
+      json_strict: 'translategemma_vllm',
+    },
+    lineSafeBatching: {
+      plain_probe: {
+        maxLines: 4,
+        charBudget: 320,
+        tokenBudget: 960,
+      },
+      template_validated: {
+        maxLines: 4,
+        charBudget: 320,
+        tokenBudget: 960,
+      },
+      json_strict: {
+        maxLines: 2,
+        charBudget: 160,
+        tokenBudget: 640,
+      },
+    },
+    notes: ['The vLLM-optimized TranslateGemma recipe uses the delimiter-style chat payload documented by vLLM recipes.', 'Subtitle translation should stay in small contiguous batches so line coverage can be validated externally.'],
+  },
+  {
     id: 'local-gemma-3-4b-it',
     repoIds: ['OpenVINO/gemma-3-4b-it-int4-ov', 'OpenVINO/gemma-3-4b-it-int8-ov'],
     qualityModeDefaults: {

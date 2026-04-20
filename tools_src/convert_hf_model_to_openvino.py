@@ -608,6 +608,38 @@ def _export_transformers_from_tf(repo_id: str, output_dir: pathlib.Path, runtime
     raise RuntimeError(f"TensorFlow export is not supported for runtime layout: {runtime_layout}")
 
 
+def _export_visual_causal_lm(repo_id: str, output_dir: pathlib.Path, trust_remote_code: bool) -> dict:
+    _maybe_bootstrap_optimum()
+    from optimum.intel import OVModelForVisualCausalLM  # type: ignore
+
+    token = _resolve_hf_token()
+
+    model = OVModelForVisualCausalLM.from_pretrained(
+        repo_id,
+        export=True,
+        trust_remote_code=trust_remote_code,
+        token=token,
+    )
+    model.save_pretrained(output_dir)
+    model = None
+    gc.collect()
+
+    processor = AutoProcessor.from_pretrained(
+        repo_id,
+        trust_remote_code=trust_remote_code,
+        token=token,
+    )
+    processor.save_pretrained(output_dir)
+
+    tokenizers = _generate_openvino_tokenizers(output_dir, output_dir, trust_remote_code)
+    return {
+        "mode": "ovmodel-visual-causal-lm",
+        "repoId": repo_id,
+        "generatedFiles": _iter_repo_files(output_dir),
+        "tokenizerFiles": tokenizers,
+    }
+
+
 def _maybe_bootstrap_optimum() -> None:
     optimum_intel_spec = importlib.util.find_spec("optimum.intel")
     optimum_export_spec = importlib.util.find_spec("optimum.exporters.openvino")
@@ -744,6 +776,8 @@ def main() -> int:
             if args.conversion_method == "optimum-export-openvino":
                 if args.source_format in ("tensorflow", "keras"):
                     result = _export_transformers_from_tf(args.repo_id, output_dir, args.runtime_layout, trust_remote_code)
+                elif args.runtime_layout == "translate-vlm":
+                    result = _export_visual_causal_lm(args.repo_id, output_dir, trust_remote_code)
                 else:
                     task_name = args.hf_task.strip() or _infer_optimum_task(args.type, args.runtime_layout, args.type)
                     result = _run_optimum_export(args.repo_id, output_dir, task_name or None, trust_remote_code)
@@ -773,6 +807,12 @@ def main() -> int:
         }
         payload["removedSourceArtifacts"] = _cleanup_non_ov_sources(output_dir)
         payload["outputFiles"] = _iter_repo_files(output_dir)
+        if not payload["outputFiles"]:
+            raise RuntimeError(
+                "Model export finished without producing any output files. "
+                "This usually means the Hugging Face model is gated without download access, "
+                "or the selected export path did not emit OpenVINO artifacts."
+            )
         sys.stdout.write(json.dumps(payload, ensure_ascii=True))
         sys.stdout.flush()
         return 0

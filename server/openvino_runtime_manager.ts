@@ -565,7 +565,9 @@ class OpenVinoTranslateHelperClient {
     return await new Promise<any>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error(`Translate helper request timed out after ${timeoutMs} ms (${method}).`));
+        const error = new Error(`Translate helper request timed out after ${timeoutMs} ms (${method}).`);
+        this.terminateHelper(error.message);
+        reject(error);
       }, timeoutMs);
 
       this.pending.set(requestId, {
@@ -794,7 +796,9 @@ class OpenVinoGenaiTranslateHelperClient {
     return await new Promise<any>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error(`OpenVINO GenAI translate helper request timed out after ${timeoutMs} ms (${method}).`));
+        const error = new Error(`OpenVINO GenAI translate helper request timed out after ${timeoutMs} ms (${method}).`);
+        this.terminateHelper(error.message);
+        reject(error);
       }, timeoutMs);
 
       this.pending.set(requestId, {
@@ -846,8 +850,16 @@ class OpenVinoGenaiTranslateHelperClient {
     return this.request('load', { modelPath, device, runtimeKind, properties }, timeoutMs);
   }
 
-  static async generate(prompt: string, generationConfig: Record<string, unknown>) {
-    return this.request('generate', { prompt, generationConfig }, 300000);
+  static async generate(input: { prompt?: string; messages?: Array<Record<string, unknown>> }, generationConfig: Record<string, unknown>) {
+    return this.request(
+      'generate',
+      {
+        prompt: input.prompt || '',
+        messages: Array.isArray(input.messages) ? input.messages : undefined,
+        generationConfig,
+      },
+      300000
+    );
   }
 
   static async unload() {
@@ -980,6 +992,15 @@ export class OpenvinoRuntimeManager {
     console.log(`[${new Date().toISOString()}] [LocalRuntime] ${message}${payload}`);
   }
 
+  private static shouldTraceLocalTranslate() {
+    return this.getEnvBoolean('OPENVINO_LOCAL_TRANSLATE_TRACE', false);
+  }
+
+  private static traceLocalTranslate(message: string, extra?: Record<string, unknown>) {
+    if (!this.shouldTraceLocalTranslate()) return;
+    this.log(`translate-trace ${message}`, extra);
+  }
+
   private static getEnvNumber(name: string, fallback: number, min?: number, max?: number) {
     const raw = process.env[name];
     if (typeof raw !== 'string' || !raw.trim()) return fallback;
@@ -1061,6 +1082,12 @@ export class OpenvinoRuntimeManager {
     return this.isOpenvinoGpuAllocationLimitError(error) || this.isOpenvinoRemoteTensorNotImplementedError(error);
   }
 
+  private static shouldFallbackTranslateToCpu(requestedDevice: string, error: unknown) {
+    const normalized = this.normalizeRequestedDevice(requestedDevice, 'AUTO');
+    if (normalized === 'CPU') return false;
+    return this.isOpenvinoGpuAllocationLimitError(error);
+  }
+
   private static async loadAsrHelperModelWithFallback(input: {
     modelPath: string;
     requestedDevice: string;
@@ -1139,6 +1166,225 @@ export class OpenvinoRuntimeManager {
     return 'AUTO';
   }
 
+  private static async loadGenaiTranslateModelWithFallback(input: {
+    modelPath: string;
+    requestedDevice: string;
+    runtimeKind: 'llm' | 'vlm';
+    properties: Record<string, unknown>;
+    timeoutMs: number;
+  }) {
+    const requestedDevice = this.normalizeRequestedDevice(input.requestedDevice, 'AUTO');
+    try {
+      const result = await OpenVinoGenaiTranslateHelperClient.loadModel(
+        input.modelPath,
+        requestedDevice,
+        input.runtimeKind,
+        input.properties,
+        input.timeoutMs
+      );
+      return {
+        result,
+        effectiveDevice: requestedDevice,
+      };
+    } catch (error) {
+      if (!this.shouldFallbackTranslateToCpu(requestedDevice, error)) {
+        throw error;
+      }
+      this.log('translate helper gpu allocation failed, retrying on cpu', {
+        requestedDevice,
+        runtimeKind: input.runtimeKind,
+        modelPath: input.modelPath,
+        message: String((error as any)?.message || error || 'OpenVINO GPU allocation failure'),
+      });
+      OpenVinoGenaiTranslateHelperClient.forceShutdownNow('Retrying translate helper on CPU after GPU allocation failure.');
+      const result = await OpenVinoGenaiTranslateHelperClient.loadModel(
+        input.modelPath,
+        'CPU',
+        input.runtimeKind,
+        input.properties,
+        input.timeoutMs
+      );
+      return {
+        result,
+        effectiveDevice: 'CPU',
+      };
+    }
+  }
+
+  private static async loadSeq2SeqTranslateModelWithFallback(input: {
+    modelPath: string;
+    requestedDevice: string;
+    timeoutMs: number;
+  }) {
+    const requestedDevice = this.normalizeRequestedDevice(input.requestedDevice, 'AUTO');
+    try {
+      const result = await OpenVinoTranslateHelperClient.loadModel(
+        input.modelPath,
+        requestedDevice,
+        input.timeoutMs
+      );
+      return {
+        result,
+        effectiveDevice: requestedDevice,
+      };
+    } catch (error) {
+      if (!this.shouldFallbackTranslateToCpu(requestedDevice, error)) {
+        throw error;
+      }
+      this.log('seq2seq translate helper gpu allocation failed, retrying on cpu', {
+        requestedDevice,
+        modelPath: input.modelPath,
+        message: String((error as any)?.message || error || 'OpenVINO GPU allocation failure'),
+      });
+      OpenVinoTranslateHelperClient.forceShutdownNow('Retrying seq2seq translate helper on CPU after GPU allocation failure.');
+      const result = await OpenVinoTranslateHelperClient.loadModel(input.modelPath, 'CPU', input.timeoutMs);
+      return {
+        result,
+        effectiveDevice: 'CPU',
+      };
+    }
+  }
+
+  private static async runGenaiTranslateHelperOnce(input: {
+    modelPath: string;
+    prompt: string;
+    generationConfig: Record<string, unknown>;
+    runtimeKind: 'llm' | 'vlm';
+    modelId?: string;
+  }) {
+    const helperPath = PathManager.resolveToolsSourcePath('openvino_genai_translate_helper.mjs');
+    if (!(await fs.pathExists(helperPath))) {
+      throw new Error(`OpenVINO GenAI translate helper not found: ${helperPath}`);
+    }
+
+    const requestedDevice = await this.getLocalTranslateDevice();
+    const isTranslateGemma =
+      /translategemma/i.test(String(input.modelId || '')) || /translategemma/i.test(String(input.modelPath || ''));
+    // Dedicated translation models are run as isolated helper jobs without the
+    // shared CACHE_DIR / scheduler hints used by generic local LLM routes.
+    const properties = isTranslateGemma ? {} : this.getLocalTranslatePipelineProperties(input.modelId);
+    const child = spawn(process.execPath, [helperPath], {
+      cwd: PathManager.getRoot(),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS || '1',
+      },
+    });
+
+    let readBuffer = '';
+    const pending = new Map<
+      string,
+      {
+        resolve: (value: any) => void;
+        reject: (error: Error) => void;
+        timeout: NodeJS.Timeout;
+      }
+    >();
+    let stderr = '';
+    let requestSeq = 0;
+
+    const rejectAll = (message: string) => {
+      for (const [, item] of pending) {
+        clearTimeout(item.timeout);
+        item.reject(new Error(message));
+      }
+      pending.clear();
+    };
+
+    child.stdout.on('data', (chunk) => {
+      readBuffer += chunk.toString('utf8');
+      let lineEnd = readBuffer.indexOf('\n');
+      while (lineEnd >= 0) {
+        const rawLine = readBuffer.slice(0, lineEnd).trim();
+        readBuffer = readBuffer.slice(lineEnd + 1);
+        lineEnd = readBuffer.indexOf('\n');
+        if (!rawLine) continue;
+        let payload: HelperResponsePayload | null = null;
+        try {
+          payload = JSON.parse(rawLine) as HelperResponsePayload;
+        } catch {
+          payload = null;
+        }
+        if (!payload?.requestId) continue;
+        const item = pending.get(payload.requestId);
+        if (!item) continue;
+        clearTimeout(item.timeout);
+        pending.delete(payload.requestId);
+        if (payload.ok) {
+          item.resolve(payload.result);
+        } else {
+          item.reject(new Error(String(payload.error || 'OpenVINO GenAI translate helper request failed.')));
+        }
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (error) => {
+      rejectAll(`OpenVINO GenAI translate helper failed: ${error.message}`);
+    });
+    child.on('exit', (code, signal) => {
+      rejectAll(`OpenVINO GenAI translate helper exited unexpectedly (code=${String(code)}, signal=${String(signal)}).`);
+    });
+
+    const request = (method: string, params: Record<string, unknown>, timeoutMs: number) =>
+      new Promise<any>((resolve, reject) => {
+        if (!child.stdin || child.stdin.destroyed) {
+          reject(new Error('OpenVINO GenAI translate helper stdin is unavailable.'));
+          return;
+        }
+        const requestId = `fresh-genai-${Date.now()}-${++requestSeq}`;
+        const timeout = setTimeout(() => {
+          pending.delete(requestId);
+          reject(new Error(`OpenVINO GenAI translate helper request timed out after ${timeoutMs} ms (${method}).`));
+        }, timeoutMs);
+        pending.set(requestId, { resolve, reject, timeout });
+        child.stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8', (error) => {
+          if (!error) return;
+          clearTimeout(timeout);
+          pending.delete(requestId);
+          reject(new Error(`Failed to write to OpenVINO GenAI translate helper stdin: ${String(error.message || error)}`));
+        });
+      });
+
+    try {
+      const loadResult = await request(
+        'load',
+        {
+          modelPath: input.modelPath,
+          device: requestedDevice,
+          runtimeKind: input.runtimeKind,
+          properties,
+        },
+        this.getTranslateLoadTimeoutMs(input.runtimeKind)
+      );
+      const generateResult = await request(
+        'generate',
+        {
+          prompt: input.prompt,
+          generationConfig: input.generationConfig,
+        },
+        this.getEnvNumber('OPENVINO_TRANSLATE_HELPER_GENERATE_TIMEOUT_MS', 300000, 1000, 1800000)
+      );
+      await request('shutdown', {}, 5000).catch(() => {});
+      return {
+        loadResult,
+        generateResult,
+        stderr,
+      };
+    } finally {
+      if (!child.killed) {
+        try {
+          child.kill();
+        } catch {
+          // ignore cleanup failures
+        }
+      }
+    }
+  }
+
   private static getLocalTranslateCacheDir(modelId?: string) {
     const configured = String(
       process.env.OPENVINO_LOCAL_TRANSLATE_CACHE_DIR || ''
@@ -1212,6 +1458,13 @@ export class OpenvinoRuntimeManager {
     return properties;
   }
 
+  private static isTranslateGemmaModelRef(modelId?: string, modelPath?: string) {
+    return (
+      /translategemma/i.test(String(modelId || '')) ||
+      /translategemma/i.test(String(modelPath || ''))
+    );
+  }
+
   private static getLocalAsrCacheDir(modelId?: string) {
     const configured = String(
       process.env.OPENVINO_LOCAL_ASR_CACHE_DIR || ''
@@ -1276,6 +1529,14 @@ export class OpenvinoRuntimeManager {
 
   private static getGenericHfConvertScriptPath() {
     return PathManager.resolveToolsSourcePath('convert_hf_model_to_openvino.py');
+  }
+
+  private static getChatTemplateRenderScriptPath() {
+    return PathManager.resolveToolsSourcePath('render_hf_chat_template.py');
+  }
+
+  private static getInputTokenCountScriptPath() {
+    return PathManager.resolveToolsSourcePath('count_hf_input_tokens.py');
   }
 
   private static async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -1513,8 +1774,10 @@ export class OpenvinoRuntimeManager {
   }
 
   private static async getOrCreateTranslatePipeline(modelId: string, modelPath: string): Promise<CachedTranslatePipeline> {
+    this.traceLocalTranslate('getOrCreateTranslatePipeline:start', { modelId, modelPath });
     const cached = this.translatePipelineCache.get(modelId);
     if (cached) {
+      this.traceLocalTranslate('getOrCreateTranslatePipeline:cache-hit', { modelId });
       this.activeTranslateModelId = modelId;
       return cached;
     }
@@ -1541,45 +1804,57 @@ export class OpenvinoRuntimeManager {
 
     const isVlm = await this.isVlmModelPath(modelPath);
     const isSeq2Seq = !isVlm && await this.isSeq2SeqTranslateModelPath(modelPath);
+    const isTranslateGemma = this.isTranslateGemmaModelRef(modelId, modelPath);
     const requestedDevice = await this.getLocalTranslateDevice();
-    const properties = this.getLocalTranslatePipelineProperties(modelId);
+    const properties = isTranslateGemma ? {} : this.getLocalTranslatePipelineProperties(modelId);
     const cacheDir = typeof properties.CACHE_DIR === 'string' ? properties.CACHE_DIR : null;
     const promptLookupEnabled = Boolean(properties.prompt_lookup);
     const schedulerConfig =
       properties.schedulerConfig && typeof properties.schedulerConfig === 'object'
         ? { ...(properties.schedulerConfig as Record<string, unknown>) }
         : null;
+    const beforeSnapshotStartedAt = Date.now();
     const beforeSnapshot = await this.safeSystemSnapshot(true);
+    this.traceLocalTranslate('getOrCreateTranslatePipeline:before-snapshot', {
+      modelId,
+      elapsedMs: Date.now() - beforeSnapshotStartedAt,
+      ok: Boolean(beforeSnapshot),
+    });
     if (isVlm) {
-      const helperHealth = await OpenVinoGenaiTranslateHelperClient.healthCheck(5000).catch(() => null);
-      const helperLoaded =
-        Boolean(helperHealth?.modelLoaded) &&
-        String(helperHealth?.modelPath || '').toLowerCase() === String(modelPath).toLowerCase() &&
-        String(helperHealth?.device || '').trim().toUpperCase() === requestedDevice.toUpperCase() &&
-        String(helperHealth?.runtimeKind || '').trim().toLowerCase() === 'vlm';
-      const loadResult = helperLoaded
-        ? helperHealth
-        : await OpenVinoGenaiTranslateHelperClient.loadModel(
-            modelPath,
-            requestedDevice,
-            'vlm',
-            properties,
-            this.getTranslateLoadTimeoutMs('vlm')
-          );
+      const loadStartedAt = Date.now();
+      const loaded = await this.loadGenaiTranslateModelWithFallback({
+        modelPath,
+        requestedDevice,
+        runtimeKind: 'vlm',
+        properties,
+        timeoutMs: this.getTranslateLoadTimeoutMs('vlm'),
+      });
+      this.traceLocalTranslate('getOrCreateTranslatePipeline:vlm-load', {
+        modelId,
+        elapsedMs: Date.now() - loadStartedAt,
+        effectiveDevice: loaded.effectiveDevice,
+      });
+      const loadResult = loaded.result;
       const pipeline = {
-        device: String(loadResult?.device || requestedDevice),
-        async generate(prompt: string, options?: Record<string, unknown>) {
+        device: String(loadResult?.device || loaded.effectiveDevice),
+        async generate(input: { prompt?: string; messages?: Array<Record<string, unknown>> }, options?: Record<string, unknown>) {
           const generationConfig =
             options && typeof options.generationConfig === 'object'
               ? (options.generationConfig as Record<string, unknown>)
               : {};
-          return OpenVinoGenaiTranslateHelperClient.generate(prompt, generationConfig);
+          return OpenVinoGenaiTranslateHelperClient.generate(input, generationConfig);
         },
         async dispose() {
           await OpenVinoGenaiTranslateHelperClient.shutdown();
         },
       };
+      const afterSnapshotStartedAt = Date.now();
       const afterSnapshot = await this.safeSystemSnapshot(true);
+      this.traceLocalTranslate('getOrCreateTranslatePipeline:vlm-after-snapshot', {
+        modelId,
+        elapsedMs: Date.now() - afterSnapshotStartedAt,
+        ok: Boolean(afterSnapshot),
+      });
       const wrapped: CachedTranslatePipeline = {
         kind: 'vlm',
         pipeline,
@@ -1605,28 +1880,34 @@ export class OpenvinoRuntimeManager {
     }
 
     if (isSeq2Seq) {
-      const helperHealth = await OpenVinoTranslateHelperClient.healthCheck(5000).catch(() => null);
-      const helperLoaded =
-        Boolean(helperHealth?.modelLoaded) &&
-        String(helperHealth?.modelPath || '').toLowerCase() === String(modelPath).toLowerCase() &&
-        String(helperHealth?.device || '').trim().toUpperCase() === requestedDevice.toUpperCase();
-      const loadResult = helperLoaded
-        ? helperHealth
-        : await OpenVinoTranslateHelperClient.loadModel(
-            modelPath,
-            requestedDevice,
-            this.getTranslateLoadTimeoutMs('seq2seq')
-          );
+      const loadStartedAt = Date.now();
+      const loaded = await this.loadSeq2SeqTranslateModelWithFallback({
+        modelPath,
+        requestedDevice,
+        timeoutMs: this.getTranslateLoadTimeoutMs('seq2seq'),
+      });
+      this.traceLocalTranslate('getOrCreateTranslatePipeline:seq2seq-load', {
+        modelId,
+        elapsedMs: Date.now() - loadStartedAt,
+        effectiveDevice: loaded.effectiveDevice,
+      });
+      const loadResult = loaded.result;
       const pipeline = {
-        device: String(loadResult?.device || requestedDevice),
-        async generate(prompt: string, generationConfig?: Record<string, unknown>) {
-          return OpenVinoTranslateHelperClient.generate(prompt, generationConfig || {});
-        },
+        device: String(loadResult?.device || loaded.effectiveDevice),
+      async generate(input: { prompt?: string }, generationConfig?: Record<string, unknown>) {
+        return OpenVinoTranslateHelperClient.generate(String(input.prompt || ''), generationConfig || {});
+      },
         async dispose() {
           await OpenVinoTranslateHelperClient.shutdown();
         },
       };
+      const afterSnapshotStartedAt = Date.now();
       const afterSnapshot = await this.safeSystemSnapshot(true);
+      this.traceLocalTranslate('getOrCreateTranslatePipeline:seq2seq-after-snapshot', {
+        modelId,
+        elapsedMs: Date.now() - afterSnapshotStartedAt,
+        ok: Boolean(afterSnapshot),
+      });
       const wrapped: CachedTranslatePipeline = {
         kind: 'seq2seq',
         pipeline,
@@ -1651,31 +1932,36 @@ export class OpenvinoRuntimeManager {
       return wrapped;
     }
 
-    const helperHealth = await OpenVinoGenaiTranslateHelperClient.healthCheck(5000).catch(() => null);
-    const helperLoaded =
-      Boolean(helperHealth?.modelLoaded) &&
-      String(helperHealth?.modelPath || '').toLowerCase() === String(modelPath).toLowerCase() &&
-      String(helperHealth?.device || '').trim().toUpperCase() === requestedDevice.toUpperCase() &&
-      String(helperHealth?.runtimeKind || '').trim().toLowerCase() === 'llm';
-    const loadResult = helperLoaded
-      ? helperHealth
-      : await OpenVinoGenaiTranslateHelperClient.loadModel(
-          modelPath,
-          requestedDevice,
-          'llm',
-          properties,
-          this.getTranslateLoadTimeoutMs('llm')
-        );
+    const loadStartedAt = Date.now();
+    const loaded = await this.loadGenaiTranslateModelWithFallback({
+      modelPath,
+      requestedDevice,
+      runtimeKind: 'llm',
+      properties,
+      timeoutMs: this.getTranslateLoadTimeoutMs('llm'),
+    });
+    this.traceLocalTranslate('getOrCreateTranslatePipeline:llm-load', {
+      modelId,
+      elapsedMs: Date.now() - loadStartedAt,
+      effectiveDevice: loaded.effectiveDevice,
+    });
+    const loadResult = loaded.result;
     const pipeline = {
-      device: String(loadResult?.device || requestedDevice),
-      async generate(prompt: string, generationConfig?: Record<string, unknown>) {
-        return OpenVinoGenaiTranslateHelperClient.generate(prompt, generationConfig || {});
+      device: String(loadResult?.device || loaded.effectiveDevice),
+      async generate(input: { prompt?: string; messages?: Array<Record<string, unknown>> }, generationConfig?: Record<string, unknown>) {
+        return OpenVinoGenaiTranslateHelperClient.generate(input, generationConfig || {});
       },
       async dispose() {
         await OpenVinoGenaiTranslateHelperClient.shutdown();
       },
     };
+    const afterSnapshotStartedAt = Date.now();
     const afterSnapshot = await this.safeSystemSnapshot(true);
+    this.traceLocalTranslate('getOrCreateTranslatePipeline:llm-after-snapshot', {
+      modelId,
+      elapsedMs: Date.now() - afterSnapshotStartedAt,
+      ok: Boolean(afterSnapshot),
+    });
     const wrapped: CachedTranslatePipeline = {
       kind: 'llm',
       pipeline,
@@ -2864,11 +3150,16 @@ export class OpenvinoRuntimeManager {
     modelId: string;
     modelPath: string;
     prompt: string;
+    messages?: Array<Record<string, unknown>>;
     maxNewTokens?: number;
     generation?: LocalTranslateGenerationOptions;
   }) {
-    const cachedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
-    const pipeline = cachedPipeline.pipeline;
+    this.traceLocalTranslate('translateWithLocalModel:start', {
+      modelId: input.modelId,
+      modelPath: input.modelPath,
+      hasMessages: Array.isArray(input.messages) && input.messages.length > 0,
+      promptLength: String(input.prompt || '').length,
+    });
     const generation = input.generation || {};
     const maxNewTokens = Math.max(32, Number(input.maxNewTokens || 1024));
     const primaryConfig: Record<string, unknown> = {
@@ -2910,22 +3201,95 @@ export class OpenvinoRuntimeManager {
     }
 
     let result: any;
+    let generationInput: {
+      prompt: string;
+      messages?: Array<Record<string, unknown>>;
+    } = {
+      prompt: input.prompt,
+      messages: Array.isArray(input.messages) ? input.messages : undefined,
+    };
+    const isTranslateGemma = this.isTranslateGemmaModelRef(input.modelId, input.modelPath);
+
+    if (isTranslateGemma && Array.isArray(generationInput.messages) && generationInput.messages.length > 0) {
+      const renderStartedAt = Date.now();
+      generationInput = {
+        prompt: await this.renderHfChatTemplate({
+          modelPath: input.modelPath,
+          messages: generationInput.messages,
+        }),
+      };
+      this.traceLocalTranslate('translateWithLocalModel:render-chat-template', {
+        modelId: input.modelId,
+        elapsedMs: Date.now() - renderStartedAt,
+        promptLength: generationInput.prompt.length,
+      });
+      primaryConfig.apply_chat_template = false;
+    }
+
+    const cachedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
+    const pipeline = cachedPipeline.pipeline;
+
+    const runGenerate = async (
+      targetPipeline: any,
+      targetKind: TranslatePipelineKind,
+      generationConfig: Record<string, unknown>,
+      currentInput = generationInput
+    ) =>
+      targetKind === 'vlm'
+        ? await targetPipeline.generate(currentInput, { generationConfig })
+        : await targetPipeline.generate(currentInput, generationConfig);
+
     try {
-      result =
-        cachedPipeline.kind === 'vlm'
-          ? await pipeline.generate(input.prompt, { generationConfig: primaryConfig })
-          : await pipeline.generate(input.prompt, primaryConfig);
-    } catch {
-      const fallbackConfig = {
+      const generateStartedAt = Date.now();
+      result = await runGenerate(pipeline, cachedPipeline.kind, primaryConfig);
+      this.traceLocalTranslate('translateWithLocalModel:generate-primary', {
+        modelId: input.modelId,
+        elapsedMs: Date.now() - generateStartedAt,
+      });
+    } catch (primaryError) {
+      const fallbackConfig: Record<string, unknown> = {
         max_new_tokens: maxNewTokens,
         do_sample: false,
         temperature: 0.2,
         top_p: 0.95,
       };
-      result =
-        cachedPipeline.kind === 'vlm'
-          ? await pipeline.generate(input.prompt, { generationConfig: fallbackConfig })
-          : await pipeline.generate(input.prompt, fallbackConfig);
+      const primaryMessage = String(primaryError instanceof Error ? primaryError.message : primaryError || '');
+      const helperStateError =
+        /another generation is already in progress|translation pipeline is not loaded|translate helper request timed out/i.test(
+          primaryMessage
+        );
+      const templateParseError =
+        Array.isArray(input.messages) &&
+        input.messages.length > 0 &&
+        /expected value expression|chat template|apply_chat_template|jinja/i.test(primaryMessage);
+
+      if (templateParseError && generationInput.messages) {
+        generationInput = {
+          prompt: await this.renderHfChatTemplate({
+            modelPath: input.modelPath,
+            messages: generationInput.messages,
+          }),
+        };
+        fallbackConfig.apply_chat_template = false;
+      }
+
+      if (helperStateError) {
+        await this.releaseTranslateRuntime().catch(() => {});
+        const refreshedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
+        const generateStartedAt = Date.now();
+        result = await runGenerate(refreshedPipeline.pipeline, refreshedPipeline.kind, fallbackConfig);
+        this.traceLocalTranslate('translateWithLocalModel:generate-fallback-refreshed', {
+          modelId: input.modelId,
+          elapsedMs: Date.now() - generateStartedAt,
+        });
+      } else {
+        const generateStartedAt = Date.now();
+        result = await runGenerate(pipeline, cachedPipeline.kind, fallbackConfig);
+        this.traceLocalTranslate('translateWithLocalModel:generate-fallback', {
+          modelId: input.modelId,
+          elapsedMs: Date.now() - generateStartedAt,
+        });
+      }
     }
 
     const asTexts = Array.isArray(result?.texts) ? result.texts : [];
@@ -2935,7 +3299,13 @@ export class OpenvinoRuntimeManager {
     if (!translated) {
       throw new Error('Local translation model returned empty output.');
     }
+    const postSnapshotStartedAt = Date.now();
     const postSnapshot = await this.safeSystemSnapshot(true);
+    this.traceLocalTranslate('translateWithLocalModel:post-snapshot', {
+      modelId: input.modelId,
+      elapsedMs: Date.now() - postSnapshotStartedAt,
+      ok: Boolean(postSnapshot),
+    });
     cachedPipeline.runtimeDebug = {
       ...cachedPipeline.runtimeDebug,
       pipelineDevice:
@@ -3252,6 +3622,156 @@ export class OpenvinoRuntimeManager {
     }
   }
 
+  private static async renderHfChatTemplate(input: { modelPath: string; messages: Array<Record<string, unknown>> }) {
+    const scriptPath = this.getChatTemplateRenderScriptPath();
+    if (!(await fs.pathExists(scriptPath))) {
+      throw new Error(`Hugging Face chat template renderer not found: ${scriptPath}`);
+    }
+
+    return await new Promise<string>((resolve, reject) => {
+      const child = spawn(this.getPythonCommand(), [scriptPath], {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      const timeoutMs = Math.max(
+        30000,
+        Math.floor(this.getEnvNumber('OPENVINO_HELPER_LOAD_TIMEOUT_MS', 180000, 1000, 1800000))
+      );
+      const timeout = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {}
+        reject(new Error(`Hugging Face chat template rendering timed out (${timeoutMs} ms).`));
+      }, timeoutMs);
+
+      child.stdout?.on('data', (chunk) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to start Hugging Face chat template renderer: ${error.message}`));
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        try {
+          const parsed = this.parseJsonFromToolOutput(stdout);
+          const prompt = String(parsed?.prompt || '').trim();
+          if (code === 0 && prompt) {
+            resolve(prompt);
+            return;
+          }
+          const errorMessage = stderr.trim() || `exit code ${code ?? 'null'}`;
+          reject(new Error(`Hugging Face chat template rendering failed: ${errorMessage}`));
+        } catch (error: any) {
+          reject(
+            new Error(
+              `Hugging Face chat template renderer returned invalid output: ${String(error?.message || error)}${
+                stderr.trim() ? `\n${stderr.trim()}` : ''
+              }`
+            )
+          );
+        }
+      });
+
+      child.stdin?.end(
+        JSON.stringify({
+          modelDir: input.modelPath,
+          messages: input.messages,
+        })
+      );
+    });
+  }
+
+  static async countHfInputTokens(input: {
+    modelPath: string;
+    entries: Array<{
+      prompt?: string;
+      messages?: Array<Record<string, unknown>>;
+    }>;
+  }) {
+    const scriptPath = this.getInputTokenCountScriptPath();
+    if (!(await fs.pathExists(scriptPath))) {
+      throw new Error(`Hugging Face input token counter not found: ${scriptPath}`);
+    }
+
+    return await new Promise<number[]>((resolve, reject) => {
+      const child = spawn(this.getPythonCommand(), [scriptPath], {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          PYTHONIOENCODING: 'utf-8',
+          PYTHONUTF8: '1',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      const timeoutMs = Math.max(
+        30000,
+        Math.floor(this.getEnvNumber('OPENVINO_HELPER_LOAD_TIMEOUT_MS', 180000, 1000, 1800000))
+      );
+      const timeout = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {}
+        reject(new Error(`Hugging Face input token counting timed out (${timeoutMs} ms).`));
+      }, timeoutMs);
+
+      child.stdout?.on('data', (chunk) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`Failed to start Hugging Face input token counter: ${error.message}`));
+      });
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        try {
+          const parsed = this.parseJsonFromToolOutput(stdout);
+          const counts = Array.isArray(parsed?.counts)
+            ? parsed.counts.map((value: unknown) => Math.max(0, Math.floor(Number(value) || 0)))
+            : [];
+          if (code === 0 && counts.length === input.entries.length) {
+            resolve(counts);
+            return;
+          }
+          const errorMessage = stderr.trim() || `exit code ${code ?? 'null'}`;
+          reject(new Error(`Hugging Face input token counting failed: ${errorMessage}`));
+        } catch (error: any) {
+          reject(
+            new Error(
+              `Hugging Face input token counter returned invalid output: ${String(error?.message || error)}${
+                stderr.trim() ? `\n${stderr.trim()}` : ''
+              }`
+            )
+          );
+        }
+      });
+
+      child.stdin?.end(
+        JSON.stringify({
+          modelDir: input.modelPath,
+          entries: input.entries,
+        })
+      );
+    });
+  }
+
   private static formatToolFailureDetails(parsed: any, stderr: string) {
     const detailParts: string[] = [];
     const stdoutTail = Array.isArray(parsed?.detail?.stdoutTail)
@@ -3514,6 +4034,21 @@ export class OpenvinoRuntimeManager {
       released: pipelineCount - failed,
       failed,
     });
+  }
+
+  static async preloadTranslateRuntime(input: { modelId: string; modelPath: string }) {
+    const startedAt = Date.now();
+    const cachedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
+    this.traceLocalTranslate('preloadTranslateRuntime:done', {
+      modelId: input.modelId,
+      elapsedMs: Date.now() - startedAt,
+      pipelineKind: cachedPipeline.kind,
+      device: cachedPipeline.runtimeDebug.pipelineDevice,
+    });
+    return {
+      success: true,
+      runtimeDebug: { ...cachedPipeline.runtimeDebug },
+    };
   }
 
   static async releaseAsrRuntime() {

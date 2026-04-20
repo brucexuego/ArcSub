@@ -5,12 +5,19 @@ export type LocalTranslatePromptStyle =
   | 'deepseek_r1_distill_qwen'
   | 'deepseek_r1_plain'
   | 'phi4_chat'
-  | 'gemma_plain';
+  | 'gemma_plain'
+  | 'translategemma_google'
+  | 'translategemma_vllm';
 
 export type LocalTranslateGenerationStyle = 'generic' | 'qwen' | 'qwen3' | 'deepseek_r1';
 
+export interface LocalTranslateStructuredMessage {
+  role: string;
+  content: Array<Record<string, unknown>> | string;
+}
+
 export interface LocalTranslateModelStrategy {
-  family: 'generic' | 'seq2seq' | 'qwen2_5' | 'qwen3' | 'deepseek_r1_distill_qwen' | 'phi4' | 'gemma3';
+  family: 'generic' | 'seq2seq' | 'qwen2_5' | 'qwen3' | 'deepseek_r1_distill_qwen' | 'phi4' | 'gemma3' | 'translategemma';
   promptStyle: LocalTranslatePromptStyle;
   generationStyle: LocalTranslateGenerationStyle;
   qwenOptimized: boolean;

@@ -55,6 +55,7 @@ export interface CloudTranslationProviderRequest {
 export interface CloudTranslationOrchestratorInput {
   text: string;
   targetLang: string;
+  sourceLang?: string;
   glossary?: string;
   prompt?: string;
   promptTemplateId?: string;
@@ -86,6 +87,7 @@ export interface CloudTranslationOrchestratorDeps {
     options: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
@@ -110,6 +112,7 @@ export interface CloudTranslationOrchestratorDeps {
     units: CloudTranslationLineSafeUnit[],
     options: {
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       promptTemplateId?: string;
       key?: string;
@@ -130,6 +133,7 @@ export interface CloudTranslationOrchestratorDeps {
   };
   buildCloudContextSystemPrompt(input: {
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     promptTemplateId?: string;
     prompt?: string;
@@ -220,6 +224,7 @@ export async function runCloudTranslationOrchestrator(
           {
             text: requestOptions.text,
             targetLang: input.targetLang,
+            sourceLang: input.sourceLang,
             glossary: input.glossary,
             prompt: requestOptions.promptOverride ?? input.prompt,
             promptTemplateId: input.promptTemplateId,
@@ -306,6 +311,7 @@ export async function runCloudTranslationOrchestrator(
           units,
           {
             targetLang: input.targetLang,
+            sourceLang: input.sourceLang,
             glossary: input.glossary,
             promptTemplateId: input.promptTemplateId,
             key: input.providerRequest.key,
@@ -351,6 +357,7 @@ export async function runCloudTranslationOrchestrator(
         units,
         {
           targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
           glossary: input.glossary,
           promptTemplateId: input.promptTemplateId,
           key: input.providerRequest.key,
@@ -417,6 +424,7 @@ export async function runCloudTranslationOrchestrator(
       lineSafeMode: false,
       promptOverride: deps.buildCloudContextSystemPrompt({
         targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
         glossary: input.glossary,
         promptTemplateId: input.promptTemplateId,
         prompt: input.prompt,

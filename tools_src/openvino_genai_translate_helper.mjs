@@ -6,6 +6,30 @@ let pipeline = null;
 let runtimeKind = 'llm';
 let modelPath = '';
 let device = 'AUTO';
+let requestChain = Promise.resolve();
+let chatHistoryFactory = null;
+
+async function enqueueRequest(request, requestId) {
+  const previous = requestChain;
+  let release;
+  requestChain = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  await previous.catch(() => {});
+  try {
+    const response = await handleRequest(request);
+    writeResponse(response);
+  } catch (error) {
+    writeResponse({
+      requestId,
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    release?.();
+  }
+}
 
 function writeResponse(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
@@ -101,18 +125,32 @@ async function generate(params) {
     throw new Error('Translation pipeline is not loaded.');
   }
   const prompt = String(params.prompt || '');
-  if (!prompt.trim()) {
-    throw new Error('prompt is required.');
+  const messages = Array.isArray(params.messages) ? params.messages : null;
+  if (!prompt.trim() && (!messages || messages.length === 0)) {
+    throw new Error('prompt or messages are required.');
   }
   const generationConfig =
     params.generationConfig && typeof params.generationConfig === 'object'
       ? { ...params.generationConfig }
       : {};
 
+  let inputs = prompt;
+  if (messages && messages.length > 0) {
+    const openvinoGenai = await import('openvino-genai-node');
+    chatHistoryFactory =
+      chatHistoryFactory ||
+      openvinoGenai?.ChatHistory ||
+      openvinoGenai?.default?.ChatHistory;
+    if (typeof chatHistoryFactory !== 'function') {
+      throw new Error('openvino-genai-node ChatHistory is unavailable.');
+    }
+    inputs = new chatHistoryFactory(messages);
+  }
+
   const result =
     runtimeKind === 'vlm'
-      ? await pipeline.generate(prompt, { generationConfig })
-      : await pipeline.generate(prompt, generationConfig);
+      ? await pipeline.generate(inputs, { generationConfig })
+      : await pipeline.generate(inputs, generationConfig);
 
   const asTexts = Array.isArray(result?.texts) ? result.texts : [];
   const text =
@@ -194,8 +232,7 @@ process.stdin.on('data', async (chunk) => {
     try {
       const request = JSON.parse(rawLine);
       requestId = String(request?.requestId || '');
-      const response = await handleRequest(request);
-      writeResponse(response);
+      await enqueueRequest(request, requestId);
     } catch (error) {
       writeResponse({
         requestId,

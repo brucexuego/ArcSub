@@ -240,4 +240,23 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
       return res.status(500).json({ error: error?.message || 'Failed to release local runtimes.' });
     }
   });
+
+  app.post('/api/local-models/preload', async (req, res) => {
+    try {
+      const LocalModelService = await getLocalModelService();
+      const rawTarget = typeof req.body?.target === 'string' ? req.body.target.trim() : '';
+      if (rawTarget !== 'translate') {
+        return res.status(400).json({ error: 'target must be translate.' });
+      }
+      const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId.trim() : '';
+      if (!modelId) {
+        return res.status(400).json({ error: 'modelId is required.' });
+      }
+
+      const result = await LocalModelService.preloadLocalRuntime('translate', modelId);
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message || 'Failed to preload local runtime.' });
+    }
+  });
 }

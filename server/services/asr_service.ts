@@ -944,8 +944,13 @@ export class AsrService {
 
     const transcriptionPath = PathManager.resolveProjectFile(projectId, 'assets', 'transcription.json', { createProject: true });
     await fs.writeJson(transcriptionPath, result, { spaces: 2 });
+    const resolvedSourceLanguage = String(language || '').trim();
     await ProjectManager.updateProject(projectId, {
       originalSubtitles: this.formatProjectOriginalSubtitles(result),
+      transcriptionSourceLanguage:
+        resolvedSourceLanguage && resolvedSourceLanguage.toLowerCase() !== 'auto'
+          ? resolvedSourceLanguage
+          : null,
       status: PROJECT_STATUS.TEXT_TRANSLATION,
     });
     onProgress('Transcription completed.');

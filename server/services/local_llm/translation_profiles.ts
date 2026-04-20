@@ -6,6 +6,7 @@ type LocalTranslateFamily = LocalTranslateModelStrategy['family'];
 export interface LocalTranslationLineSafeBatchingProfile {
   maxLines?: number;
   charBudget?: number;
+  tokenBudget?: number;
 }
 
 export interface LocalTranslationFamilyProfile {
@@ -251,6 +252,45 @@ const LOCAL_TRANSLATION_FAMILY_PROFILES: LocalTranslationFamilyProfile[] = [
       },
     },
     notes: ['Phi family stays conservative across all translation modes.'],
+  },
+  {
+    id: 'local-translategemma',
+    family: 'translategemma',
+    qualityModeDefaults: {
+      plain_probe: {
+        doSample: false,
+        temperature: 0,
+        topP: 1,
+        topK: 1,
+      },
+      template_validated: {
+        doSample: false,
+        temperature: 0,
+        topP: 1,
+        topK: 1,
+      },
+      json_strict: {
+        doSample: false,
+        temperature: 0,
+        topP: 1,
+        topK: 1,
+      },
+    },
+    lineSafeBatching: {
+      plain_probe: {
+        maxLines: 24,
+        charBudget: 1400,
+      },
+      template_validated: {
+        maxLines: 24,
+        charBudget: 1400,
+      },
+      json_strict: {
+        maxLines: 12,
+        charBudget: 700,
+      },
+    },
+    notes: ['TranslateGemma prefers structured chat messages with explicit source_lang_code and target_lang_code.'],
   },
   {
     id: 'local-gemma3',
