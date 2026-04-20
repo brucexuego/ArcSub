@@ -1005,6 +1005,10 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         );
         onUpdateProject({ 
           originalSubtitles: formattedChunks.join('\n'),
+          transcriptionSourceLanguage:
+            selectedLanguage && selectedLanguage !== 'auto'
+              ? selectedLanguage
+              : null,
           status: PROJECT_STATUS.TEXT_TRANSLATION,
         });
         setProgress(100);

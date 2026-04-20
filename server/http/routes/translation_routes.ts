@@ -9,7 +9,6 @@ export interface TranslationRouteDeps {
 
 let projectManagerTask: Promise<typeof import('../../services/project_manager.js').ProjectManager> | null = null;
 let translationServiceTask: Promise<typeof import('../../services/translation_service.js').TranslationService> | null = null;
-let localModelServiceTask: Promise<typeof import('../../services/local_model_service.js').LocalModelService> | null = null;
 
 function getProjectManager() {
   if (!projectManagerTask) {
@@ -25,13 +24,6 @@ function getTranslationService() {
   return translationServiceTask;
 }
 
-function getLocalModelService() {
-  if (!localModelServiceTask) {
-    localModelServiceTask = import('../../services/local_model_service.js').then((module) => module.LocalModelService);
-  }
-  return localModelServiceTask;
-}
-
 export function registerTranslationRoutes(app: express.Express, deps: TranslationRouteDeps) {
   const { writeAsrLog, isAbortLikeError } = deps;
 
@@ -43,6 +35,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
 
     const { projectId } = req.params;
     const targetLang = typeof req.query.targetLang === 'string' ? req.query.targetLang : 'en';
+    const sourceLang = typeof req.query.sourceLang === 'string' ? req.query.sourceLang : '';
     const glossary = typeof req.query.glossary === 'string' ? req.query.glossary : '';
     const prompt = typeof req.query.prompt === 'string' ? req.query.prompt : '';
     const promptTemplateId = typeof req.query.promptTemplateId === 'string' ? req.query.promptTemplateId : '';
@@ -54,7 +47,6 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
     const modelId = typeof req.query.modelId === 'string' ? req.query.modelId : undefined;
     const assetName = typeof req.query.assetName === 'string' ? req.query.assetName.trim() : '';
     const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    const shouldReleaseLocalTranslateRuntime = Boolean(modelId && modelId.startsWith('local_translate_'));
     let clientDisconnected = false;
     const abortController = new AbortController();
     req.on('close', () => {
@@ -94,6 +86,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         projectId,
         modelId: modelId || '',
         assetName,
+        sourceLang: sourceLang || '',
         targetLang,
         hasGlossary: Boolean(glossary),
         hasPrompt: Boolean(String(prompt || '').trim()),
@@ -105,6 +98,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         {
           text: sourceText,
           targetLang,
+          sourceLang: sourceLang || undefined,
           glossary,
           prompt,
           promptTemplateId,
@@ -124,10 +118,27 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         return;
       }
       const artifacts = await persistTranslationArtifacts(projectId, String(result.translatedText || ''));
+      const actualModelId =
+        typeof result.debug?.provider?.modelId === 'string' && result.debug.provider.modelId.trim()
+          ? result.debug.provider.modelId.trim()
+          : typeof modelId === 'string' && modelId.trim()
+            ? modelId.trim()
+            : null;
       await ProjectManager.updateProject(projectId, {
         originalSubtitles: String(project.originalSubtitles || sourceText || '').trim(),
         translatedSubtitles: String(result.translatedText || '').trim(),
         status: PROJECT_STATUS.COMPLETED,
+        translationMetadata: {
+          lastModelId: actualModelId,
+          lastProviderModel:
+            typeof result.debug?.provider?.model === 'string' ? String(result.debug.provider.model || '').trim() : null,
+          lastProviderName:
+            typeof result.debug?.provider?.name === 'string' ? String(result.debug.provider.name || '').trim() : null,
+          lastSourceType: assetName ? 'project' : 'transcription',
+          lastSourceLang: sourceLang || null,
+          lastTargetLang: targetLang || null,
+          lastTranslatedAt: new Date().toISOString(),
+        },
       });
 
       if (clientDisconnected || res.writableEnded) {
@@ -147,18 +158,8 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       res.write(`data: ${JSON.stringify({ error: error?.message || 'Translation failed.' })}\n\n`);
       return res.end();
     } finally {
-      if (clientDisconnected && shouldReleaseLocalTranslateRuntime) {
-        try {
-          const LocalModelService = await getLocalModelService();
-          writeAsrLog(`[TR ${requestId}] releasing local translate runtime after disconnect`);
-          await LocalModelService.releaseLocalRuntimes('translate');
-        } catch (releaseErr: any) {
-          writeAsrLog(
-            `[TR ${requestId}] failed to release local translate runtime after disconnect`,
-            releaseErr?.message || releaseErr,
-            'error'
-          );
-        }
+      if (clientDisconnected && modelId && modelId.startsWith('local_translate_')) {
+        writeAsrLog(`[TR ${requestId}] client disconnected; keeping local translate runtime warm`);
       }
     }
   });
@@ -168,6 +169,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       const TranslationService = await getTranslationService();
       const text = typeof req.body?.text === 'string' ? req.body.text : '';
       const targetLang = typeof req.body?.targetLang === 'string' ? req.body.targetLang : 'en';
+      const sourceLang = typeof req.body?.sourceLang === 'string' ? req.body.sourceLang : '';
       const glossary = typeof req.body?.glossary === 'string' ? req.body.glossary : '';
       const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : '';
       const promptTemplateId = typeof req.body?.promptTemplateId === 'string' ? req.body.promptTemplateId : '';
@@ -187,6 +189,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       const result = await TranslationService.translateTextDetailed({
         text,
         targetLang,
+        sourceLang: sourceLang || undefined,
         glossary,
         prompt,
         promptTemplateId,

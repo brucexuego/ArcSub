@@ -12,6 +12,7 @@ import {
 export interface CloudTranslateAdapterRequestOptions {
   text: string;
   targetLang: string;
+  sourceLang?: string;
   glossary?: string;
   prompt?: string;
   promptTemplateId?: string;
@@ -96,6 +97,7 @@ async function executeLlmAdapterRequest(input: {
     providerFamily: input.providerFamily,
     model: input.options.model,
     text: input.options.text,
+    sourceLang: input.options.sourceLang,
     targetLang: input.options.targetLang,
     systemPrompt: input.deps.resolveSystemPrompt(input.options),
     jsonResponse: input.options.jsonResponse,

@@ -15,6 +15,16 @@ export interface Project {
   notes?: string;
   originalSubtitles?: string;
   translatedSubtitles?: string;
+  transcriptionSourceLanguage?: string | null;
+  translationMetadata?: {
+    lastModelId?: string | null;
+    lastProviderModel?: string | null;
+    lastProviderName?: string | null;
+    lastSourceType?: 'transcription' | 'project';
+    lastSourceLang?: string | null;
+    lastTargetLang?: string | null;
+    lastTranslatedAt?: string | null;
+  };
   videoMetadata?: any;
 }
 

@@ -52,6 +52,20 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
   const resolvedProfile = resolveLocalTranslationProfile(input.localModel, input.modelStrategy, qualityMode);
   const familyDefaults = resolvedProfile.qualityModeDefaults;
 
+  if (input.modelStrategy.family === 'translategemma') {
+    return {
+      doSample: familyDefaults.doSample ?? false,
+      temperature: familyDefaults.temperature ?? 0,
+      topP: familyDefaults.topP ?? 1,
+      topK: familyDefaults.topK ?? 1,
+      minP: familyDefaults.minP,
+      repetitionPenalty: familyDefaults.repetitionPenalty,
+      frequencyPenalty: familyDefaults.frequencyPenalty,
+      noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
+      applyChatTemplate: true,
+    };
+  }
+
   if (input.modelStrategy.generationStyle === 'qwen3') {
     const strictLikeMode = input.jsonMode || input.strictMode || qualityMode !== 'plain_probe';
     return {

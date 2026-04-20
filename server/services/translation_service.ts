@@ -43,12 +43,13 @@ import {
   buildLocalJsonRepairPrompt as buildLocalJsonRepairPromptModule,
   buildLocalTranslationPrompt as buildLocalTranslationPromptModule,
 } from './local_llm/prompting.js';
+import { buildTranslateGemmaMessages, inferTranslateGemmaSourceLanguageCode } from './local_llm/translategemma.js';
 import { resolveLocalOpenvinoProfile } from './local_llm/profiles.js';
 import {
   runLocalTranslationOrchestrator,
   type RunLocalTranslationOrchestratorDeps,
 } from './local_llm/orchestrators/local_translation_orchestrator.js';
-import type { LocalTranslateModelStrategy } from './local_llm/types.js';
+import type { LocalTranslateModelStrategy, LocalTranslateStructuredMessage } from './local_llm/types.js';
 import {
   isPlainTranslationProbeMode,
   resolveTranslationQualityMode,
@@ -73,6 +74,7 @@ type TranslateProgressFn = (message: string) => void;
 interface TranslateRequestOptions {
   text: string;
   targetLang: string;
+  sourceLang?: string;
   glossary?: string;
   prompt?: string;
   promptTemplateId?: PromptTemplateId | string;
@@ -98,6 +100,8 @@ interface TranslateProviderResult {
 
 export interface TranslationDebugInfo {
   requested: {
+    sourceLang?: string;
+    sourceLanguageDescriptor?: string | null;
     targetLang: string;
     targetLanguageDescriptor: string;
     lineCount: number;
@@ -113,6 +117,7 @@ export interface TranslationDebugInfo {
   };
   provider: {
     name: TranslateProvider;
+    modelId?: string | null;
     model: string;
     endpoint: string;
     adapterKey?: string | null;
@@ -316,6 +321,12 @@ export class TranslationService {
 
   private static buildTargetLanguageDescriptor(targetLang: string) {
     return buildResolvedTargetLanguageDescriptor(targetLang);
+  }
+
+  private static buildSourceLanguageDescriptor(sourceLang?: string) {
+    const normalized = normalizeLanguageKey(sourceLang);
+    if (!normalized) return null;
+    return buildResolvedTargetLanguageDescriptor(normalized);
   }
 
   private static getLanguageStopwords(targetLang: string) {
@@ -1121,7 +1132,14 @@ export class TranslationService {
     promptTemplateId?: string;
     prompt?: string;
     enableJsonLineRepair?: boolean;
+    modelStrategy?: LocalTranslateModelStrategy | null;
   }): TranslationQualityMode {
+    if (input.modelStrategy?.family === 'translategemma') {
+      if (this.normalizePromptTemplateId(input.promptTemplateId) || String(input.prompt || '').trim()) {
+        return 'template_validated';
+      }
+      return input.enableJsonLineRepair === false ? 'plain_probe' : 'template_validated';
+    }
     return resolveTranslationQualityMode({
       promptTemplateId: this.normalizePromptTemplateId(input.promptTemplateId),
       prompt: input.prompt,
@@ -1210,13 +1228,21 @@ export class TranslationService {
     return map[normalized] || 'EN';
   }
 
-  private static buildSystemPrompt(targetLang: string, glossary?: string, lineSafeMode = false, promptTemplateId?: string) {
+  private static buildSystemPrompt(
+    targetLang: string,
+    glossary?: string,
+    lineSafeMode = false,
+    promptTemplateId?: string,
+    sourceLang?: string
+  ) {
     const effectiveGlossary = this.buildEffectiveGlossary(targetLang, glossary, promptTemplateId);
+    const sourceLanguageDescriptor = this.buildSourceLanguageDescriptor(sourceLang);
     const localized = this.getLocalizedSystemPromptProfile(targetLang);
     if (localized) {
       return [
         localized.baseIntro,
         ...localized.baseRules,
+        ...(sourceLanguageDescriptor ? [`Source language: ${sourceLanguageDescriptor}.`] : []),
         ...this.getTargetLanguageHardeningLines(targetLang, lineSafeMode, false),
         ...(lineSafeMode ? localized.lineSafeRules : []),
         localized.baseReturn,
@@ -1237,6 +1263,7 @@ export class TranslationService {
 
     return [
       `Translate the input into ${this.buildTargetLanguageDescriptor(targetLang)}.`,
+      ...(sourceLanguageDescriptor ? [`The source language is ${sourceLanguageDescriptor}.`] : []),
       ...this.getTargetLanguageInstructionLines(targetLang),
       ...this.getTargetLanguageHardeningLines(targetLang, lineSafeMode, false),
       'Keep each input line aligned with the output line.',
@@ -1251,7 +1278,13 @@ export class TranslationService {
 
   private static resolveSystemPrompt(options: TranslateRequestOptions) {
     if (options.disableSystemPrompt) return '';
-    const basePrompt = this.buildSystemPrompt(options.targetLang, options.glossary, options.lineSafeMode, options.promptTemplateId);
+    const basePrompt = this.buildSystemPrompt(
+      options.targetLang,
+      options.glossary,
+      options.lineSafeMode,
+      options.promptTemplateId,
+      options.sourceLang
+    );
     const custom = String(options.systemPromptOverride || '').trim();
     if (!custom) return basePrompt;
     const localized = this.getLocalizedSystemPromptProfile(options.targetLang);
@@ -1278,16 +1311,19 @@ export class TranslationService {
 
   private static buildCloudContextSystemPrompt(input: {
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     promptTemplateId?: string;
     prompt?: string;
   }) {
     const effectiveGlossary = this.buildEffectiveGlossary(input.targetLang, input.glossary, input.promptTemplateId);
     const customPrompt = String(input.prompt || '').trim();
+    const sourceLanguageDescriptor = this.buildSourceLanguageDescriptor(input.sourceLang);
     const localized = this.getLocalizedSystemPromptProfile(input.targetLang);
     if (localized) {
       return [
         localized.cloudContextIntro,
+        ...(sourceLanguageDescriptor ? [`Source language: ${sourceLanguageDescriptor}.`] : []),
         ...localized.cloudContextRules,
         effectiveGlossary ? `${localized.glossaryLabel} ${effectiveGlossary}` : '',
         ...(customPrompt
@@ -1303,6 +1339,7 @@ export class TranslationService {
 
     return [
       `Translate only the TARGET subtitle lines into ${this.buildTargetLanguageDescriptor(input.targetLang)}.`,
+      ...(sourceLanguageDescriptor ? [`The source language is ${sourceLanguageDescriptor}.`] : []),
       ...this.getTargetLanguageInstructionLines(input.targetLang),
       'Input contains two kinds of lines:',
       '- [TRANSLATE_00001] lines must be translated.',
@@ -1455,6 +1492,7 @@ export class TranslationService {
   private static buildLocalTranslationPrompt(input: {
     text: string;
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     lineSafeMode: boolean;
     modelStrategy: LocalTranslateModelStrategy;
@@ -1479,7 +1517,13 @@ export class TranslationService {
       });
     }
     const localized = this.getLocalizedSystemPromptProfile(input.targetLang);
-    const systemPrompt = this.buildSystemPrompt(input.targetLang, input.glossary, input.lineSafeMode, input.promptTemplateId);
+    const systemPrompt = this.buildSystemPrompt(
+      input.targetLang,
+      input.glossary,
+      input.lineSafeMode,
+      input.promptTemplateId,
+      input.sourceLang
+    );
     return buildLocalTranslationPromptModule({
       text: input.text,
       systemPrompt,
@@ -1495,6 +1539,22 @@ export class TranslationService {
       labels: localized,
       deepseekPromptBuilder: (userText) => this.buildDeepSeekR1DistillQwenPrompt({ userText }),
       deepseekPlainPromptBuilder: (userText) => this.buildDeepSeekR1DistillQwenPlainPrompt({ userText }),
+    });
+  }
+
+  private static buildLocalTranslationMessages(input: {
+    text: string;
+    targetLang: string;
+    sourceLang?: string;
+    modelStrategy: LocalTranslateModelStrategy;
+    promptStyle?: LocalTranslateModelStrategy['promptStyle'];
+  }): LocalTranslateStructuredMessage[] | null {
+    if (input.modelStrategy.family !== 'translategemma') return null;
+    return buildTranslateGemmaMessages({
+      text: input.text,
+      sourceLang: input.sourceLang || inferTranslateGemmaSourceLanguageCode(input.text),
+      targetLang: input.targetLang,
+      promptStyle: input.promptStyle,
     });
   }
 
@@ -1606,6 +1666,155 @@ export class TranslationService {
 
     if (current.length > 0) {
       batches.push(current);
+    }
+
+    return batches;
+  }
+
+  private static async countTranslateGemmaInputTokens(input: {
+    localModel: LocalModelDefinition;
+    modelStrategy: LocalTranslateModelStrategy;
+    sourceText: string;
+    targetLang: string;
+    sourceLang?: string;
+    translationQualityMode?: TranslationQualityMode;
+  }) {
+    const counts = await this.countTranslateGemmaInputTokensBatch({
+      localModel: input.localModel,
+      modelStrategy: input.modelStrategy,
+      sourceTexts: [input.sourceText],
+      targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
+      translationQualityMode: input.translationQualityMode,
+    });
+    return Math.max(0, Math.floor(Number(counts[0]) || 0));
+  }
+
+  private static async countTranslateGemmaInputTokensBatch(input: {
+    localModel: LocalModelDefinition;
+    modelStrategy: LocalTranslateModelStrategy;
+    sourceTexts: string[];
+    targetLang: string;
+    sourceLang?: string;
+    translationQualityMode?: TranslationQualityMode;
+  }) {
+    const modelPath = getLocalModelInstallDir(input.localModel);
+    const profile = resolveLocalTranslationProfile(
+      input.localModel,
+      input.modelStrategy,
+      input.translationQualityMode || 'plain_probe'
+    );
+
+    const entries = input.sourceTexts
+      .map((rawText) => String(rawText || '').trim())
+      .filter(Boolean)
+      .map((sourceText) => {
+        const messages = this.buildLocalTranslationMessages({
+          text: sourceText,
+          targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
+          modelStrategy: input.modelStrategy,
+          promptStyle: profile.effectivePromptStyle,
+        });
+        if (messages && messages.length > 0) {
+          return { messages: messages as unknown as Array<Record<string, unknown>> };
+        }
+
+        const prompt = this.buildLocalTranslationPrompt({
+          text: sourceText,
+          sourceText,
+          targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
+          glossary: '',
+          promptTemplateId: '',
+          lineSafeMode: false,
+          modelStrategy: input.modelStrategy,
+          promptStyle: profile.effectivePromptStyle,
+          strictMode: false,
+          translationQualityMode: input.translationQualityMode,
+          promptOverride: '',
+          disableSystemPrompt: false,
+        });
+        return { prompt };
+      });
+    if (entries.length === 0) return [];
+
+    const counts = await OpenvinoRuntimeManager.countHfInputTokens({
+      modelPath,
+      entries,
+    });
+    return counts.map((value) => Math.max(0, Math.floor(Number(value) || 0)));
+  }
+
+  private static async splitLineSafeUnitsForTranslateGemma(
+    units: LineSafeUnit[],
+    input: {
+      localModel: LocalModelDefinition;
+      modelStrategy: LocalTranslateModelStrategy;
+      targetLang: string;
+      sourceLang?: string;
+      translationQualityMode?: TranslationQualityMode;
+    }
+  ) {
+    if (units.length <= 1) return units.length > 0 ? [units] : [];
+
+    const qualityMode = input.translationQualityMode || 'plain_probe';
+    const batchingProfile = resolveLocalTranslationProfile(input.localModel, input.modelStrategy, qualityMode).lineSafeBatching;
+    const maxLines = Math.round(
+      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_SIZE', batchingProfile?.maxLines ?? 24, 2, 200)
+    );
+    const charBudget = Math.round(
+      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_CHAR_BUDGET', batchingProfile?.charBudget ?? 1400, 120, 40000)
+    );
+    const tokenBudget = Math.round(
+      this.getEnvNumber('TRANSLATEGEMMA_INPUT_TOKEN_BUDGET', batchingProfile?.tokenBudget ?? 960, 128, 4096)
+    );
+
+    const batches: LineSafeUnit[][] = [];
+    let currentStart = 0;
+    while (currentStart < units.length) {
+      const candidateSourceTexts: string[] = [];
+      const candidateLineCounts: number[] = [];
+      const candidateCharCounts: number[] = [];
+
+      let mergedText = '';
+      let mergedChars = 0;
+      for (let end = currentStart; end < units.length; end += 1) {
+        const normalized = this.stripStructuredPrefix(units[end].content).trim();
+        mergedText = mergedText ? `${mergedText}\n${normalized}` : normalized;
+        mergedChars += Math.max(1, normalized.length) + 1;
+        candidateSourceTexts.push(mergedText);
+        candidateLineCounts.push(end - currentStart + 1);
+        candidateCharCounts.push(mergedChars);
+      }
+
+      const candidateTokenCounts = await this.countTranslateGemmaInputTokensBatch({
+        localModel: input.localModel,
+        modelStrategy: input.modelStrategy,
+        sourceTexts: candidateSourceTexts,
+        targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
+        translationQualityMode: qualityMode,
+      });
+
+      let bestRelativeEnd = -1;
+      for (let index = 0; index < candidateSourceTexts.length; index += 1) {
+        const lineCount = candidateLineCounts[index];
+        const charCount = candidateCharCounts[index];
+        const tokenCount = candidateTokenCounts[index] ?? Number.POSITIVE_INFINITY;
+        if (lineCount > maxLines || charCount > charBudget || tokenCount > tokenBudget) {
+          break;
+        }
+        bestRelativeEnd = index;
+      }
+
+      if (bestRelativeEnd < 0) {
+        bestRelativeEnd = 0;
+      }
+
+      const absoluteEnd = currentStart + bestRelativeEnd;
+      batches.push(units.slice(currentStart, absoluteEnd + 1));
+      currentStart = absoluteEnd + 1;
     }
 
     return batches;
@@ -2053,6 +2262,7 @@ export class TranslationService {
       buildLineSafeInput: this.buildLineSafeInput.bind(this),
       splitLineSafeUnits: this.splitLineSafeUnits.bind(this),
       splitLineSafeUnitsForLocalTranslation: this.splitLineSafeUnitsForLocalTranslation.bind(this),
+      splitLineSafeUnitsForTranslateGemma: this.splitLineSafeUnitsForTranslateGemma.bind(this),
       stripStructuredPrefix: this.stripStructuredPrefix.bind(this),
       stripInjectedSpeakerContext: this.stripInjectedSpeakerContext.bind(this),
       parseLocalTranslatedText: this.parseLocalTranslatedText.bind(this),
@@ -2065,6 +2275,7 @@ export class TranslationService {
       buildTargetLanguageDescriptor: this.buildTargetLanguageDescriptor.bind(this),
       estimateLocalMaxNewTokens: this.estimateLocalMaxNewTokens.bind(this),
       buildLocalTranslationPrompt: this.buildLocalTranslationPrompt.bind(this),
+      buildLocalTranslationMessages: this.buildLocalTranslationMessages.bind(this),
       buildLocalGenerationOptions: this.buildLocalGenerationOptions.bind(this),
       repairLineAlignmentWithLocalJsonMap: this.repairLineAlignmentWithLocalJsonMap.bind(this),
       isLikelyPassThroughTranslation: this.isLikelyPassThroughTranslation.bind(this),
@@ -2077,6 +2288,7 @@ export class TranslationService {
     input: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
@@ -2096,6 +2308,7 @@ export class TranslationService {
       promptTemplateId: normalizedPromptTemplateId,
       prompt: input.prompt,
       enableJsonLineRepair,
+      modelStrategy,
     });
     const localTranslationProfile = resolveLocalTranslationProfile(localModel, modelStrategy, translationQualityMode);
     const residualRetryLimit = Math.round(this.getEnvNumber('TRANSLATE_LOCAL_RESIDUAL_RETRY_LIMIT', 8, 0, 200));
@@ -2576,6 +2789,7 @@ export class TranslationService {
     units: LineSafeUnit[],
     options: {
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       promptTemplateId?: string;
       key?: string;
@@ -2629,6 +2843,7 @@ export class TranslationService {
         const result = await requestWithRetry({
           text: this.stripStructuredPrefix(unit.content),
           targetLang: options.targetLang,
+          sourceLang: options.sourceLang,
           glossary: options.glossary,
           promptTemplateId: options.promptTemplateId,
           key: options.key,
@@ -2675,6 +2890,7 @@ export class TranslationService {
         result = await requestWithRetry({
           text: payload,
           targetLang: options.targetLang,
+          sourceLang: options.sourceLang,
           glossary: options.glossary,
           promptTemplateId: options.promptTemplateId,
           key: options.key,
@@ -2846,6 +3062,7 @@ export class TranslationService {
     input: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
@@ -2864,6 +3081,7 @@ export class TranslationService {
     return {
       text: input.text,
       targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
       glossary: input.glossary,
       prompt: input.prompt,
       promptTemplateId: input.promptTemplateId,
@@ -2908,7 +3126,9 @@ export class TranslationService {
   }
 
   private static buildCloudTranslationDebugInfo(input: {
+    configuredModelId?: string;
     sourceText: string;
+    sourceLang?: string;
     targetLang: string;
     glossary?: string;
     prompt?: string;
@@ -2928,6 +3148,8 @@ export class TranslationService {
     });
     return {
       requested: {
+        sourceLang: input.sourceLang ? String(input.sourceLang) : undefined,
+        sourceLanguageDescriptor: this.buildSourceLanguageDescriptor(input.sourceLang),
         targetLang: input.targetLang,
         targetLanguageDescriptor: this.buildTargetLanguageDescriptor(input.targetLang),
         lineCount: input.orchestrated.sourceLineCount,
@@ -2943,6 +3165,7 @@ export class TranslationService {
       },
       provider: {
         name: input.resolvedProvider.provider,
+        modelId: input.configuredModelId ? String(input.configuredModelId) : null,
         model: input.resolvedProvider.effectiveModel,
         endpoint: redactUrlSecrets(input.orchestrated.endpointUsed),
         adapterKey: input.resolvedProvider.adapterKey,
@@ -2977,6 +3200,7 @@ export class TranslationService {
     input: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
@@ -3104,9 +3328,11 @@ export class TranslationService {
     input: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
+      modelId?: string;
       enableJsonLineRepair: boolean;
       isConnectionTest?: boolean;
       signal?: AbortSignal;
@@ -3135,7 +3361,9 @@ export class TranslationService {
     return {
       translatedText: output,
       debug: this.buildCloudTranslationDebugInfo({
+        configuredModelId: input.modelId,
         sourceText: input.text,
+        sourceLang: input.sourceLang,
         targetLang: input.targetLang,
         glossary: input.glossary,
         prompt: input.prompt,
@@ -3163,6 +3391,7 @@ export class TranslationService {
     input: {
       text: string;
       targetLang: string;
+      sourceLang?: string;
       glossary?: string;
       prompt?: string;
       promptTemplateId?: string;
@@ -3186,6 +3415,7 @@ export class TranslationService {
         {
           text,
           targetLang,
+          sourceLang: input.sourceLang,
           glossary,
           prompt,
           promptTemplateId,
@@ -3212,6 +3442,7 @@ export class TranslationService {
       {
         text,
         targetLang,
+        sourceLang: input.sourceLang,
         glossary,
         prompt,
         promptTemplateId,
@@ -3230,6 +3461,7 @@ export class TranslationService {
   static async translateText(input: {
     text: string;
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     prompt?: string;
     promptTemplateId?: string;

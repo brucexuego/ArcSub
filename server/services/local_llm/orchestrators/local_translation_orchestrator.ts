@@ -35,6 +35,7 @@ export interface RunLocalTranslationOrchestratorInput {
   input: {
     text: string;
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     effectiveGlossary?: string | null;
     prompt?: string;
@@ -65,6 +66,16 @@ export interface RunLocalTranslationOrchestratorDeps {
       translationQualityMode?: TranslationQualityMode;
     }
   ): LineSafeUnit[][];
+  splitLineSafeUnitsForTranslateGemma(
+    units: LineSafeUnit[],
+    input: {
+      localModel: LocalModelDefinition;
+      modelStrategy: LocalTranslateModelStrategy;
+      targetLang: string;
+      sourceLang?: string;
+      translationQualityMode?: TranslationQualityMode;
+    }
+  ): Promise<LineSafeUnit[][]>;
   stripStructuredPrefix(line: string): string;
   stripInjectedSpeakerContext(line: string): string;
   parseLocalTranslatedText(raw: string, lineSafeMode: boolean): string;
@@ -94,6 +105,7 @@ export interface RunLocalTranslationOrchestratorDeps {
   buildLocalTranslationPrompt(input: {
     text: string;
     targetLang: string;
+    sourceLang?: string;
     glossary?: string;
     lineSafeMode: boolean;
     modelStrategy: LocalTranslateModelStrategy;
@@ -105,6 +117,13 @@ export interface RunLocalTranslationOrchestratorDeps {
     promptTemplateId?: string;
     sourceText?: string;
   }): string;
+  buildLocalTranslationMessages(input: {
+    text: string;
+    targetLang: string;
+    sourceLang?: string;
+    modelStrategy: LocalTranslateModelStrategy;
+    promptStyle?: LocalTranslateModelStrategy['promptStyle'];
+  }): Array<Record<string, unknown>> | null;
   buildLocalGenerationOptions(input: {
     localModel?: LocalModelDefinition;
     modelStrategy: LocalTranslateModelStrategy;
@@ -151,6 +170,12 @@ export async function runLocalTranslationOrchestrator(
   const sourceLineCount = sourceText.split('\n').length;
   const lineSafeUnits = deps.buildLineSafeUnits(sourceText);
   const useLineSafeMode = sourceLineCount > 1;
+  const normalizedTargetLang = String(input.targetLang || '').trim().toLowerCase();
+  const forceZhTwNormalization =
+    normalizedTargetLang === 'zh-tw' ||
+    normalizedTargetLang === 'zh-hant' ||
+    normalizedTargetLang === 'zh-hk' ||
+    normalizedTargetLang === 'zh-mo';
   const sourceHasStructuredPrefixes = lineSafeUnits.some((unit) => Boolean(unit.prefix));
   const sourceSpeakerTaggedLineCount = lineSafeUnits.filter((unit) => Boolean(unit.speakerTag)).length;
   const customPrompt = String(input.prompt || '').trim();
@@ -175,6 +200,7 @@ export async function runLocalTranslationOrchestrator(
       text: providerInputText,
       sourceText: providerInputText,
       targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
       glossary: input.glossary,
       promptTemplateId: input.promptTemplateId,
       lineSafeMode,
@@ -189,6 +215,13 @@ export async function runLocalTranslationOrchestrator(
       modelId: localModel.id,
       modelPath: getLocalModelInstallDir(localModel),
       prompt,
+      messages: deps.buildLocalTranslationMessages({
+        text: providerInputText,
+        targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
+        modelStrategy,
+        promptStyle: localTranslationProfile.effectivePromptStyle,
+      }),
       maxNewTokens,
       generation: deps.buildLocalGenerationOptions({
         localModel,
@@ -232,6 +265,7 @@ export async function runLocalTranslationOrchestrator(
         text: sourceLine,
         sourceText: sourceLine,
         targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
         glossary: input.glossary,
         promptTemplateId: input.promptTemplateId,
         lineSafeMode: false,
@@ -246,6 +280,13 @@ export async function runLocalTranslationOrchestrator(
         modelId: localModel.id,
         modelPath: getLocalModelInstallDir(localModel),
         prompt,
+        messages: deps.buildLocalTranslationMessages({
+          text: sourceLine,
+          targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
+          modelStrategy,
+          promptStyle: localTranslationProfile.effectivePromptStyle,
+        }),
         maxNewTokens: deps.estimateLocalMaxNewTokens({
           text: sourceLine,
           lineCount: 1,
@@ -276,6 +317,93 @@ export async function runLocalTranslationOrchestrator(
     }
 
     return null;
+  };
+
+  const translateTranslateGemmaUnitsIndividually = async (units: LineSafeUnit[]) => {
+    const translatedRows: string[] = [];
+
+    for (const unit of units) {
+      deps.throwIfAborted(input.signal);
+      const sourceLine = deps.stripStructuredPrefix(unit.content);
+      if (!sourceLine) {
+        translatedRows.push(unit.prefix ? unit.prefix.trimEnd() : '');
+        continue;
+      }
+
+      const strictCandidate = await translateSingleLocalUnit([unit]);
+      if (strictCandidate !== null) {
+        addWarning('local_single_line_retry_applied');
+        translatedRows.push(strictCandidate);
+        continue;
+      }
+
+      const raw = await runLocalTranslation(sourceLine, false, false);
+      const cleaned = deps.normalizeTargetLanguageOutput(
+        deps.stripStructuredPrefix(deps.stripInjectedSpeakerContext(raw)),
+        input.targetLang
+      );
+      const fallbackIssues = deps.getTranslationQualityIssues(sourceLine, cleaned, input.targetLang);
+      deps.addQualityIssueWarnings(fallbackIssues, addWarning);
+      translatedRows.push(unit.prefix ? `${unit.prefix}${cleaned}` : cleaned);
+    }
+
+    return translatedRows.join('\n');
+  };
+
+  const parseTranslateGemmaSubtitleLines = (rawText: string) => {
+    const rows = String(rawText || '')
+      .replace(/\r/g, '')
+      .split('\n')
+      .map((line) => deps.stripInjectedSpeakerContext(String(line || '').trim()));
+
+    while (rows.length > 0 && !rows[0]) rows.shift();
+    while (rows.length > 0 && !rows[rows.length - 1]) rows.pop();
+
+    return rows;
+  };
+
+  const reattachTranslateGemmaSubtitleLines = (units: LineSafeUnit[], translatedLines: string[]) =>
+    units
+      .map((unit, index) => {
+        const translated = String(translatedLines[index] || '').trim();
+        return unit.prefix ? `${unit.prefix}${translated}` : translated;
+      })
+      .join('\n');
+
+  const hasTranslateGemmaCoverageLoss = (units: LineSafeUnit[], translatedLines: string[]) => {
+    if (translatedLines.length !== units.length) return true;
+
+    return units.some((unit, index) => {
+      const sourceLine = deps.stripStructuredPrefix(unit.content).trim();
+      const translatedLine = String(translatedLines[index] || '').trim();
+      if (!sourceLine) return translatedLine.length > 0;
+      return !translatedLine;
+    });
+  };
+
+  const translateTranslateGemmaSubtitleBatch = async (units: LineSafeUnit[]): Promise<string> => {
+    if (units.length <= 0) return '';
+    if (units.length === 1) {
+      return await translateTranslateGemmaUnitsIndividually(units);
+    }
+
+    const sourceLines = units.map((unit) => deps.stripStructuredPrefix(unit.content).trim());
+    const sourceChunkText = sourceLines.join('\n');
+    const normalized = deps.normalizeTargetLanguageOutput(
+      await runLocalTranslation(sourceChunkText, false, false, ''),
+      input.targetLang
+    );
+    const translatedLines = parseTranslateGemmaSubtitleLines(normalized);
+
+    if (!hasTranslateGemmaCoverageLoss(units, translatedLines)) {
+      return reattachTranslateGemmaSubtitleLines(units, translatedLines);
+    }
+
+    addWarning('translategemma_recursive_chunk_split_applied');
+    const [leftUnits, rightUnits] = deps.splitLineSafeUnits(units);
+    const leftText = leftUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(leftUnits) : '';
+    const rightText = rightUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(rightUnits) : '';
+    return [leftText, rightText].filter(Boolean).join('\n');
   };
 
   const processLineSafeChunk = async (units: LineSafeUnit[]): Promise<string> => {
@@ -441,6 +569,7 @@ export async function runLocalTranslationOrchestrator(
         text: [prev ? `PREV: ${prev}` : '', `CURRENT: ${current}`, next ? `NEXT: ${next}` : ''].filter(Boolean).join('\n'),
         sourceText: current,
         targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
         glossary: input.glossary,
         promptTemplateId: input.promptTemplateId,
         lineSafeMode: false,
@@ -468,6 +597,13 @@ export async function runLocalTranslationOrchestrator(
           modelId: localModel.id,
           modelPath: getLocalModelInstallDir(localModel),
           prompt,
+          messages: deps.buildLocalTranslationMessages({
+            text: current,
+            targetLang: input.targetLang,
+            sourceLang: input.sourceLang,
+            modelStrategy,
+            promptStyle: localTranslationProfile.effectivePromptStyle,
+          }),
           maxNewTokens: deps.estimateLocalMaxNewTokens({
             text: retryContext,
             lineCount: 3,
@@ -513,7 +649,37 @@ export async function runLocalTranslationOrchestrator(
   onProgress?.('Calling translation provider (openvino-local)...');
   let output = '';
 
-  if (localPlainProbeMode) {
+  if (modelStrategy.family === 'translategemma') {
+    if (useLineSafeMode) {
+      const localBatches = await deps.splitLineSafeUnitsForTranslateGemma(lineSafeUnits, {
+        localModel,
+        modelStrategy,
+        targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
+        translationQualityMode,
+      });
+      if (localBatches.length > 1) {
+        addWarning('translategemma_batch_translation_applied');
+      }
+      const merged: string[] = [];
+      for (let batchIndex = 0; batchIndex < localBatches.length; batchIndex += 1) {
+        onProgress?.(`Translating TranslateGemma subtitle batch (${batchIndex + 1}/${localBatches.length})...`);
+        const chunk = await translateTranslateGemmaSubtitleBatch(localBatches[batchIndex]);
+        merged.push(...chunk.split('\n'));
+      }
+      output = merged.join('\n');
+    } else {
+      output = deps.normalizeTargetLanguageOutput(await runLocalTranslation(sourceText, false, false, ''), input.targetLang);
+      const wholeRequestIssues = deps
+        .getTranslationQualityIssues(sourceText, output, input.targetLang)
+        .filter((code) => code === 'empty_output' || code === 'target_lang_mismatch' || code === 'pass_through');
+      deps.addQualityIssueWarnings(wholeRequestIssues, addWarning);
+      if (wholeRequestIssues.length > 0) {
+        addWarning('translategemma_single_line_retry_applied');
+        output = await translateTranslateGemmaUnitsIndividually(lineSafeUnits);
+      }
+    }
+  } else if (localPlainProbeMode) {
     output = await runLocalTranslation(sourceText, false, false);
   } else if (useLineSafeMode) {
     const localBatches = deps.splitLineSafeUnitsForLocalTranslation(lineSafeUnits, {
@@ -561,10 +727,10 @@ export async function runLocalTranslationOrchestrator(
     }
   }
 
-  if (!localPlainProbeMode) {
+  if (!localPlainProbeMode || forceZhTwNormalization) {
     output = deps.normalizeTargetLanguageOutput(output, input.targetLang);
   }
-  if (useLineSafeMode && !localPlainProbeMode) {
+  if (useLineSafeMode && !localPlainProbeMode && modelStrategy.family !== 'translategemma') {
     output = await repairResidualLocalLines(output);
   }
 
@@ -574,6 +740,8 @@ export async function runLocalTranslationOrchestrator(
     translatedText: output,
     debug: {
       requested: {
+        sourceLang: input.sourceLang ? String(input.sourceLang) : undefined,
+        sourceLanguageDescriptor: input.sourceLang ? deps.buildTargetLanguageDescriptor(input.sourceLang) : null,
         targetLang: input.targetLang,
         targetLanguageDescriptor: deps.buildTargetLanguageDescriptor(input.targetLang),
         lineCount: sourceLineCount,
@@ -589,6 +757,7 @@ export async function runLocalTranslationOrchestrator(
       },
       provider: {
         name: 'openvino-local',
+        modelId: localModel.id,
         model: localModel.repoId,
         endpoint: 'local://openvino/translate',
         adapterKey: null,

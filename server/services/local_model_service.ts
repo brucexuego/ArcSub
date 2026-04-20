@@ -774,6 +774,31 @@ export class LocalModelService {
     return result;
   }
 
+  static async preloadLocalRuntime(target: 'asr' | 'translate', modelId: string) {
+    const settings = await SettingsManager.getSettings({ mask: false });
+    const localModel = await this.resolveLocalModelForRequest(target, modelId, settings);
+    if (!localModel) {
+      throw new Error('Only installed local models can be preloaded.');
+    }
+
+    if (target === 'asr') {
+      throw new Error('ASR preload is not implemented for this route.');
+    }
+
+    const modelPath = getLocalModelInstallDir(localModel);
+    const result = await OpenvinoRuntimeManager.preloadTranslateRuntime({
+      modelId: localModel.id,
+      modelPath,
+    });
+
+    return {
+      success: true,
+      target,
+      modelId: localModel.id,
+      runtimeDebug: result.runtimeDebug,
+    };
+  }
+
   static listModelsByType(type: LocalModelType) {
     return BUILTIN_LOCAL_MODELS.filter((model) => model.type === type);
   }

@@ -122,6 +122,17 @@ export function inferLocalTranslateModelStrategy(localModel: LocalModelDefinitio
       qwen3Optimized: false,
     };
   } else if (
+    combined.includes('translategemma') ||
+    (signature.includes('source_lang_code') && signature.includes('target_lang_code'))
+  ) {
+    strategy = {
+      family: 'translategemma',
+      promptStyle: 'translategemma_google',
+      generationStyle: 'generic',
+      qwenOptimized: false,
+      qwen3Optimized: false,
+    };
+  } else if (
     combined.includes('gemma-3') ||
     combined.includes('gemma 3') ||
     signature.includes('<start_of_turn>user') ||

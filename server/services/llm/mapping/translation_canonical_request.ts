@@ -9,6 +9,7 @@ export interface BuildCanonicalTranslationRequestInput {
   providerFamily?: string;
   model?: string;
   text: string;
+  sourceLang?: string;
   targetLang: string;
   systemPrompt?: string;
   jsonResponse?: boolean;
@@ -53,6 +54,7 @@ export function buildCanonicalTranslationRequest(input: BuildCanonicalTranslatio
     },
     metadata: {
       targetLang: String(input.targetLang || '').trim(),
+      sourceLang: String(input.sourceLang || '').trim(),
       promptTemplateId: String(input.promptTemplateId || '').trim(),
       hasGlossary: input.glossary && input.glossary.trim() ? '1' : '0',
       connectionTest: input.isConnectionTest ? '1' : '0',

@@ -386,6 +386,20 @@ function rebuildTranslationWithSourceTimecodes(sourceText: string, translatedTex
   return rebuilt.join('\n').trim();
 }
 
+function normalizeTranscriptionSourceLanguage(language?: string | null) {
+  const normalized = String(language || '').trim();
+  if (!normalized) return '';
+  if (normalized.toLowerCase() === 'auto') return '';
+  return normalized;
+}
+
+function isTranslateGemmaModel(model?: ApiConfig | null) {
+  const haystack = [String(model?.id || ''), String(model?.name || ''), String(model?.model || '')]
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes('translategemma');
+}
+
 export default function TextTranslation({ project, onUpdateProject, onNext, onTaskLockChange }: TextTranslationProps) {
   const { t, language } = useLanguage();
   const diarizationCopy = React.useMemo(() => getDiarizationSummaryCopy(language), [language]);
@@ -444,12 +458,25 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const [isSavingTranslatedOutput, setIsSavingTranslatedOutput] = React.useState(false);
   const sourceFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const translateEventSourceRef = React.useRef<EventSource | null>(null);
+  const preloadSeqRef = React.useRef(0);
   const previewAudioRef = React.useRef<HTMLAudioElement | null>(null);
   const translationScrollRef = React.useRef<HTMLDivElement | null>(null);
   const translationLineRefs = React.useRef<Record<number, HTMLDivElement | null>>({});
   const effectiveTargetLanguage = React.useMemo(
     () => (targetLang === 'other' ? String(customTargetLanguage || '').trim() : targetLang),
     [targetLang, customTargetLanguage]
+  );
+  const selectedTranslateModel = React.useMemo(
+    () => translateModels.find((model) => model.id === selectedModelId) || null,
+    [translateModels, selectedModelId]
+  );
+  const transcriptionSourceLanguage = React.useMemo(
+    () => normalizeTranscriptionSourceLanguage(project?.transcriptionSourceLanguage),
+    [project?.transcriptionSourceLanguage]
+  );
+  const effectiveSourceLanguage = React.useMemo(
+    () => (sourceType === 'transcription' ? transcriptionSourceLanguage : ''),
+    [sourceType, transcriptionSourceLanguage]
   );
 
   React.useEffect(() => {
@@ -542,6 +569,54 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       void releaseLocalRuntime();
     };
   }, [releaseLocalRuntime, onTaskLockChange]);
+
+  React.useEffect(() => {
+    const currentModel = selectedTranslateModel;
+    const isLocalModel = Boolean(currentModel?.id && currentModel?.isLocal && currentModel?.provider === 'local-openvino');
+    const loadSeq = ++preloadSeqRef.current;
+    let cancelled = false;
+
+    if (isTranslating) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!isLocalModel) {
+      setModelLoadStatus('idle');
+      setModelLoadError(null);
+      void releaseLocalRuntime();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setModelLoadStatus('loading');
+    setModelLoadError(null);
+
+    void postJson(
+      '/api/local-models/preload',
+      {
+        target: 'translate',
+        modelId: currentModel!.id,
+      },
+      { timeoutMs: 240000 }
+    )
+      .then(() => {
+        if (cancelled || preloadSeqRef.current !== loadSeq) return;
+        setModelLoadStatus('ok');
+        setModelLoadError(null);
+      })
+      .catch((error) => {
+        if (cancelled || preloadSeqRef.current !== loadSeq) return;
+        setModelLoadStatus('failed');
+        setModelLoadError(String((error as any)?.message || error || t('translation.errorFailed')));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTranslateModel, isTranslating, releaseLocalRuntime, t]);
 
   const handleNextStep = async () => {
     await releaseLocalRuntime();
@@ -1139,12 +1214,11 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     translateEventSourceRef.current = null;
     setIsTranslating(false);
     setTranslateMsg(t('translation.translationStopped'));
-    setModelLoadStatus('idle');
+    setModelLoadStatus(selectedTranslateModel?.isLocal ? 'ok' : 'idle');
     setModelLoadError(null);
     setIsPersistingResult(false);
     onTaskLockChange?.(false);
-    void releaseLocalRuntime();
-  }, [onTaskLockChange, releaseLocalRuntime, t]);
+  }, [onTaskLockChange, selectedTranslateModel, t]);
 
   const handleSelectPromptTemplate = React.useCallback((templateId: PromptTemplateId) => {
     setSelectedPromptTemplateId(templateId);
@@ -1198,6 +1272,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     const params = new URLSearchParams();
     params.set('targetLang', effectiveTargetLanguage);
     if (selectedModelId) params.set('modelId', selectedModelId);
+    if (isTranslateGemmaModel(selectedTranslateModel) && effectiveSourceLanguage) {
+      params.set('sourceLang', effectiveSourceLanguage);
+    }
     if (selectedPromptTemplateId) params.set('promptTemplateId', selectedPromptTemplateId);
     if (sourceType === 'project' && selectedSourceAssetName) {
       params.set('assetName', selectedSourceAssetName);
@@ -1237,7 +1314,6 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         setTranslateMsg(null);
         translateEventSourceRef.current = null;
         onTaskLockChange?.(false);
-        void releaseLocalRuntime();
         eventSource.close();
         return;
       }
@@ -1310,7 +1386,6 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       setTranslateMsg(null);
       translateEventSourceRef.current = null;
       onTaskLockChange?.(false);
-      void releaseLocalRuntime();
       eventSource.close();
     };
   };
