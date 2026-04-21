@@ -1781,7 +1781,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         key: 'quality',
         title: t('monitor.quality'),
         fields: [
-          { label: t('translation.monitorStrictRetrySucceeded'), value: translationDebug.quality.strictRetryTriggered ? t('translation.monitorYes') : t('translation.monitorNo') },
+          {
+            label: t('translation.monitorStrictRetrySucceeded'),
+            value:
+              typeof translationDebug.applied?.strictRetrySucceeded === 'boolean'
+                ? (translationDebug.applied.strictRetrySucceeded ? t('translation.monitorYes') : t('translation.monitorNo'))
+                : t('translation.monitorNo'),
+          },
           { label: t('translation.qualityTargetLanguageMatch'), value: translationDebug.quality.targetLanguageMatch ? t('translation.monitorYes') : t('translation.monitorNo') },
           { label: t('translation.qualityLineCountMatch'), value: translationDebug.quality.lineCountMatch ? t('translation.monitorYes') : t('translation.monitorNo') },
           { label: t('translation.qualityPassThroughRisk'), value: localizeQualityRisk(translationDebug.quality.passThroughRisk) },
