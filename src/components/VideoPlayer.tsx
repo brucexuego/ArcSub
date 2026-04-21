@@ -1021,8 +1021,12 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
 
     art.on('ready', () => {
       if (playerContainerRef.current) {
-        (art.fullscreen as any).target = playerContainerRef.current;
-        (art.fullscreenWeb as any).target = playerContainerRef.current;
+        if (art.fullscreen && typeof art.fullscreen === 'object') {
+          (art.fullscreen as any).target = playerContainerRef.current;
+        }
+        if (art.fullscreenWeb && typeof art.fullscreenWeb === 'object') {
+          (art.fullscreenWeb as any).target = playerContainerRef.current;
+        }
       }
       if (lastPlaybackTimeRef.current > 0) {
         art.currentTime = lastPlaybackTimeRef.current;
@@ -1684,9 +1688,6 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
             </div>
 
             <div className="p-6 border-t border-white/5 bg-[#13151A] flex justify-end gap-4">
-              {subtitleError && (
-                <div className="mr-auto text-xs text-error bg-error/10 border border-error/20 rounded-lg px-3 py-2">{subtitleError}</div>
-              )}
               <button
                 onClick={() => setShowSubtitleModal(false)}
                 className="px-6 py-3 text-sm font-bold text-outline transition-colors hover:bg-white/8 hover:text-white rounded-lg"

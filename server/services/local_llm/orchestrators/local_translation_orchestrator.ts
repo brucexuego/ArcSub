@@ -4,6 +4,7 @@ import type { TranslationDebugInfo, TranslationResult } from '../../translation_
 import type { LocalOpenvinoResolvedProfile, LocalTranslateModelStrategy } from '../types.js';
 import type { LocalTranslationResolvedProfile } from '../model_profiles.js';
 import type { TranslationQualityMode } from '../../llm/orchestrators/translation_quality_policy.js';
+import type { RunIssue } from '../../../../shared/run_monitor.js';
 
 type TranslateProgressFn = (message: string) => void;
 
@@ -29,6 +30,96 @@ interface TranslationQualityAssessmentContext {
   expectedLineCount?: number;
   requireMarkers?: boolean;
   sourceProfile?: unknown;
+}
+
+function getPassThroughRisk(warnings: string[]) {
+  if (warnings.includes('quality_issue_pass_through')) return 'high' as const;
+  if (warnings.includes('quality_retry_triggered')) return 'medium' as const;
+  return 'low' as const;
+}
+
+function getRepetitionRisk(warnings: string[]) {
+  if (warnings.includes('quality_issue_repetition_loop') || warnings.includes('quality_issue_adjacent_duplicate')) {
+    return 'high' as const;
+  }
+  return 'low' as const;
+}
+
+function getMarkerPreservation(sourceHasStructuredPrefixes: boolean, warnings: string[]) {
+  if (!sourceHasStructuredPrefixes) return undefined;
+  return warnings.includes('quality_issue_marker_loss') ? ('lost' as const) : ('ok' as const);
+}
+
+function buildTranslationWarningIssues(warnings: string[]): RunIssue[] {
+  const qualityInfoCodes = new Set([
+    'strict_retry_applied',
+    'local_strict_retry_applied',
+    'local_batch_translation_applied',
+    'local_recursive_chunk_split_applied',
+    'local_single_line_retry_applied',
+    'translategemma_batch_translation_applied',
+    'translategemma_recursive_chunk_split_applied',
+    'translategemma_single_line_retry_applied',
+    'residual_line_retry_applied',
+    'line_safe_alignment_applied',
+    'line_index_rebind_applied',
+    'line_json_map_repair_applied',
+    'line_json_map_pre_split_applied',
+    'line_json_map_policy_split',
+  ]);
+  const qualityWarningCodes = new Set([
+    'quality_retry_triggered',
+    'post_repair_quality_retry_triggered',
+    'residual_line_retry_triggered',
+    'line_json_map_partial_fallback',
+    'line_json_map_policy_single_line_fallback',
+    'line_json_map_policy_source_fallback',
+    'line_json_map_repair_disabled',
+    'line_alignment_repair_failed',
+    'local_repetition_loop_detected',
+    'cloud_context_parse_failed',
+    'cloud_context_chunk_split',
+    'cloud_context_split_depth_exhausted',
+    'cloud_context_single_line_fallback',
+    'quality_issue_target_lang_mismatch',
+    'quality_issue_pass_through',
+    'quality_issue_empty_output',
+    'quality_issue_line_count_loss',
+    'quality_issue_marker_loss',
+    'quality_issue_repetition_loop',
+    'quality_issue_adjacent_duplicate',
+    'quality_issue_zh_tw_naturalization_needed',
+  ]);
+  const providerInfoCodes = new Set(['transient_retry_applied']);
+  const providerWarningCodes = new Set(['provider_fallback_applied']);
+
+  return warnings.map((code) => {
+    if (qualityInfoCodes.has(code)) {
+      return { code, severity: 'info', area: 'quality' } satisfies RunIssue;
+    }
+    if (qualityWarningCodes.has(code)) {
+      return { code, severity: 'warning', area: 'quality' } satisfies RunIssue;
+    }
+    if (providerInfoCodes.has(code)) {
+      return { code, severity: 'info', area: 'provider' } satisfies RunIssue;
+    }
+    if (providerWarningCodes.has(code)) {
+      return { code, severity: 'warning', area: 'provider' } satisfies RunIssue;
+    }
+    switch (code) {
+      case 'quality_issue_target_lang_mismatch':
+      case 'quality_issue_pass_through':
+      case 'quality_issue_empty_output':
+      case 'quality_issue_line_count_loss':
+      case 'quality_issue_marker_loss':
+      case 'quality_issue_repetition_loop':
+      case 'quality_issue_adjacent_duplicate':
+      case 'quality_issue_zh_tw_naturalization_needed':
+        return { code, severity: 'warning', area: 'quality' } satisfies RunIssue;
+      default:
+        return { code, severity: 'warning', area: 'provider' } satisfies RunIssue;
+    }
+  });
 }
 
 export interface RunLocalTranslationOrchestratorInput {
@@ -154,6 +245,7 @@ export async function runLocalTranslationOrchestrator(
   deps: RunLocalTranslationOrchestratorDeps,
   onProgress?: TranslateProgressFn
 ): Promise<TranslationResult> {
+  const startedAt = Date.now();
   const {
     input,
     localModel,
@@ -736,6 +828,12 @@ export async function runLocalTranslationOrchestrator(
 
   onProgress?.('Translation completed.');
 
+  const runtimeDebug = deps.getTranslateRuntimeDebug(localModel.id);
+  const elapsedMs = Date.now() - startedAt;
+  const errors = {
+    request: null,
+  };
+
   return {
     translatedText: output,
     debug: {
@@ -764,7 +862,7 @@ export async function runLocalTranslationOrchestrator(
         profileId: localProfile.profileId,
         profileFamily: localProfile.profileFamily,
       },
-      runtime: deps.getTranslateRuntimeDebug(localModel.id),
+      runtime: runtimeDebug,
       applied: {
         retryCount: 0,
         fallback: false,
@@ -781,13 +879,44 @@ export async function runLocalTranslationOrchestrator(
         localBaselineTaskFamily: localProfile.baseline.taskFamily,
         localFallbackBaseline: localProfile.usedFallbackBaseline,
       },
+      quality: {
+        lineCountMatch: sourceLineCount <= 1 ? true : output.split('\n').length >= sourceLineCount,
+        targetLanguageMatch: !warnings.includes('quality_issue_target_lang_mismatch'),
+        passThroughRisk: getPassThroughRisk(warnings),
+        repetitionRisk: getRepetitionRisk(warnings),
+        markerPreservation: getMarkerPreservation(sourceHasStructuredPrefixes, warnings),
+        strictRetryTriggered: qualityRetryCount > 0,
+      },
       stats: {
         outputLineCount: output.split('\n').length,
         outputCharCount: output.length,
       },
+      timing: {
+        elapsedMs,
+        elapsedSec: Number((elapsedMs / 1000).toFixed(3)),
+        providerMs:
+          typeof runtimeDebug?.lastPerfMetrics?.generateDurationMs === 'number'
+            ? runtimeDebug.lastPerfMetrics.generateDurationMs
+            : null,
+        providerSec:
+          typeof runtimeDebug?.lastPerfMetrics?.generateDurationMs === 'number'
+            ? Number((runtimeDebug.lastPerfMetrics.generateDurationMs / 1000).toFixed(3))
+            : null,
+        repairMs: null,
+        repairSec: null,
+        qualityRetryMs: null,
+        qualityRetrySec: null,
+      },
+      diagnostics: {
+        qualityIssueCodes: warnings.filter((warning) => warning.startsWith('quality_issue_')),
+        runtimeSource: 'local',
+      },
       warnings,
-      errors: {
-        request: null,
+      warningIssues: buildTranslationWarningIssues(warnings),
+      errors,
+      errorIssues: [],
+      artifacts: {
+        hasTimecodes: false,
       },
     },
   };

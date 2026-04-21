@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { ArrowRight, Download, Loader2, Play, CheckCircle2, AlertCircle, FolderOpen, FileText, Upload, Square, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { ArrowRight, Download, Loader2, Play, CheckCircle2, FolderOpen, FileText, Upload, Square, X } from 'lucide-react';
 import { Project, ApiConfig, Material } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
@@ -12,6 +12,7 @@ import { sanitizeInput } from '../utils/security';
 import { PROJECT_STATUS } from '../project_status';
 import { postJson } from '../utils/http_client';
 import SubtitleRowsEditor from './SubtitleRowsEditor';
+import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
 import {
   EditableSubtitleRow,
   extractLeadingTimeTag,
@@ -22,6 +23,7 @@ import {
   subtitleRowsToLines,
   validateSubtitleRows,
 } from '../utils/subtitle_editor';
+import type { RunIssue, RunProgressEvent } from '../../shared/run_monitor';
 
 interface TextTranslationProps {
   project: Project | null;
@@ -74,6 +76,8 @@ interface TranslationPipelineDebug {
   provider?: {
     name?: string;
     model?: string;
+    profileId?: string | null;
+    profileFamily?: string | null;
   };
   applied?: {
     retryCount?: number;
@@ -89,7 +93,18 @@ interface TranslationPipelineDebug {
     localModelProfileId?: string | null;
     localPromptStyle?: string;
     localGenerationStyle?: string;
+    localBaselineConfidence?: string | null;
+    localBaselineTaskFamily?: string | null;
+    localFallbackBaseline?: boolean;
   };
+  quality?: {
+    lineCountMatch?: boolean;
+    targetLanguageMatch?: boolean;
+    passThroughRisk?: 'low' | 'medium' | 'high';
+    repetitionRisk?: 'low' | 'medium' | 'high';
+    markerPreservation?: 'ok' | 'partial' | 'lost';
+    strictRetryTriggered?: boolean;
+  } | null;
   runtime?: {
     modelId?: string;
     modelPath?: string;
@@ -129,6 +144,16 @@ interface TranslationPipelineDebug {
       utilization?: number;
       physIndex?: number;
     } | null;
+  } | null;
+  timing?: {
+    elapsedMs?: number | null;
+    providerMs?: number | null;
+    qualityRetryMs?: number | null;
+  } | null;
+  warningIssues?: RunIssue[];
+  errorIssues?: RunIssue[];
+  artifacts?: {
+    hasTimecodes?: boolean;
   } | null;
 }
 
@@ -976,6 +1001,32 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     return message;
   };
 
+  const localizeTranslationEvent = React.useCallback((event?: RunProgressEvent | null, fallbackMessage = '') => {
+    if (!event) return localizeTranslationMessage(fallbackMessage);
+
+    switch (event.code) {
+      case 'model.load.configuration':
+        return t('translation.msgLoadingConfig');
+      case 'provider.retry.transient':
+      case 'repair.alignment.started':
+      case 'provider.call.whole_document':
+      case 'provider.call.cloud_context':
+      case 'provider.call.started':
+      case 'provider.translation.local_batch':
+      case 'provider.translation.remote_batch':
+      case 'provider.translation.remote_context_batch':
+      case 'provider.retry.single_line':
+      case 'quality.retry.started':
+        return localizeTranslationMessage(String(event.message || fallbackMessage || ''));
+      case 'quality.retry.triggered':
+        return t('translation.msgStrictRetry');
+      case 'run.completed':
+        return t('status.completed');
+      default:
+        return localizeTranslationMessage(String(event.message || fallbackMessage || ''));
+    }
+  }, [t]);
+
   const providerLabel = (provider: string) => {
     const key = String(provider || '').toLowerCase();
     if (key === 'openai-compatible') return 'OpenAI-compatible';
@@ -1007,6 +1058,32 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         return t('translation.qualityModeTemplateValidated');
       case 'json_strict':
         return t('translation.qualityModeJsonStrict');
+      default:
+        return '-';
+    }
+  }, [t]);
+
+  const localizeQualityRisk = React.useCallback((risk: string | null | undefined) => {
+    switch (String(risk || '')) {
+      case 'low':
+        return t('translation.riskLow');
+      case 'medium':
+        return t('translation.riskMedium');
+      case 'high':
+        return t('translation.riskHigh');
+      default:
+        return '-';
+    }
+  }, [t]);
+
+  const localizeMarkerPreservation = React.useCallback((value: string | null | undefined) => {
+    switch (String(value || '')) {
+      case 'ok':
+        return t('translation.markerOk');
+      case 'partial':
+        return t('translation.markerPartial');
+      case 'lost':
+        return t('translation.markerLost');
       default:
         return '-';
     }
@@ -1069,6 +1146,21 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     const normalized = String(value || '').trim();
     if (!normalized) return '-';
     return normalized.replace(/[_-]+/g, ' ');
+  }, []);
+
+  const formatElapsedTime = React.useCallback((elapsedMs: unknown, options?: { suffix?: string }) => {
+    if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs)) return '-';
+    const safeMs = Math.max(0, elapsedMs);
+    const totalSeconds = safeMs / 1000;
+    const suffix = options?.suffix || '';
+    if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s${suffix}`;
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (hours > 0) {
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${seconds.toFixed(1).padStart(4, '0')}${suffix}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(1).padStart(4, '0')}${suffix}`;
   }, []);
 
   const promptTemplateLabel = React.useCallback((templateId: string | null | undefined) => {
@@ -1141,15 +1233,19 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
     if (inference?.acceleratorModel) {
       const memorySource = inference.memorySource ? ` / ${inference.memorySource}` : '';
-      parts.push(`Runtime: ${inference.acceleratorModel}${memorySource}`);
+      parts.push(`${t('monitor.runtime')}: ${inference.acceleratorModel}${memorySource}`);
     }
     return parts.join(' | ');
   };
 
-  const localizePipelineWarnings = (warnings: unknown) => {
-    if (!Array.isArray(warnings)) return [];
-    return warnings
-      .map((item) => String(item || '').trim())
+  const localizePipelineWarnings = React.useCallback((warnings: unknown, issues?: RunIssue[] | null) => {
+    const warningCodes = Array.isArray(issues) && issues.length > 0
+      ? issues.map((issue) => String(issue?.code || '').trim())
+      : Array.isArray(warnings)
+        ? warnings.map((item) => String(item || '').trim())
+        : [];
+
+    return warningCodes
       .filter(Boolean)
       .map((code) => {
         switch (code) {
@@ -1163,6 +1259,8 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             return t('translation.warnLineIndexRebind');
           case 'line_json_map_repair_applied':
             return t('translation.warnLineJsonMapRepair');
+          case 'line_json_map_pre_split_applied':
+            return t('translation.warnLineJsonMapPreSplit');
           case 'line_json_map_partial_fallback':
             return t('translation.warnLineJsonMapPartial');
           case 'line_json_map_policy_split':
@@ -1177,14 +1275,30 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             return t('translation.warnLineAlignmentFailed');
           case 'local_repetition_loop_detected':
             return t('translation.warnLocalRepetitionLoop');
+          case 'local_recursive_chunk_split_applied':
+            return t('translation.warnLocalRecursiveChunkSplit');
+          case 'local_single_line_retry_applied':
+            return t('translation.warnLocalSingleLineRetry');
           case 'quality_retry_triggered':
             return t('translation.warnQualityRetry');
+          case 'post_repair_quality_retry_triggered':
+            return t('translation.warnPostRepairQualityRetry');
           case 'strict_retry_applied':
             return t('translation.warnStrictRetryApplied');
           case 'local_strict_retry_applied':
             return t('translation.warnLocalStrictRetry');
           case 'local_batch_translation_applied':
             return t('translation.warnLocalBatchTranslation');
+          case 'translategemma_batch_translation_applied':
+            return t('translation.warnTranslateGemmaBatchTranslation');
+          case 'translategemma_recursive_chunk_split_applied':
+            return t('translation.warnTranslateGemmaRecursiveChunkSplit');
+          case 'translategemma_single_line_retry_applied':
+            return t('translation.warnTranslateGemmaSingleLineRetry');
+          case 'residual_line_retry_triggered':
+            return t('translation.warnResidualLineRetryTriggered');
+          case 'residual_line_retry_applied':
+            return t('translation.warnResidualLineRetryApplied');
           case 'cloud_context_parse_failed':
             return t('translation.warnCloudContextParseFailed');
           case 'cloud_context_chunk_split':
@@ -1193,19 +1307,44 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             return t('translation.warnCloudContextSplitDepthExhausted');
           case 'cloud_context_single_line_fallback':
             return t('translation.warnCloudContextSingleLineFallback');
+          case 'quality_issue_empty_output':
+            return t('translation.warnQualityIssueEmptyOutput');
+          case 'quality_issue_repetition_loop':
+            return t('translation.warnQualityIssueRepetitionLoop');
+          case 'quality_issue_adjacent_duplicate':
+            return t('translation.warnQualityIssueAdjacentDuplicate');
+          case 'quality_issue_pass_through':
+            return t('translation.warnQualityIssuePassThrough');
+          case 'quality_issue_zh_tw_naturalization_needed':
+            return t('translation.warnQualityIssueZhTwNaturalization');
+          case 'quality_issue_target_lang_mismatch':
+            return t('translation.warnQualityIssueTargetMismatch');
+          case 'quality_issue_line_count_loss':
+            return t('translation.warnQualityIssueLineCountLoss');
+          case 'quality_issue_marker_loss':
+            return t('translation.warnQualityIssueMarkerLoss');
           default:
             return code;
         }
       });
-  };
+  }, [t]);
 
-  const extractPipelineErrors = (debug: any) => {
+  const extractPipelineErrors = React.useCallback((debug: any, errorIssue?: RunIssue | null) => {
     const errorItems: string[] = [];
+    if (errorIssue?.technicalMessage) {
+      errorItems.push(String(errorIssue.technicalMessage).trim());
+    }
+    if (Array.isArray(debug?.errorIssues)) {
+      for (const issue of debug.errorIssues) {
+        const technicalMessage = String(issue?.technicalMessage || '').trim();
+        if (technicalMessage) errorItems.push(technicalMessage);
+      }
+    }
     if (typeof debug?.errors?.request === 'string' && debug.errors.request.trim()) {
       errorItems.push(debug.errors.request.trim());
     }
-    return errorItems;
-  };
+    return Array.from(new Set(errorItems));
+  }, []);
 
   const handleStopTranslation = React.useCallback(() => {
     const current = translateEventSourceRef.current;
@@ -1302,13 +1441,15 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     eventSource.onmessage = (event) => {
       if (translateEventSourceRef.current !== eventSource) return;
       const data = JSON.parse(event.data);
+      const progressEvent = (data.event || null) as RunProgressEvent | null;
+      const errorIssue = (data.errorIssue || null) as RunIssue | null;
 
       if (data.error) {
         const errorDetail = String(data.error || t('translation.errorFailed'));
         setModelLoadStatus('failed');
         setModelLoadError(errorDetail);
         setError(errorDetail);
-        setPipelineErrors([errorDetail]);
+        setPipelineErrors(extractPipelineErrors(null, errorIssue).length > 0 ? extractPipelineErrors(null, errorIssue) : [errorDetail]);
         setIsPersistingResult(false);
         setIsTranslating(false);
         setTranslateMsg(null);
@@ -1321,8 +1462,14 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       if (data.status === 'processing') {
         setModelLoadStatus('ok');
         setModelLoadError(null);
-        setTranslateMsg(localizeTranslationMessage(String(data.message || '')));
-        setProgress((prev) => Math.min(prev + 8, 90));
+        setTranslateMsg(localizeTranslationEvent(progressEvent, String(data.message || '')));
+        setProgress((prev) => {
+          const hintedProgress =
+            typeof progressEvent?.progressHint === 'number' && Number.isFinite(progressEvent.progressHint)
+              ? Math.max(prev, Math.min(progressEvent.progressHint, 90))
+              : prev;
+          return Math.min(hintedProgress + 8, 90);
+        });
         return;
       }
 
@@ -1341,14 +1488,16 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         setTranslatedLines(merged);
         setProgress(100);
         setIsTranslating(false);
-        setTranslateMsg(t('status.completed'));
+        setTranslateMsg(localizeTranslationEvent(progressEvent, 'Translation completed.'));
         setPipelineMode(formatTranslationPipeline(result.debug));
         setTranslationDebug(result.debug || null);
-        setPipelineWarnings(localizePipelineWarnings(result.debug?.warnings));
+        setPipelineWarnings(localizePipelineWarnings(result.debug?.warnings, result.debug?.warningIssues));
         setPipelineErrors(extractPipelineErrors(result.debug));
         setHasTimecodes(
           typeof result?.exports?.hasTimecodes === 'boolean'
             ? result.exports.hasTimecodes
+            : typeof result?.debug?.artifacts?.hasTimecodes === 'boolean'
+              ? result.debug.artifacts.hasTimecodes
             : hasStrictBracketTimecodes(persistedTranslatedText)
         );
 
@@ -1489,12 +1638,12 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         typeof perf?.generatedTokens === 'number' && Number.isFinite(perf.generatedTokens)
           ? String(perf.generatedTokens)
           : '-',
-      ttft: formatMetric(perf?.ttftMs, 1, ' ms'),
-      tpot: formatMetric(perf?.tpotMs, 1, ' ms/token'),
+      ttft: formatElapsedTime(perf?.ttftMs),
+      tpot: formatElapsedTime(perf?.tpotMs, { suffix: '/token' }),
       throughput: formatMetric(perf?.throughputTokensPerSec, 2, ' tok/s'),
-      generateDuration: formatMetric(perf?.generateDurationMs, 1, ' ms'),
+      generateDuration: formatElapsedTime(perf?.generateDurationMs),
     };
-  }, [translationDebug]);
+  }, [formatElapsedTime, translationDebug]);
   const diarizationSummary = React.useMemo(() => {
     if (sourceType !== 'transcription') return null;
     const diagnostics = sourceDiarizationDiagnostics;
@@ -1564,21 +1713,181 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       resegmentedValue,
     };
   }, [sourceDiarizationDiagnostics, diarizationCopy, sourceType]);
-  const hasDebugDetails = Boolean(
-    pipelineMode ||
-    translationSummary ||
-    translationRuntimeSummary ||
-    diarizationSummary ||
-    pipelineWarnings.length > 0 ||
-    pipelineErrors.length > 0
-  );
   const debugSummary = React.useMemo(() => {
     const parts: string[] = [];
-    if (pipelineMode) parts.push(t('translation.pipelineMode'));
+    if (translationDebug?.timing && typeof translationDebug.timing.elapsedMs === 'number') {
+      parts.push(`${t('stt.elapsedTime')}: ${formatElapsedTime(translationDebug.timing.elapsedMs)}`);
+    }
+    if (translationSummary?.qualityMode && translationSummary.qualityMode !== '-') {
+      parts.push(`${t('translation.monitorQualityMode')}: ${translationSummary.qualityMode}`);
+    }
     if (pipelineWarnings.length > 0) parts.push(`${t('translation.pipelineWarnings')} ${pipelineWarnings.length}`);
     if (pipelineErrors.length > 0) parts.push(`${t('translation.pipelineErrors')} ${pipelineErrors.length}`);
     return parts.join(' · ');
-  }, [pipelineErrors.length, pipelineMode, pipelineWarnings.length, t]);
+  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.qualityMode]);
+  const translationMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
+    const badges: RunMonitorBadge[] = [];
+    if (pipelineMode) {
+      for (const part of pipelineMode.split('|').map((item) => item.trim()).filter(Boolean)) {
+        badges.push({ label: part, tone: 'info' });
+      }
+    }
+    if (translationDebug?.quality?.passThroughRisk) {
+      badges.push({
+        label: `${t('translation.qualityPassThroughRisk')}: ${localizeQualityRisk(translationDebug.quality.passThroughRisk)}`,
+        tone: translationDebug.quality.passThroughRisk === 'high' ? 'warning' : 'default',
+      });
+    }
+    if (pipelineErrors.length > 0) {
+      badges.push({ label: `${t('translation.pipelineErrors')}: ${pipelineErrors.length}`, tone: 'error' });
+    } else if (pipelineWarnings.length > 0) {
+      badges.push({ label: `${t('translation.pipelineWarnings')}: ${pipelineWarnings.length}`, tone: 'warning' });
+    }
+    return badges;
+  }, [localizeQualityRisk, pipelineErrors.length, pipelineMode, pipelineWarnings.length, t, translationDebug?.quality?.passThroughRisk]);
+  const translationMonitorSections = React.useMemo<RunMonitorSection[]>(() => {
+    const sections: RunMonitorSection[] = [];
+
+    if (translationSummary) {
+      sections.push({
+        key: 'execution',
+        title: t('monitor.execution'),
+        fields: [
+          { label: t('translation.targetLanguage'), value: translationSummary.targetLanguage },
+          { label: t('translation.promptLabel'), value: translationSummary.promptTemplate },
+          { label: t('translation.monitorStrategy'), value: translationSummary.strategy },
+          { label: t('translation.monitorQualityMode'), value: translationSummary.qualityMode },
+          { label: t('translation.monitorQualityRetry'), value: translationSummary.qualityRetryCount },
+          { label: t('translation.monitorStrictRetrySucceeded'), value: translationSummary.strictRetrySucceeded },
+          { label: t('translation.monitorProfileId'), value: translationSummary.profileId },
+          { label: t('translation.monitorProfileFamily'), value: translationSummary.profileFamily },
+          { label: t('translation.monitorLocalModelFamily'), value: translationSummary.localModelFamily },
+          { label: t('translation.monitorLocalModelProfileId'), value: translationSummary.localModelProfileId },
+          { label: t('translation.monitorLocalPromptStyle'), value: translationSummary.localPromptStyle },
+          { label: t('translation.monitorLocalGenerationStyle'), value: translationSummary.localGenerationStyle },
+          { label: t('translation.monitorLocalBaselineConfidence'), value: translationSummary.localBaselineConfidence },
+          { label: t('translation.monitorLocalBaselineTaskFamily'), value: translationSummary.localBaselineTaskFamily },
+          { label: t('translation.monitorLocalFallbackBaseline'), value: translationSummary.localFallbackBaseline },
+          { label: t('translation.strictJsonRepairToggle'), value: translationSummary.strictJsonRepair },
+          { label: t('translation.monitorCloudContextChunks'), value: translationSummary.cloudContextChunkCount },
+          { label: t('translation.monitorCloudContextFallbacks'), value: translationSummary.cloudContextFallbackCount },
+          { label: t('translation.glossary'), value: translationSummary.effectiveGlossary || '-' },
+        ],
+      });
+    }
+
+    if (translationDebug?.quality) {
+      sections.push({
+        key: 'quality',
+        title: t('monitor.quality'),
+        fields: [
+          { label: t('translation.monitorStrictRetrySucceeded'), value: translationDebug.quality.strictRetryTriggered ? t('translation.monitorYes') : t('translation.monitorNo') },
+          { label: t('translation.qualityTargetLanguageMatch'), value: translationDebug.quality.targetLanguageMatch ? t('translation.monitorYes') : t('translation.monitorNo') },
+          { label: t('translation.qualityLineCountMatch'), value: translationDebug.quality.lineCountMatch ? t('translation.monitorYes') : t('translation.monitorNo') },
+          { label: t('translation.qualityPassThroughRisk'), value: localizeQualityRisk(translationDebug.quality.passThroughRisk) },
+          { label: t('translation.qualityRepetitionRisk'), value: localizeQualityRisk(translationDebug.quality.repetitionRisk) },
+          { label: t('translation.qualityMarkerPreservation'), value: localizeMarkerPreservation(translationDebug.quality.markerPreservation) },
+        ],
+      });
+    }
+
+    if (translationRuntimeSummary) {
+      sections.push({
+        key: 'runtime',
+        title: t('monitor.runtime'),
+        fields: [
+          { label: t('translation.runtimeRequestedDevice'), value: translationRuntimeSummary.requestedDevice },
+          { label: t('translation.runtimePipelineDevice'), value: translationRuntimeSummary.pipelineDevice },
+          { label: t('translation.runtimePipelineKind'), value: translationRuntimeSummary.pipelineKind },
+          { label: t('translation.runtimeAccelerator'), value: translationRuntimeSummary.acceleratorModel },
+          { label: t('translation.runtimeMemorySource'), value: translationRuntimeSummary.memorySource },
+          { label: t('translation.runtimeObservedVram'), value: translationRuntimeSummary.vram },
+          { label: t('translation.runtimeObservedUtilization'), value: translationRuntimeSummary.utilization },
+          { label: t('translation.runtimeLuid'), value: translationRuntimeSummary.luid || '-' },
+          { label: t('translation.runtimePhysIndex'), value: translationRuntimeSummary.physIndex },
+          { label: t('translation.runtimeCacheDir'), value: translationRuntimeSummary.cacheDir },
+          { label: t('translation.runtimePromptLookup'), value: translationRuntimeSummary.promptLookupEnabled ? t('translation.monitorYes') : t('translation.monitorNo') },
+          { label: t('translation.runtimeSchedulerTokens'), value: translationRuntimeSummary.schedulerTokenLimit },
+          { label: t('translation.runtimeInputTokens'), value: translationRuntimeSummary.inputTokens },
+          { label: t('translation.runtimeGeneratedTokens'), value: translationRuntimeSummary.generatedTokens },
+          { label: t('translation.runtimeTtft'), value: translationRuntimeSummary.ttft },
+          { label: t('translation.runtimeTpot'), value: translationRuntimeSummary.tpot },
+          { label: t('translation.runtimeThroughput'), value: translationRuntimeSummary.throughput },
+          { label: t('translation.runtimeGenerateDuration'), value: translationRuntimeSummary.generateDuration },
+          { label: t('translation.runtimeInferenceSource'), value: translationRuntimeSummary.source || '-' },
+          { label: t('translation.runtimeObservedAt'), value: translationRuntimeSummary.observedAt || '-' },
+          { label: t('translation.runtimeModelPath'), value: translationRuntimeSummary.modelPath, breakAll: true },
+        ],
+      });
+    }
+
+    if (translationDebug?.timing) {
+      sections.push({
+        key: 'timing',
+        title: t('monitor.timing'),
+        fields: [
+          { label: t('stt.elapsedTime'), value: formatElapsedTime(translationDebug.timing.elapsedMs) },
+          { label: t('translation.runtimeGenerateDuration'), value: formatElapsedTime(translationDebug.timing.providerMs) },
+          { label: t('translation.monitorQualityRetry'), value: formatElapsedTime(translationDebug.timing.qualityRetryMs) },
+        ],
+      });
+    }
+
+    sections.push({
+      key: 'source',
+      title: t('monitor.diagnostics'),
+      content: isLoadingSourceDiarization ? (
+        <div>{diarizationCopy.loading}</div>
+      ) : diarizationSummary ? (
+        <>
+          <div>{diarizationCopy.provider}: {diarizationSummary.providerLabel}</div>
+          <div>{diarizationCopy.source}: {diarizationSummary.sourceLabel}</div>
+          {diarizationSummary.modeLabel && <div>{diarizationCopy.mode}: {diarizationSummary.modeLabel}</div>}
+          {diarizationSummary.sceneLabel && <div>{diarizationCopy.scene}: {diarizationSummary.sceneLabel}</div>}
+          <div>{diarizationCopy.speakerTarget}: {diarizationSummary.speakerTarget}</div>
+          {diarizationSummary.outputSpeakers != null && <div>{diarizationCopy.outputSpeakers}: {diarizationSummary.outputSpeakers}</div>}
+          <div>{diarizationCopy.speechSegments}: {diarizationSummary.speechSegments}</div>
+          <div>{diarizationCopy.windows}: {diarizationSummary.windows}</div>
+          {diarizationSummary.regions != null && <div>{diarizationCopy.regions}: {diarizationSummary.regions}</div>}
+          {diarizationSummary.threshold != null && <div>{diarizationCopy.threshold}: {Number(diarizationSummary.threshold).toFixed(2)}</div>}
+          <div>{diarizationCopy.resegmented}: {diarizationSummary.resegmentedValue}</div>
+        </>
+      ) : (
+        <div>{diarizationCopy.unavailable}</div>
+      ),
+    });
+
+    if (pipelineWarnings.length > 0) {
+      sections.push({
+        key: 'warnings',
+        title: t('translation.pipelineWarnings'),
+        content: (
+          <>
+            {pipelineWarnings.map((warning, idx) => (
+              <div key={`${warning}-${idx}`}>- {warning}</div>
+            ))}
+          </>
+        ),
+      });
+    }
+
+    if (pipelineErrors.length > 0) {
+      sections.push({
+        key: 'errors',
+        title: t('translation.pipelineErrors'),
+        tone: 'error',
+        content: (
+          <>
+            {pipelineErrors.map((errItem, idx) => (
+              <div key={`${errItem}-${idx}`}>- {errItem}</div>
+            ))}
+          </>
+        ),
+      });
+    }
+
+    return sections;
+  }, [diarizationCopy, diarizationSummary, formatElapsedTime, isLoadingSourceDiarization, localizeMarkerPreservation, localizeQualityRisk, pipelineErrors, pipelineWarnings, t, translationDebug, translationRuntimeSummary, translationSummary]);
 
   React.useEffect(() => {
     if (pipelineErrors.length > 0) {
@@ -1914,174 +2223,39 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             </button>
           </section>
 
-          <section className="bg-surface-container-low p-6 rounded-2xl border border-white/5">
-            <div className="mb-6">
-              <h3 className="text-sm font-bold text-secondary flex items-center gap-2">
-                {isTranslating ? <Loader2 className="w-4 h-4 animate-spin text-tertiary" /> : <CheckCircle2 className="w-4 h-4 text-tertiary" />}
-                {t('translation.statusMonitor')}
-              </h3>
-            </div>
-            <div className="space-y-4">
-              <StatusItem
-                label={t('translation.modelLoad')}
-                progress={modelLoadStatus === 'ok' ? 100 : modelLoadStatus === 'failed' ? 0 : modelLoadStatus === 'loading' ? 50 : 0}
-                status={
+          <RunMonitor
+            title={t('translation.statusMonitor')}
+            isRunning={isTranslating}
+            standbyLabel={t('common.standby')}
+            statusLabel={translateMsg || t('translation.translating')}
+            badges={translationMonitorBadges}
+            progressItems={[
+              {
+                label: t('translation.modelLoad'),
+                progress: modelLoadStatus === 'ok' ? 100 : modelLoadStatus === 'failed' ? 0 : modelLoadStatus === 'loading' ? 50 : 0,
+                status:
                   modelLoadStatus === 'ok'
                     ? t('settings.testSuccess')
                     : modelLoadStatus === 'failed'
                       ? t('settings.testFailed')
                       : modelLoadStatus === 'loading'
                         ? t('settings.testing')
-                        : t('common.standby')
-                }
-                tone={modelLoadStatus === 'ok' ? 'success' : modelLoadStatus === 'failed' ? 'error' : 'normal'}
-              />
-              <StatusItem
-                label={t('translation.progress')}
-                progress={progress}
-              />
-              {translateMsg && (
-                <div className="max-h-24 overflow-y-auto custom-scrollbar text-[11px] leading-5 text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3">
-                  {translateMsg}
-                </div>
-              )}
-              {modelLoadStatus === 'failed' && modelLoadError && (
-                <div className="text-[11px] text-error bg-error/10 border border-error/20 rounded-lg p-3">
-                  {modelLoadError}
-                </div>
-              )}
-              {hasDebugDetails && (
-                <div className="rounded-xl border border-white/5 bg-surface-container-lowest/70 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setShowDebugDetails((prev) => !prev)}
-                    className="w-full px-4 py-3 flex items-center justify-between gap-4 hover:bg-white/[0.03] transition-colors"
-                  >
-                    <div className="min-w-0 text-left">
-                      <div className="text-[11px] font-bold text-secondary">{t('translation.pipelineMode')}</div>
-                      {debugSummary && <div className="mt-1 text-[10px] text-outline truncate">{debugSummary}</div>}
-                    </div>
-                    {showDebugDetails ? (
-                      <ChevronUp className="w-4 h-4 shrink-0 text-outline" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4 shrink-0 text-outline" />
-                    )}
-                  </button>
-                  {showDebugDetails && (
-                    <div className="px-4 pb-4 space-y-4 max-h-[360px] overflow-y-auto custom-scrollbar">
-                      {pipelineMode && (
-                        <div className="text-[11px] text-outline bg-black/10 border border-white/5 rounded-lg p-3">
-                          <span className="text-secondary font-bold mr-2">{t('translation.pipelineMode')}:</span>
-                          {pipelineMode}
-                        </div>
-                      )}
-                      {translationSummary && (
-                        <div className="text-[11px] text-outline bg-black/10 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.targetLanguage')}:</span>{translationSummary.targetLanguage}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.promptLabel')}:</span>{translationSummary.promptTemplate}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorStrategy')}:</span>{translationSummary.strategy}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorQualityMode')}:</span>{translationSummary.qualityMode}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorQualityRetry')}:</span>{translationSummary.qualityRetryCount}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorStrictRetrySucceeded')}:</span>{translationSummary.strictRetrySucceeded}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorProfileId')}:</span>{translationSummary.profileId}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorProfileFamily')}:</span>{translationSummary.profileFamily}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalModelFamily')}:</span>{translationSummary.localModelFamily}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalModelProfileId')}:</span>{translationSummary.localModelProfileId}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalPromptStyle')}:</span>{translationSummary.localPromptStyle}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalGenerationStyle')}:</span>{translationSummary.localGenerationStyle}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalBaselineConfidence')}:</span>{translationSummary.localBaselineConfidence}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalBaselineTaskFamily')}:</span>{translationSummary.localBaselineTaskFamily}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorLocalFallbackBaseline')}:</span>{translationSummary.localFallbackBaseline}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.strictJsonRepairToggle')}:</span>{translationSummary.strictJsonRepair}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorCloudContextChunks')}:</span>{translationSummary.cloudContextChunkCount}</div>
-                          <div><span className="text-secondary font-bold mr-2">{t('translation.monitorCloudContextFallbacks')}:</span>{translationSummary.cloudContextFallbackCount}</div>
-                          {translationSummary.effectiveGlossary ? (
-                            <div className="space-y-1">
-                              <div className="text-secondary font-bold">{t('translation.glossary')}:</div>
-                              <div className="break-words whitespace-pre-wrap text-outline">{translationSummary.effectiveGlossary}</div>
-                            </div>
-                          ) : (
-                            <div><span className="text-secondary font-bold mr-2">{t('translation.glossary')}:</span>-</div>
-                          )}
-                        </div>
-                      )}
-                      {translationRuntimeSummary && (
-                        <div className="text-[11px] text-outline bg-black/10 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{t('translation.runtimeTitle')}</div>
-                          <div>{t('translation.runtimeRequestedDevice')}: {translationRuntimeSummary.requestedDevice}</div>
-                          <div>{t('translation.runtimePipelineDevice')}: {translationRuntimeSummary.pipelineDevice}</div>
-                          <div>{t('translation.runtimePipelineKind')}: {translationRuntimeSummary.pipelineKind}</div>
-                          <div>{t('translation.runtimeAccelerator')}: {translationRuntimeSummary.acceleratorModel}</div>
-                          <div>{t('translation.runtimeMemorySource')}: {translationRuntimeSummary.memorySource}</div>
-                          <div>{t('translation.runtimeObservedVram')}: {translationRuntimeSummary.vram}</div>
-                          <div>{t('translation.runtimeObservedUtilization')}: {translationRuntimeSummary.utilization}</div>
-                          <div>{t('translation.runtimeLuid')}: {translationRuntimeSummary.luid || '-'}</div>
-                          <div>{t('translation.runtimePhysIndex')}: {translationRuntimeSummary.physIndex}</div>
-                          <div>{t('translation.runtimeCacheDir')}: {translationRuntimeSummary.cacheDir}</div>
-                          <div>{t('translation.runtimePromptLookup')}: {translationRuntimeSummary.promptLookupEnabled ? t('translation.monitorYes') : t('translation.monitorNo')}</div>
-                          <div>{t('translation.runtimeSchedulerTokens')}: {translationRuntimeSummary.schedulerTokenLimit}</div>
-                          <div>{t('translation.runtimeInputTokens')}: {translationRuntimeSummary.inputTokens}</div>
-                          <div>{t('translation.runtimeGeneratedTokens')}: {translationRuntimeSummary.generatedTokens}</div>
-                          <div>{t('translation.runtimeTtft')}: {translationRuntimeSummary.ttft}</div>
-                          <div>{t('translation.runtimeTpot')}: {translationRuntimeSummary.tpot}</div>
-                          <div>{t('translation.runtimeThroughput')}: {translationRuntimeSummary.throughput}</div>
-                          <div>{t('translation.runtimeGenerateDuration')}: {translationRuntimeSummary.generateDuration}</div>
-                          <div>{t('translation.runtimeInferenceSource')}: {translationRuntimeSummary.source || '-'}</div>
-                          <div>{t('translation.runtimeObservedAt')}: {translationRuntimeSummary.observedAt || '-'}</div>
-                          <div className="break-all">{t('translation.runtimeModelPath')}: {translationRuntimeSummary.modelPath}</div>
-                        </div>
-                      )}
-                      <div className="text-[11px] text-outline bg-black/10 border border-white/5 rounded-lg p-3 space-y-2">
-                        <div className="text-secondary font-bold">{diarizationCopy.title}</div>
-                        {isLoadingSourceDiarization ? (
-                          <div>{diarizationCopy.loading}</div>
-                        ) : diarizationSummary ? (
-                          <>
-                            <div>{diarizationCopy.provider}: {diarizationSummary.providerLabel}</div>
-                            <div>{diarizationCopy.source}: {diarizationSummary.sourceLabel}</div>
-                            {diarizationSummary.modeLabel && <div>{diarizationCopy.mode}: {diarizationSummary.modeLabel}</div>}
-                            {diarizationSummary.sceneLabel && <div>{diarizationCopy.scene}: {diarizationSummary.sceneLabel}</div>}
-                            <div>{diarizationCopy.speakerTarget}: {diarizationSummary.speakerTarget}</div>
-                            {diarizationSummary.outputSpeakers != null && (
-                              <div>{diarizationCopy.outputSpeakers}: {diarizationSummary.outputSpeakers}</div>
-                            )}
-                            <div>{diarizationCopy.speechSegments}: {diarizationSummary.speechSegments}</div>
-                            <div>{diarizationCopy.windows}: {diarizationSummary.windows}</div>
-                            {diarizationSummary.regions != null && <div>{diarizationCopy.regions}: {diarizationSummary.regions}</div>}
-                            {diarizationSummary.threshold != null && (
-                              <div>{diarizationCopy.threshold}: {Number(diarizationSummary.threshold).toFixed(2)}</div>
-                            )}
-                            <div>{diarizationCopy.resegmented}: {diarizationSummary.resegmentedValue}</div>
-                          </>
-                        ) : (
-                          <div>{diarizationCopy.unavailable}</div>
-                        )}
-                      </div>
-                      {pipelineWarnings.length > 0 && (
-                        <div className="text-[11px] text-outline bg-black/10 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{t('translation.pipelineWarnings')}:</div>
-                          {pipelineWarnings.map((warning, idx) => (
-                            <div key={`${warning}-${idx}`}>- {warning}</div>
-                          ))}
-                        </div>
-                      )}
-                      {pipelineErrors.length > 0 && (
-                        <div className="text-[11px] text-error bg-error/10 border border-error/20 rounded-lg p-3 space-y-2">
-                          <div className="font-bold flex items-center gap-2">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            {t('translation.pipelineErrors')}
-                          </div>
-                          {pipelineErrors.map((errItem, idx) => (
-                            <div key={`${errItem}-${idx}`}>- {errItem}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
+                        : t('common.standby'),
+                tone: modelLoadStatus === 'ok' ? 'success' : modelLoadStatus === 'failed' ? 'error' : 'normal',
+              },
+              {
+                label: t('translation.progress'),
+                progress,
+              },
+            ]}
+            message={translateMsg}
+            error={modelLoadStatus === 'failed' ? modelLoadError : null}
+            detailsTitle={t('monitor.diagnostics')}
+            detailsSummary={debugSummary}
+            showDetails={showDebugDetails}
+            onToggleDetails={() => setShowDebugDetails((prev) => !prev)}
+            sections={translationMonitorSections}
+          />
         </div>
 
         <div className="xl:col-span-8 flex flex-col min-h-0 space-y-5">
@@ -2504,34 +2678,5 @@ const TranslationRow: React.FC<{
     </div>
   );
 };
-
-function StatusItem({
-  label,
-  progress,
-  status,
-  tone = 'normal',
-}: {
-  label: string;
-  progress: number;
-  status?: string;
-  tone?: 'success' | 'error' | 'normal';
-}) {
-  const textClass = tone === 'success' ? 'text-tertiary' : tone === 'error' ? 'text-error' : 'text-primary';
-  const barClass = tone === 'success' ? 'bg-tertiary' : tone === 'error' ? 'bg-error' : 'bg-primary';
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-between items-center text-[11px] font-bold tracking-wider">
-        <span className="text-outline uppercase">{label}</span>
-        <span className={textClass}>{status || `${Math.round(progress)}%`}</span>
-      </div>
-      <div className="h-1.5 bg-surface-container-lowest rounded-full overflow-hidden">
-        <div className={`h-full transition-all duration-500 ${barClass}`} style={{ width: `${progress}%` }} />
-      </div>
-    </div>
-  );
-}
-
-
 
 
