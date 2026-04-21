@@ -411,6 +411,31 @@ function rebuildTranslationWithSourceTimecodes(sourceText: string, translatedTex
   return rebuilt.join('\n').trim();
 }
 
+function rebuildSourceWithTranslatedTimecodes(sourceText: string, translatedRows: EditableSubtitleRow[]) {
+  const sourceRows = subtitleRowsFromText(sourceText);
+  if (sourceRows.length === 0) return String(sourceText || '').trim();
+
+  const rebuiltRows = sourceRows.map((sourceRow, index) => {
+    const sourceTextPayload = String(sourceRow.text || '').trim();
+    if (!sourceTextPayload) return null;
+    const translatedTimecode = String(translatedRows[index]?.timecode || '').trim();
+    return {
+      timecode: translatedTimecode,
+      text: sourceTextPayload,
+    };
+  });
+
+  return subtitleRowsToLines(rebuiltRows.filter((row): row is { timecode: string; text: string } => Boolean(row))).join('\n');
+}
+
+function hasSameSubtitleRowOrder(beforeIds: string[], afterRows: EditableSubtitleRow[]) {
+  if (beforeIds.length !== afterRows.length) return false;
+  for (let index = 0; index < beforeIds.length; index += 1) {
+    if (String(beforeIds[index] || '') !== String(afterRows[index]?.id || '')) return false;
+  }
+  return true;
+}
+
 function normalizeTranscriptionSourceLanguage(language?: string | null) {
   const normalized = String(language || '').trim();
   if (!normalized) return '';
@@ -480,6 +505,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const [activePreviewLine, setActivePreviewLine] = React.useState<number | null>(null);
   const [isEditingTranslatedOutput, setIsEditingTranslatedOutput] = React.useState(false);
   const [editingTranslatedOutputRows, setEditingTranslatedOutputRows] = React.useState<EditableSubtitleRow[]>([]);
+  const [editingTranslatedOutputBaselineIds, setEditingTranslatedOutputBaselineIds] = React.useState<string[]>([]);
   const [isSavingTranslatedOutput, setIsSavingTranslatedOutput] = React.useState(false);
   const sourceFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const translateEventSourceRef = React.useRef<EventSource | null>(null);
@@ -517,6 +543,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     setActivePreviewLine(null);
     setIsEditingTranslatedOutput(false);
     setEditingTranslatedOutputRows([]);
+    setEditingTranslatedOutputBaselineIds([]);
     setIsSavingTranslatedOutput(false);
     if (previewAudioRef.current) {
       previewAudioRef.current.pause();
@@ -1406,6 +1433,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     setIsPersistingResult(false);
     setIsEditingTranslatedOutput(false);
     setEditingTranslatedOutputRows([]);
+    setEditingTranslatedOutputBaselineIds([]);
     setIsSavingTranslatedOutput(false);
 
     const params = new URLSearchParams();
@@ -1978,13 +2006,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       previewAudioRef.current.pause();
     }
     setActivePreviewLine(null);
-    setEditingTranslatedOutputRows(
-      subtitleRowsFromText(
-        translatedLines
-          .map((line) => String(line.translated || '').trim())
-          .join('\n')
-      )
+    const rows = subtitleRowsFromText(
+      translatedLines
+        .map((line) => String(line.translated || '').trim())
+        .join('\n')
     );
+    setEditingTranslatedOutputRows(rows);
+    setEditingTranslatedOutputBaselineIds(rows.map((row) => row.id));
     setIsEditingTranslatedOutput(true);
   }, [isTranslating, translatedLines]);
 
@@ -1995,6 +2023,14 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
 
     const nextTranslatedLines = subtitleRowsToLines(editingTranslatedOutputRows);
     const persistedTranslatedText = nextTranslatedLines.join('\n');
+    const canSyncOriginalTimecodes = hasSameSubtitleRowOrder(
+      editingTranslatedOutputBaselineIds,
+      editingTranslatedOutputRows
+    );
+    const persistedOriginalText = canSyncOriginalTimecodes
+      ? rebuildSourceWithTranslatedTimecodes(activeSourceText, editingTranslatedOutputRows)
+      : activeSourceText;
+    const syncedOriginalLines = subtitleRowsToLines(subtitleRowsFromText(persistedOriginalText));
     const currentTranslatedText = subtitleRowsToLines(
       subtitleRowsFromText(
         translatedLines
@@ -2005,12 +2041,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
 
     if (persistedTranslatedText === currentTranslatedText) {
       setIsEditingTranslatedOutput(false);
+      setEditingTranslatedOutputBaselineIds([]);
       return;
     }
 
-    const maxLineCount = Math.max(sourceLines.length, nextTranslatedLines.length);
+    const maxLineCount = Math.max(syncedOriginalLines.length, nextTranslatedLines.length);
     const merged = Array.from({ length: maxLineCount }, (_, index) => ({
-      original: sourceLines[index] || '',
+      original: syncedOriginalLines[index] || '',
       translated: nextTranslatedLines[index] || '',
     }));
 
@@ -2019,7 +2056,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     try {
       const updateResult = await Promise.resolve(
         onUpdateProject({
-          originalSubtitles: activeSourceText,
+          originalSubtitles: persistedOriginalText,
           translatedSubtitles: persistedTranslatedText,
           status: PROJECT_STATUS.COMPLETED,
         })
@@ -2031,6 +2068,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       setHasTimecodes(hasStrictBracketTimecodes(persistedTranslatedText));
       setProgress(merged.length > 0 ? 100 : 0);
       setIsEditingTranslatedOutput(false);
+      setEditingTranslatedOutputBaselineIds([]);
     } catch (err) {
       console.error('Failed to save edited translated subtitles', err);
       alert(t('settings.saveRetry'));
@@ -2040,11 +2078,11 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
   }, [
     activeSourceText,
+    editingTranslatedOutputBaselineIds,
     editingTranslatedOutputRows,
     isSavingTranslatedOutput,
     onUpdateProject,
     project,
-    sourceLines,
     t,
     translatedLines,
   ]);

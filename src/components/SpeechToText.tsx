@@ -993,10 +993,7 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         setModelLoadStatus('ok');
         setModelLoadError(null);
         const result = data.result;
-        const includeTimecodes =
-          typeof result?.debug?.artifacts?.hasTimecodes === 'boolean'
-            ? Boolean(result.debug.artifacts.hasTimecodes)
-            : shouldIncludeTimecodes(result);
+        const includeTimecodes = shouldIncludeTimecodes(result);
         const formattedChunks = formatResultToLines(result, includeTimecodes);
         setTranscription(formattedChunks);
         setHasTimecodes(includeTimecodes);

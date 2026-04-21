@@ -1,6 +1,5 @@
 import type { LlmAdapterKey } from './llm/canonical/llm_capabilities.js';
 import { llmModelProfileRegistry } from './llm/profiles/registry.js';
-import { resolveProviderTranslationProfile } from './llm/profiles/translation_profiles.js';
 
 export type CloudTranslateProvider =
   | 'deepl'
@@ -103,12 +102,6 @@ export function getCloudTranslateRuntimeAdapterKey(
 }
 
 export function getDefaultCloudTranslateModel(provider: CloudTranslateProvider) {
-  const resolvedProfile = resolveProviderTranslationProfile({
-    providerFamily: provider,
-    runtimeFamily: getCloudTranslateRuntimeAdapterKey(provider),
-  });
-  const recommendedModel = String(resolvedProfile?.recommendedModels?.[0] || '').trim();
-  if (recommendedModel) return recommendedModel;
   if (provider === 'anthropic') return 'claude-3-5-sonnet-latest';
   if (provider === 'gemini-native') return 'gemini-2.5-flash';
   if (provider === 'mistral-chat') return 'mistral-small-latest';
