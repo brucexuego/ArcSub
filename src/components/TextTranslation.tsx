@@ -411,6 +411,23 @@ function rebuildTranslationWithSourceTimecodes(sourceText: string, translatedTex
   return rebuilt.join('\n').trim();
 }
 
+function rebuildSourceWithTranslatedTimecodes(sourceText: string, translatedRows: EditableSubtitleRow[]) {
+  const sourceRows = subtitleRowsFromText(sourceText);
+  if (sourceRows.length === 0) return String(sourceText || '').trim();
+
+  const rebuiltRows = sourceRows.map((sourceRow, index) => {
+    const sourceTextPayload = String(sourceRow.text || '').trim();
+    if (!sourceTextPayload) return null;
+    const translatedTimecode = String(translatedRows[index]?.timecode || '').trim();
+    return {
+      timecode: translatedTimecode,
+      text: sourceTextPayload,
+    };
+  });
+
+  return subtitleRowsToLines(rebuiltRows.filter((row): row is { timecode: string; text: string } => Boolean(row))).join('\n');
+}
+
 function normalizeTranscriptionSourceLanguage(language?: string | null) {
   const normalized = String(language || '').trim();
   if (!normalized) return '';
@@ -1995,6 +2012,8 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
 
     const nextTranslatedLines = subtitleRowsToLines(editingTranslatedOutputRows);
     const persistedTranslatedText = nextTranslatedLines.join('\n');
+    const persistedOriginalText = rebuildSourceWithTranslatedTimecodes(activeSourceText, editingTranslatedOutputRows);
+    const syncedOriginalLines = subtitleRowsToLines(subtitleRowsFromText(persistedOriginalText));
     const currentTranslatedText = subtitleRowsToLines(
       subtitleRowsFromText(
         translatedLines
@@ -2008,9 +2027,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       return;
     }
 
-    const maxLineCount = Math.max(sourceLines.length, nextTranslatedLines.length);
+    const maxLineCount = Math.max(syncedOriginalLines.length, nextTranslatedLines.length);
     const merged = Array.from({ length: maxLineCount }, (_, index) => ({
-      original: sourceLines[index] || '',
+      original: syncedOriginalLines[index] || '',
       translated: nextTranslatedLines[index] || '',
     }));
 
@@ -2019,7 +2038,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     try {
       const updateResult = await Promise.resolve(
         onUpdateProject({
-          originalSubtitles: activeSourceText,
+          originalSubtitles: persistedOriginalText,
           translatedSubtitles: persistedTranslatedText,
           status: PROJECT_STATUS.COMPLETED,
         })
@@ -2044,7 +2063,6 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     isSavingTranslatedOutput,
     onUpdateProject,
     project,
-    sourceLines,
     t,
     translatedLines,
   ]);

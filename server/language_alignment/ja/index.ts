@@ -26,6 +26,22 @@ type JapaneseConfig = NoSpaceLanguageConfig & {
   minRunConfidence: number;
   minOverallConfidence: number;
   minOverallAlignedRatio: number;
+  alignmentMinAppliedRatio?: number;
+  alignmentMinAvgConfidence?: number;
+  cjkMergeSoftGapSec?: number;
+  cjkMergeHardGapSec?: number;
+  cjkMergeMaxPhraseChars?: number;
+  cjkMergeMaxPhraseDurationSec?: number;
+  cjkSplitMaxDurationSec?: number;
+  cjkSplitStrongPauseSec?: number;
+  cjkSplitClausePauseSec?: number;
+  cjkSplitMaxChars?: number;
+  cjkSplitMinCharsForBreak?: number;
+  cjkSparseMinTextLength?: number;
+  cjkSparseSingleWordMinTextLength?: number;
+  cjkSparseLowCoverageRatio?: number;
+  cjkSparseMediumCoverageRatio?: number;
+  cjkSparseMediumCoverageMaxWords?: number;
   localAsrPrompt?: string;
 };
 
@@ -117,6 +133,26 @@ const noSpace: NoSpaceLanguageModule = {
   config,
   matchesLanguage,
   matchesText: matchesJapaneseText,
+  getVariantDebug() {
+    return {
+      alignmentMinAppliedRatio: config.alignmentMinAppliedRatio ?? 0.22,
+      alignmentMinAvgConfidence: config.alignmentMinAvgConfidence ?? 0.5,
+      cjkMergeSoftGapSec: config.cjkMergeSoftGapSec ?? 0.11,
+      cjkMergeHardGapSec: config.cjkMergeHardGapSec ?? 0.24,
+      cjkMergeMaxPhraseChars: config.cjkMergeMaxPhraseChars ?? 12,
+      cjkMergeMaxPhraseDurationSec: config.cjkMergeMaxPhraseDurationSec ?? 1.7,
+      cjkSplitMaxDurationSec: config.cjkSplitMaxDurationSec ?? 2.45,
+      cjkSplitStrongPauseSec: config.cjkSplitStrongPauseSec ?? 0.34,
+      cjkSplitClausePauseSec: config.cjkSplitClausePauseSec ?? 0.18,
+      cjkSplitMaxChars: config.cjkSplitMaxChars ?? 14,
+      cjkSplitMinCharsForBreak: config.cjkSplitMinCharsForBreak ?? 6,
+      cjkSparseMinTextLength: config.cjkSparseMinTextLength ?? 4,
+      cjkSparseSingleWordMinTextLength: config.cjkSparseSingleWordMinTextLength ?? 4,
+      cjkSparseLowCoverageRatio: config.cjkSparseLowCoverageRatio ?? 0.38,
+      cjkSparseMediumCoverageRatio: config.cjkSparseMediumCoverageRatio ?? 0.55,
+      cjkSparseMediumCoverageMaxWords: config.cjkSparseMediumCoverageMaxWords ?? 3,
+    };
+  },
   normalizeAlignmentText: normalizeNoSpaceAlignmentText,
   fallbackSegmentLexicalUnits: genericFallbackSegmentNoSpaceLexicalUnits,
   shouldPreferStandaloneToken(token: string) {

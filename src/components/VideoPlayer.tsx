@@ -925,7 +925,11 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
       }
     };
 
-    void tryLoadPersistedTranslation();
+    // Prefer in-project edited translation text/timecodes when available.
+    // Persisted export files are only fallback for projects that have no inline translated subtitles.
+    if (inlineAiCues.length === 0) {
+      void tryLoadPersistedTranslation();
+    }
 
     return () => {
       cancelled = true;

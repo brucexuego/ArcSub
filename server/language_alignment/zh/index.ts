@@ -23,12 +23,28 @@ type ChineseConfig = NoSpaceLanguageConfig & {
   minRunConfidence: number;
   minOverallConfidence: number;
   minOverallAlignedRatio: number;
+  alignmentMinAppliedRatio?: number;
+  alignmentMinAvgConfidence?: number;
   progressLabel: string;
   maxRunGapSec: number;
   minRunTokenLength: number;
   maxContinuationGapSec: number;
   maxContinuationDurationSec: number;
   maxContinuationChars: number;
+  cjkMergeSoftGapSec?: number;
+  cjkMergeHardGapSec?: number;
+  cjkMergeMaxPhraseChars?: number;
+  cjkMergeMaxPhraseDurationSec?: number;
+  cjkSplitMaxDurationSec?: number;
+  cjkSplitStrongPauseSec?: number;
+  cjkSplitClausePauseSec?: number;
+  cjkSplitMaxChars?: number;
+  cjkSplitMinCharsForBreak?: number;
+  cjkSparseMinTextLength?: number;
+  cjkSparseSingleWordMinTextLength?: number;
+  cjkSparseLowCoverageRatio?: number;
+  cjkSparseMediumCoverageRatio?: number;
+  cjkSparseMediumCoverageMaxWords?: number;
   localAsrPrompt?: string;
 };
 
@@ -40,12 +56,28 @@ type ChineseConfigOverride = Partial<
     | 'minRunConfidence'
     | 'minOverallConfidence'
     | 'minOverallAlignedRatio'
+    | 'alignmentMinAppliedRatio'
+    | 'alignmentMinAvgConfidence'
     | 'progressLabel'
     | 'maxRunGapSec'
     | 'minRunTokenLength'
     | 'maxContinuationGapSec'
     | 'maxContinuationDurationSec'
     | 'maxContinuationChars'
+    | 'cjkMergeSoftGapSec'
+    | 'cjkMergeHardGapSec'
+    | 'cjkMergeMaxPhraseChars'
+    | 'cjkMergeMaxPhraseDurationSec'
+    | 'cjkSplitMaxDurationSec'
+    | 'cjkSplitStrongPauseSec'
+    | 'cjkSplitClausePauseSec'
+    | 'cjkSplitMaxChars'
+    | 'cjkSplitMinCharsForBreak'
+    | 'cjkSparseMinTextLength'
+    | 'cjkSparseSingleWordMinTextLength'
+    | 'cjkSparseLowCoverageRatio'
+    | 'cjkSparseMediumCoverageRatio'
+    | 'cjkSparseMediumCoverageMaxWords'
     | 'localAsrPrompt'
   >
 >;
@@ -248,9 +280,25 @@ const noSpace: NoSpaceLanguageModule = {
     const variantConfig = getVariantConfig(language, sampleText);
     return {
       variant,
+      alignmentMinAppliedRatio: variantConfig.alignmentMinAppliedRatio ?? 0.22,
+      alignmentMinAvgConfidence: variantConfig.alignmentMinAvgConfidence ?? 0.5,
       maxContinuationGapSec: variantConfig.maxContinuationGapSec,
       maxContinuationDurationSec: variantConfig.maxContinuationDurationSec,
       maxContinuationChars: variantConfig.maxContinuationChars,
+      cjkMergeSoftGapSec: variantConfig.cjkMergeSoftGapSec ?? 0.11,
+      cjkMergeHardGapSec: variantConfig.cjkMergeHardGapSec ?? 0.24,
+      cjkMergeMaxPhraseChars: variantConfig.cjkMergeMaxPhraseChars ?? 12,
+      cjkMergeMaxPhraseDurationSec: variantConfig.cjkMergeMaxPhraseDurationSec ?? 1.7,
+      cjkSplitMaxDurationSec: variantConfig.cjkSplitMaxDurationSec ?? 2.45,
+      cjkSplitStrongPauseSec: variantConfig.cjkSplitStrongPauseSec ?? 0.34,
+      cjkSplitClausePauseSec: variantConfig.cjkSplitClausePauseSec ?? 0.18,
+      cjkSplitMaxChars: variantConfig.cjkSplitMaxChars ?? 14,
+      cjkSplitMinCharsForBreak: variantConfig.cjkSplitMinCharsForBreak ?? 6,
+      cjkSparseMinTextLength: variantConfig.cjkSparseMinTextLength ?? 4,
+      cjkSparseSingleWordMinTextLength: variantConfig.cjkSparseSingleWordMinTextLength ?? 4,
+      cjkSparseLowCoverageRatio: variantConfig.cjkSparseLowCoverageRatio ?? 0.38,
+      cjkSparseMediumCoverageRatio: variantConfig.cjkSparseMediumCoverageRatio ?? 0.55,
+      cjkSparseMediumCoverageMaxWords: variantConfig.cjkSparseMediumCoverageMaxWords ?? 3,
     };
   },
   normalizeAlignmentText: normalizeNoSpaceAlignmentText,

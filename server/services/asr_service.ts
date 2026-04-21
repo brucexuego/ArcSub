@@ -545,7 +545,11 @@ export class AsrService {
         prompt: input.options.prompt,
         segmentation: input.options.segmentation,
         wordAlignment: input.options.wordAlignment,
-        extractStructuredTranscript: this.extractStructuredTranscript.bind(this),
+        extractStructuredTranscript: (transcript, transcriptLanguage, extractOptions = {}) =>
+          this.extractStructuredTranscript(transcript, transcriptLanguage, {
+            ...extractOptions,
+            preferAlignmentFirstNoSpace: Boolean(input.options.wordAlignment),
+          }),
         toFiniteNumber: this.toFiniteNumber.bind(this),
       });
     }
@@ -604,7 +608,7 @@ export class AsrService {
     const localProfile = localModel ? resolveLocalAsrProfile(localModel) : null;
     const useLocalProvider = Boolean(localModel);
     const localModelPath = localModel ? getLocalModelInstallDir(localModel) : undefined;
-    const allowVadWindowedTranscription = !(useLocalProvider && localModel?.runtime === 'openvino-whisper-node');
+    const allowVadWindowedTranscription = true;
     const effectivePrompt = useLocalProvider
       ? this.buildEffectiveLocalAsrPrompt(language, prompt)
       : String(prompt || '').trim();
@@ -774,8 +778,11 @@ export class AsrService {
     }
 
     let timestampsSynthesized = false;
-    if (
+    const allowSyntheticSegmentationTimestamps =
       effectiveSegmentation &&
+      (!effectiveWordAlignment || !this.isLanguageWithoutSpaces(language));
+    if (
+      allowSyntheticSegmentationTimestamps &&
       Array.isArray(result?.chunks) &&
       result.chunks.length > 0 &&
       !this.hasUsableChunkTimestamps(result.chunks)
@@ -831,8 +838,20 @@ export class AsrService {
           onProgress,
           signal,
         });
-        alignmentDiagnostics = aligned.diagnostics;
+        let alignmentAcceptDecision = { accepted: true, reason: null as string | null };
         if (aligned.applied && aligned.word_segments.length > 0) {
+          alignmentAcceptDecision = this.evaluateNoSpaceAlignmentQualityGate(aligned.diagnostics, language);
+        }
+        alignmentDiagnostics =
+          aligned.applied && !alignmentAcceptDecision.accepted
+            ? {
+                ...aligned.diagnostics,
+                applied: false,
+                downgradedByQualityGate: true,
+                qualityGateReason: alignmentAcceptDecision.reason,
+              }
+            : aligned.diagnostics;
+        if (aligned.applied && aligned.word_segments.length > 0 && alignmentAcceptDecision.accepted) {
           result.segments = aligned.segments;
           result.word_segments = aligned.word_segments;
           result.chunks = this.buildDisplayChunksFromSegments(result.segments, language);
@@ -842,6 +861,10 @@ export class AsrService {
           } else {
             onProgress(`Forced alignment applied (${aligned.diagnostics.alignedSegmentCount} spans).`);
           }
+        } else if (aligned.applied && !alignmentAcceptDecision.accepted) {
+          onProgress(
+            `Forced alignment quality gate rejected CJK alignment (${alignmentAcceptDecision.reason || 'insufficient_quality'}), keeping provider timestamps.`
+          );
         } else if (aligned.diagnostics.attemptedSegmentCount > 0) {
           onProgress('Forced alignment did not improve timing, keeping provider timestamps.');
         }
@@ -981,7 +1004,11 @@ export class AsrService {
       options,
       {
         createAbortSignalWithTimeout: this.createAbortSignalWithTimeout.bind(this),
-        extractStructuredTranscript: this.extractStructuredTranscript.bind(this),
+        extractStructuredTranscript: (transcript, transcriptLanguage, extractOptions = {}) =>
+          this.extractStructuredTranscript(transcript, transcriptLanguage, {
+            ...extractOptions,
+            preferAlignmentFirstNoSpace: Boolean(options.wordAlignment),
+          }),
         disableWordAlignment: this.disableWordAlignment.bind(this),
       },
       signal
@@ -1271,6 +1298,44 @@ export class AsrService {
     return LanguageAlignmentRegistry.getNoSpaceModule(language, sampleText)?.config.segmenterLocale || getSegmenterLocale(language, 'ja');
   }
 
+  private static getNoSpaceVariantDebug(language?: string, sampleText?: string) {
+    return LanguageAlignmentRegistry.getNoSpaceModule(language, sampleText)?.getVariantDebug?.(language, sampleText) || null;
+  }
+
+  private static getNoSpaceVariantNumber(
+    language: string | undefined,
+    sampleText: string | undefined,
+    key: string,
+    fallback: number
+  ) {
+    const variantDebug = this.getNoSpaceVariantDebug(language, sampleText);
+    const candidate = Number((variantDebug as Record<string, unknown> | null)?.[key]);
+    return Number.isFinite(candidate) ? candidate : fallback;
+  }
+
+  private static evaluateNoSpaceAlignmentQualityGate(diagnostics: any, language?: string) {
+    if (!this.isLanguageWithoutSpaces(language)) {
+      return { accepted: true, reason: null as string | null };
+    }
+
+    const attempted = this.toFiniteNumber(diagnostics?.attemptedSegmentCount, 0);
+    const aligned = this.toFiniteNumber(diagnostics?.alignedSegmentCount, 0);
+    const avgConfidence = this.toFiniteNumber(diagnostics?.avgConfidence, Number.NaN);
+    const alignedRatio = attempted > 0 ? aligned / attempted : 0;
+
+    const minAlignedRatio = this.getNoSpaceVariantNumber(language, undefined, 'alignmentMinAppliedRatio', 0.22);
+    const minAvgConfidence = this.getNoSpaceVariantNumber(language, undefined, 'alignmentMinAvgConfidence', 0.5);
+
+    if (attempted >= 3 && alignedRatio < minAlignedRatio) {
+      return { accepted: false, reason: `aligned_ratio_below_${minAlignedRatio}` };
+    }
+    if (Number.isFinite(avgConfidence) && avgConfidence < minAvgConfidence) {
+      return { accepted: false, reason: `avg_confidence_below_${minAvgConfidence}` };
+    }
+
+    return { accepted: true, reason: null as string | null };
+  }
+
   private static fallbackSegmentNoSpaceLexicalUnits(text: string, language?: string) {
     return (
       LanguageAlignmentRegistry.getNoSpaceModule(language, text)?.fallbackSegmentLexicalUnits(text) ||
@@ -1480,16 +1545,21 @@ export class AsrService {
     language?: string
   ) {
     const normalizedText = normalizeNoSpaceAlignmentText(text);
-    if (!normalizedText || normalizedText.length < 4) return false;
+    const minTextLength = this.getNoSpaceVariantNumber(language, normalizedText, 'cjkSparseMinTextLength', 4);
+    const singleWordMinTextLength = this.getNoSpaceVariantNumber(language, normalizedText, 'cjkSparseSingleWordMinTextLength', 4);
+    const lowCoverageRatio = this.getNoSpaceVariantNumber(language, normalizedText, 'cjkSparseLowCoverageRatio', 0.38);
+    const mediumCoverageRatio = this.getNoSpaceVariantNumber(language, normalizedText, 'cjkSparseMediumCoverageRatio', 0.55);
+    const mediumCoverageMaxWords = this.getNoSpaceVariantNumber(language, normalizedText, 'cjkSparseMediumCoverageMaxWords', 3);
+    if (!normalizedText || normalizedText.length < minTextLength) return false;
     if (!this.shouldTreatTextAsNoSpaceScript(normalizedText, language)) return false;
 
     const nativeText = normalizeNoSpaceAlignmentText(this.joinWordSegments(words, language));
     if (!nativeText) return true;
 
     const coverageRatio = nativeText.length / Math.max(1, normalizedText.length);
-    if (words.length <= 1 && normalizedText.length >= 4) return true;
-    if (coverageRatio < 0.38) return true;
-    if (coverageRatio < 0.55 && words.length <= 3) return true;
+    if (words.length <= 1 && normalizedText.length >= singleWordMinTextLength) return true;
+    if (coverageRatio < lowCoverageRatio) return true;
+    if (coverageRatio < mediumCoverageRatio && words.length <= mediumCoverageMaxWords) return true;
     return false;
   }
 
@@ -1499,11 +1569,12 @@ export class AsrService {
       return [segment];
     }
 
-    const maxDurationSec = 2.45;
-    const strongPauseSec = 0.34;
-    const clausePauseSec = 0.18;
-    const maxChars = 14;
-    const minCharsForBreak = 6;
+    const sampleText = String(segment?.text || words.map((word) => word?.text || '').join(''));
+    const maxDurationSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkSplitMaxDurationSec', 2.45);
+    const strongPauseSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkSplitStrongPauseSec', 0.34);
+    const clausePauseSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkSplitClausePauseSec', 0.18);
+    const maxChars = this.getNoSpaceVariantNumber(language, sampleText, 'cjkSplitMaxChars', 14);
+    const minCharsForBreak = this.getNoSpaceVariantNumber(language, sampleText, 'cjkSplitMinCharsForBreak', 6);
     const segments: AsrStructuredSegment[] = [];
     let bufferStart = 0;
 
@@ -1597,10 +1668,11 @@ export class AsrService {
       return { words: prepared, appliedCjkMerging: false, diagnostics };
     }
 
-    const softGapSec = 0.11;
-    const hardGapSec = 0.24;
-    const maxPhraseChars = 12;
-    const maxPhraseDurationSec = 1.7;
+    const sampleText = this.joinWordSegments(prepared, language);
+    const softGapSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkMergeSoftGapSec', 0.11);
+    const hardGapSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkMergeHardGapSec', 0.24);
+    const maxPhraseChars = this.getNoSpaceVariantNumber(language, sampleText, 'cjkMergeMaxPhraseChars', 12);
+    const maxPhraseDurationSec = this.getNoSpaceVariantNumber(language, sampleText, 'cjkMergeMaxPhraseDurationSec', 1.7);
     const merged: AsrWordSegment[] = [];
     let buffer: AsrWordSegment[] = [];
 
@@ -2164,6 +2236,7 @@ export class AsrService {
     language?: string,
     options: {
       enableSparseNoSpaceNativeRecovery?: boolean;
+      preferAlignmentFirstNoSpace?: boolean;
     } = {}
   ): AsrStructuredTranscript {
     const segmentLike = Array.isArray(data?.segments)
@@ -2190,6 +2263,8 @@ export class AsrService {
         lexicalProjectionAppliedSegments: 0,
         splitSegmentCount: 0,
         sparseNativeCoverageRecoveredSegments: 0,
+        alignmentFirstMode: false,
+        heuristicBypassedSegments: 0,
         usedIntlSegmenter: false,
         segmenterLocale: this.getNoSpaceSegmenterLocale(language),
         languagePackKey: null as string | null,
@@ -2239,7 +2314,14 @@ export class AsrService {
                 .filter(Boolean) as AsrWordSegment[]
             : [];
           cjkWordDiagnostics.nativeWordCount += rawWords.length;
+          const alignmentFirstNoSpace =
+            Boolean(options.preferAlignmentFirstNoSpace) &&
+            this.shouldTreatTextAsNoSpaceScript(normalizedText || text, language);
+          if (alignmentFirstNoSpace) {
+            cjkWordDiagnostics.alignmentFirstMode = true;
+          }
           const sparseNativeRecovered =
+            !alignmentFirstNoSpace &&
             options.enableSparseNoSpaceNativeRecovery &&
             rawWords.length > 0 &&
             this.shouldRecoverSparseNoSpaceNativeWords(rawWords, normalizedText, language);
@@ -2255,33 +2337,42 @@ export class AsrService {
             }
           }
           const baseWords = sparseNativeRecovered ? synthesizedWords : rawWords.length > 0 ? rawWords : synthesizedWords;
-          const { words: mergedWords, diagnostics, appliedCjkMerging } = this.mergeCjkWordSegments(baseWords, language);
-          if (appliedCjkMerging) {
-            cjkMergeApplied = true;
-            cjkWordDiagnostics.rawWordCount += diagnostics.rawWordCount;
-            cjkWordDiagnostics.mergedWordCount += diagnostics.mergedWordCount;
-            cjkWordDiagnostics.droppedWordCount += diagnostics.droppedWordCount;
-            cjkWordDiagnostics.replacementCharCount += diagnostics.replacementCharCount;
-            cjkWordDiagnostics.rawSingleCharCount += diagnostics.rawSingleCharCount;
-            cjkWordDiagnostics.mergedSingleCharCount += diagnostics.mergedSingleCharCount;
-            cjkWordDiagnostics.punctuationOnlyCount += diagnostics.punctuationOnlyCount;
-          }
+          let words = baseWords;
+          let appliedCjkMerging = false;
+          let lexicalProjectionApplied = false;
+          if (!alignmentFirstNoSpace) {
+            const { words: mergedWords, diagnostics, appliedCjkMerging: mergedApplied } = this.mergeCjkWordSegments(baseWords, language);
+            appliedCjkMerging = mergedApplied;
+            if (appliedCjkMerging) {
+              cjkMergeApplied = true;
+              cjkWordDiagnostics.rawWordCount += diagnostics.rawWordCount;
+              cjkWordDiagnostics.mergedWordCount += diagnostics.mergedWordCount;
+              cjkWordDiagnostics.droppedWordCount += diagnostics.droppedWordCount;
+              cjkWordDiagnostics.replacementCharCount += diagnostics.replacementCharCount;
+              cjkWordDiagnostics.rawSingleCharCount += diagnostics.rawSingleCharCount;
+              cjkWordDiagnostics.mergedSingleCharCount += diagnostics.mergedSingleCharCount;
+              cjkWordDiagnostics.punctuationOnlyCount += diagnostics.punctuationOnlyCount;
+            }
 
-          const lexicalProjection = this.projectNoSpaceLexicalWordSegments(
-            mergedWords,
-            normalizedText || this.joinWordSegments(mergedWords, language),
-            language
-          );
-          if (lexicalProjection.appliedLexicalProjection) {
-            cjkMergeApplied = true;
+            const lexicalProjection = this.projectNoSpaceLexicalWordSegments(
+              mergedWords,
+              normalizedText || this.joinWordSegments(mergedWords, language),
+              language
+            );
+            lexicalProjectionApplied = lexicalProjection.appliedLexicalProjection;
+            if (lexicalProjectionApplied) {
+              cjkMergeApplied = true;
+            }
+            cjkWordDiagnostics.lexicalWordCount += lexicalProjection.diagnostics.lexicalWordCount;
+            cjkWordDiagnostics.lexicalSingleCharCount += lexicalProjection.diagnostics.lexicalSingleCharCount;
+            cjkWordDiagnostics.lexicalMismatchCount += lexicalProjection.diagnostics.lexicalMismatchCount;
+            cjkWordDiagnostics.lexicalProjectionAppliedSegments += lexicalProjection.diagnostics.lexicalProjectionAppliedSegments;
+            cjkWordDiagnostics.usedIntlSegmenter = cjkWordDiagnostics.usedIntlSegmenter || lexicalProjection.diagnostics.usedIntlSegmenter;
+            cjkWordDiagnostics.segmenterLocale = lexicalProjection.diagnostics.locale || cjkWordDiagnostics.segmenterLocale;
+            words = lexicalProjection.words;
+          } else if (rawWords.length > 0) {
+            cjkWordDiagnostics.heuristicBypassedSegments += 1;
           }
-          cjkWordDiagnostics.lexicalWordCount += lexicalProjection.diagnostics.lexicalWordCount;
-          cjkWordDiagnostics.lexicalSingleCharCount += lexicalProjection.diagnostics.lexicalSingleCharCount;
-          cjkWordDiagnostics.lexicalMismatchCount += lexicalProjection.diagnostics.lexicalMismatchCount;
-          cjkWordDiagnostics.lexicalProjectionAppliedSegments += lexicalProjection.diagnostics.lexicalProjectionAppliedSegments;
-          cjkWordDiagnostics.usedIntlSegmenter = cjkWordDiagnostics.usedIntlSegmenter || lexicalProjection.diagnostics.usedIntlSegmenter;
-          cjkWordDiagnostics.segmenterLocale = lexicalProjection.diagnostics.locale || cjkWordDiagnostics.segmenterLocale;
-          const words = lexicalProjection.words;
           const projectedText = words.length > 0 ? this.joinWordSegments(words, language) : '';
           const normalizedProjected = this.normalizeNoSpaceAlignmentText(projectedText);
           const normalizedSegment = this.normalizeNoSpaceAlignmentText(normalizedText);
@@ -2289,11 +2380,13 @@ export class AsrService {
             words.length > 0 &&
             (
               sparseNativeRecovered ||
-              lexicalProjection.appliedLexicalProjection ||
+              lexicalProjectionApplied ||
               (appliedCjkMerging && normalizedProjected.length > 0 && normalizedProjected !== normalizedSegment)
             );
           const resolvedText = this.normalizeDisplayText(
-            preferProjectedText
+            alignmentFirstNoSpace
+              ? (normalizedText || projectedText)
+              : preferProjectedText
               ? (projectedText || normalizedText)
               : (normalizedText || projectedText),
             language
@@ -2305,7 +2398,7 @@ export class AsrService {
             text: resolvedText,
             words: words.length > 0 ? words : undefined,
           } satisfies AsrStructuredSegment;
-          const splitSegments = this.splitNoSpaceSegmentByWords(baseSegment, language);
+          const splitSegments = alignmentFirstNoSpace ? [baseSegment] : this.splitNoSpaceSegmentByWords(baseSegment, language);
           if (splitSegments.length > 1) {
             cjkMergeApplied = true;
             cjkWordDiagnostics.splitSegmentCount += splitSegments.length - 1;
@@ -2330,13 +2423,15 @@ export class AsrService {
           chunks: chunks.length > 0 ? chunks : this.buildChunksFromSegments(mappedSegments),
           segments: mappedSegments,
           word_segments: wordSegments,
-          debug: cjkMergeApplied
+          debug: (cjkMergeApplied || cjkWordDiagnostics.alignmentFirstMode)
             ? {
                 cjkWordDiagnostics: {
                   ...cjkWordDiagnostics,
                   mergeApplied: cjkMergeApplied,
                   chunkSource:
-                    wordSegments.length > 0
+                    cjkWordDiagnostics.alignmentFirstMode
+                      ? 'alignment_first_segments'
+                      : wordSegments.length > 0
                       ? cjkWordDiagnostics.lexicalProjectionAppliedSegments > 0
                         ? 'lexical_cjk_segments'
                         : 'merged_cjk_segments'

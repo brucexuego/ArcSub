@@ -29,7 +29,6 @@ export interface ProviderTranslationProfile {
   modelFamily?: string;
   runtimeFamily?: string;
   confidence: ProviderTranslationProfileConfidence;
-  recommendedModels?: string[];
   officialRecommendations: ProviderTranslationRecommendationBundle;
   arcsubDefaults: ProviderTranslationArcSubDefaults;
 }
@@ -77,7 +76,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'claude',
     runtimeFamily: 'anthropic-messages',
     confidence: 'official_translation_specific',
-    recommendedModels: ['claude-3-5-sonnet-latest'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: [
@@ -104,7 +102,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'command-a-translate',
     runtimeFamily: 'cohere-chat',
     confidence: 'official_translation_specific',
-    recommendedModels: ['command-a-translate'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: [
@@ -127,7 +124,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'gpt',
     runtimeFamily: 'openai-chat',
     confidence: 'official_general_only',
-    recommendedModels: ['gpt-4o-mini'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: [
@@ -154,7 +150,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'gemini',
     runtimeFamily: 'gemini-native',
     confidence: 'official_general_only',
-    recommendedModels: ['gemini-2.5-flash'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: [
@@ -181,7 +176,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'mistral',
     runtimeFamily: 'mistral-chat',
     confidence: 'official_general_only',
-    recommendedModels: ['mistral-small-latest'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: ['https://docs.mistral.ai/capabilities/completion/prompting_capabilities'],
@@ -201,7 +195,6 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     modelFamily: 'grok',
     runtimeFamily: 'xai-chat',
     confidence: 'official_general_only',
-    recommendedModels: ['grok-4-fast-reasoning'],
     officialRecommendations: {
       verifiedOn: '2026-04-15',
       sourceLinks: [
