@@ -1,6 +1,7 @@
 import express from 'express';
 import { persistTranslationArtifacts, readProjectSourceAsset } from '../text_utils.js';
 import { PROJECT_STATUS } from '../../../src/project_status.js';
+import { buildLegacyProcessingEvent, buildRunFailureIssue } from './run_progress_events.js';
 
 export interface TranslationRouteDeps {
   writeAsrLog: (message: string, payload?: unknown, level?: 'log' | 'error') => void;
@@ -63,7 +64,8 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       const projects = await ProjectManager.getAllProjects();
       const project = projects.find((p) => p.id === projectId);
       if (!project) {
-        res.write(`data: ${JSON.stringify({ error: 'Project not found.' })}\n\n`);
+        const error = 'Project not found.';
+        res.write(`data: ${JSON.stringify({ error, errorIssue: buildRunFailureIssue('project.not_found', error, 'request') })}\n\n`);
         return res.end();
       }
 
@@ -78,7 +80,8 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       }
 
       if (!sourceText) {
-        res.write(`data: ${JSON.stringify({ error: 'No source text available for translation.' })}\n\n`);
+        const error = 'No source text available for translation.';
+        res.write(`data: ${JSON.stringify({ error, errorIssue: buildRunFailureIssue('translation.source.empty', error, 'request') })}\n\n`);
         return res.end();
       }
 
@@ -109,7 +112,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         (msg) => {
           if (clientDisconnected || res.writableEnded) return;
           writeAsrLog(`[TR ${requestId}] ${msg}`);
-          res.write(`data: ${JSON.stringify({ status: 'processing', message: msg })}\n\n`);
+          res.write(`data: ${JSON.stringify({ status: 'processing', message: msg, event: buildLegacyProcessingEvent('translation', msg) })}\n\n`);
         }
       );
 
@@ -146,7 +149,18 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         return;
       }
       writeAsrLog(`[TR ${requestId}] completed`, result.debug || {});
-      res.write(`data: ${JSON.stringify({ status: 'completed', result: { ...result, exports: { hasTimecodes: artifacts.hasTimecodes } } })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        status: 'completed',
+        event: {
+          status: 'completed',
+          code: 'run.completed',
+          stage: 'complete',
+          progressHint: 100,
+          message: 'Translation completed.',
+          data: { kind: 'translation' },
+        },
+        result: { ...result, exports: { hasTimecodes: artifacts.hasTimecodes } },
+      })}\n\n`);
       return res.end();
     } catch (error: any) {
       if (clientDisconnected && isAbortLikeError(error)) {
@@ -155,7 +169,11 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
       }
       if (clientDisconnected || res.writableEnded) return;
       writeAsrLog(`[TR ${requestId}] failed`, error?.message || error, 'error');
-      res.write(`data: ${JSON.stringify({ error: error?.message || 'Translation failed.' })}\n\n`);
+      const errorMessage = error?.message || 'Translation failed.';
+      res.write(`data: ${JSON.stringify({
+        error: errorMessage,
+        errorIssue: buildRunFailureIssue('translation.request.failed', errorMessage),
+      })}\n\n`);
       return res.end();
     } finally {
       if (clientDisconnected && modelId && modelId.startsWith('local_translate_')) {

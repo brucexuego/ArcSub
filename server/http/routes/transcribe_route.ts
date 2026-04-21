@@ -1,4 +1,5 @@
 import express from 'express';
+import { buildLegacyProcessingEvent, buildRunFailureIssue } from './run_progress_events.js';
 
 export interface TranscribeRouteDeps {
   writeAsrLog: (message: string, payload?: unknown, level?: 'log' | 'error') => void;
@@ -126,7 +127,7 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
       (msg) => {
         if (clientDisconnected || res.writableEnded) return;
         writeAsrLog(`[ASR ${requestId}] ${msg}`);
-        res.write(`data: ${JSON.stringify({ status: 'processing', message: msg })}\n\n`);
+        res.write(`data: ${JSON.stringify({ status: 'processing', message: msg, event: buildLegacyProcessingEvent('asr', msg) })}\n\n`);
       },
       abortController.signal
       ))
@@ -134,7 +135,18 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
         cleanup();
         if (clientDisconnected || res.writableEnded) return;
         writeAsrLog(`[ASR ${requestId}] completed`, result?.debug || {});
-        res.write(`data: ${JSON.stringify({ status: 'completed', result })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          status: 'completed',
+          event: {
+            status: 'completed',
+            code: 'run.completed',
+            stage: 'complete',
+            progressHint: 100,
+            message: 'Transcription completed.',
+            data: { kind: 'asr' },
+          },
+          result,
+        })}\n\n`);
         res.end();
       })
       .catch((error) => {
@@ -145,7 +157,11 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
         }
         if (clientDisconnected || res.writableEnded) return;
         writeAsrLog(`[ASR ${requestId}] failed`, error?.message || error, 'error');
-        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        const errorMessage = error?.message || 'Transcription failed.';
+        res.write(`data: ${JSON.stringify({
+          error: errorMessage,
+          errorIssue: buildRunFailureIssue('asr.request.failed', errorMessage),
+        })}\n\n`);
         res.end();
       });
   });

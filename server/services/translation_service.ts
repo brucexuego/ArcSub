@@ -57,6 +57,7 @@ import {
   type TranslationQualityMode,
 } from './llm/orchestrators/translation_quality_policy.js';
 import type { ResolvedCloudTranslateProvider } from './cloud_translate_provider.js';
+import type { RunIssue } from '../../shared/run_monitor.js';
 
 type TranslateProvider = CloudTranslateProvider | 'openvino-local';
 
@@ -146,14 +147,42 @@ export interface TranslationDebugInfo {
     localBaselineTaskFamily?: string | null;
     localFallbackBaseline?: boolean;
   };
+  quality?: {
+    lineCountMatch: boolean;
+    targetLanguageMatch: boolean;
+    passThroughRisk: 'low' | 'medium' | 'high';
+    repetitionRisk: 'low' | 'medium' | 'high';
+    markerPreservation?: 'ok' | 'partial' | 'lost';
+    strictRetryTriggered?: boolean;
+  } | null;
   stats: {
     outputLineCount: number;
     outputCharCount: number;
   };
+  timing?: {
+    elapsedMs?: number | null;
+    elapsedSec?: number | null;
+    providerMs?: number | null;
+    providerSec?: number | null;
+    repairMs?: number | null;
+    repairSec?: number | null;
+    qualityRetryMs?: number | null;
+    qualityRetrySec?: number | null;
+  } | null;
+  diagnostics?: {
+    qualityIssueCodes?: string[];
+    runtimeSource?: 'cloud' | 'local';
+  } | null;
   warnings: string[];
+  warningIssues?: RunIssue[];
   errors: {
     request: string | null;
   };
+  errorIssues?: RunIssue[];
+  artifacts?: {
+    hasTimecodes: boolean;
+    translationAssetNames?: string[];
+  } | null;
 }
 
 export interface TranslationResult {
@@ -2140,6 +2169,129 @@ export class TranslationService {
     return merged;
   }
 
+  private static getPassThroughRisk(warnings: string[]) {
+    if (warnings.includes('quality_issue_pass_through')) return 'high' as const;
+    if (warnings.includes('quality_retry_triggered')) return 'medium' as const;
+    return 'low' as const;
+  }
+
+  private static getRepetitionRisk(warnings: string[]) {
+    if (warnings.includes('quality_issue_repetition_loop') || warnings.includes('quality_issue_adjacent_duplicate')) {
+      return 'high' as const;
+    }
+    return 'low' as const;
+  }
+
+  private static getMarkerPreservation(
+    sourceHasStructuredPrefixes: boolean,
+    warnings: string[]
+  ): 'ok' | 'partial' | 'lost' | undefined {
+    if (!sourceHasStructuredPrefixes) return undefined;
+    return warnings.includes('quality_issue_marker_loss') ? 'lost' : 'ok';
+  }
+
+  private static buildTranslationQualitySummary(input: {
+    sourceLineCount: number;
+    sourceHasStructuredPrefixes: boolean;
+    output: string;
+    warnings: string[];
+    qualityRetryCount: number;
+  }) {
+    const outputLineCount = this.normalizeComparisonText(input.output).length;
+    return {
+      lineCountMatch: input.sourceLineCount <= 1 ? true : outputLineCount >= input.sourceLineCount,
+      targetLanguageMatch: !input.warnings.includes('quality_issue_target_lang_mismatch'),
+      passThroughRisk: this.getPassThroughRisk(input.warnings),
+      repetitionRisk: this.getRepetitionRisk(input.warnings),
+      markerPreservation: this.getMarkerPreservation(input.sourceHasStructuredPrefixes, input.warnings),
+      strictRetryTriggered: input.qualityRetryCount > 0,
+    };
+  }
+
+  private static buildTranslationWarningIssues(warnings: string[]): RunIssue[] {
+    const qualityInfoCodes = new Set([
+      'strict_retry_applied',
+      'local_strict_retry_applied',
+      'local_batch_translation_applied',
+      'local_recursive_chunk_split_applied',
+      'local_single_line_retry_applied',
+      'translategemma_batch_translation_applied',
+      'translategemma_recursive_chunk_split_applied',
+      'translategemma_single_line_retry_applied',
+      'residual_line_retry_applied',
+      'line_safe_alignment_applied',
+      'line_index_rebind_applied',
+      'line_json_map_repair_applied',
+      'line_json_map_pre_split_applied',
+      'line_json_map_policy_split',
+    ]);
+    const qualityWarningCodes = new Set([
+      'quality_retry_triggered',
+      'post_repair_quality_retry_triggered',
+      'residual_line_retry_triggered',
+      'line_json_map_partial_fallback',
+      'line_json_map_policy_single_line_fallback',
+      'line_json_map_policy_source_fallback',
+      'line_json_map_repair_disabled',
+      'line_alignment_repair_failed',
+      'local_repetition_loop_detected',
+      'cloud_context_parse_failed',
+      'cloud_context_chunk_split',
+      'cloud_context_split_depth_exhausted',
+      'cloud_context_single_line_fallback',
+      'quality_issue_target_lang_mismatch',
+      'quality_issue_pass_through',
+      'quality_issue_empty_output',
+      'quality_issue_line_count_loss',
+      'quality_issue_marker_loss',
+      'quality_issue_repetition_loop',
+      'quality_issue_adjacent_duplicate',
+      'quality_issue_zh_tw_naturalization_needed',
+    ]);
+    const providerInfoCodes = new Set(['transient_retry_applied']);
+    const providerWarningCodes = new Set(['provider_fallback_applied']);
+
+    return warnings.map((code) => {
+      if (qualityInfoCodes.has(code)) {
+        return { code, severity: 'info', area: 'quality' } satisfies RunIssue;
+      }
+      if (qualityWarningCodes.has(code)) {
+        return { code, severity: 'warning', area: 'quality' } satisfies RunIssue;
+      }
+      if (providerInfoCodes.has(code)) {
+        return { code, severity: 'info', area: 'provider' } satisfies RunIssue;
+      }
+      if (providerWarningCodes.has(code)) {
+        return { code, severity: 'warning', area: 'provider' } satisfies RunIssue;
+      }
+      switch (code) {
+        case 'quality_issue_target_lang_mismatch':
+        case 'quality_issue_pass_through':
+        case 'quality_issue_empty_output':
+        case 'quality_issue_line_count_loss':
+        case 'quality_issue_marker_loss':
+        case 'quality_issue_repetition_loop':
+        case 'quality_issue_adjacent_duplicate':
+        case 'quality_issue_zh_tw_naturalization_needed':
+          return { code, severity: 'warning', area: 'quality' } satisfies RunIssue;
+        default:
+          return { code, severity: 'warning', area: 'provider' } satisfies RunIssue;
+      }
+    });
+  }
+
+  private static buildTranslationErrorIssues(errors: { request: string | null }): RunIssue[] {
+    if (!errors.request) return [];
+    return [
+      {
+        code: 'translation.request.failed',
+        severity: 'error',
+        area: 'provider',
+        technicalMessage: errors.request,
+      },
+    ];
+  }
+
   private static shouldRetryForTranslationQuality(
     sourceText: string,
     translatedText: string,
@@ -3140,12 +3292,18 @@ export class TranslationService {
     qualityRetryCount: number;
     strictRetrySucceeded: boolean;
     output: string;
+    elapsedMs: number;
+    qualityRetryMs: number | null;
   }): TranslationDebugInfo {
     const qualityMode = this.resolveTranslationQualityModeForRequest({
       promptTemplateId: input.promptTemplateId,
       prompt: input.prompt,
       enableJsonLineRepair: input.enableJsonLineRepair,
     });
+    const warnings = input.orchestrated.warnings;
+    const errors = {
+      request: input.orchestrated.lastError,
+    };
     return {
       requested: {
         sourceLang: input.sourceLang ? String(input.sourceLang) : undefined,
@@ -3185,13 +3343,38 @@ export class TranslationService {
         cloudContextChunkCount: input.orchestrated.cloudContextChunkCount,
         cloudContextFallbackCount: input.orchestrated.cloudContextFallbackCount,
       },
+      quality: this.buildTranslationQualitySummary({
+        sourceLineCount: input.orchestrated.sourceLineCount,
+        sourceHasStructuredPrefixes: input.orchestrated.sourceHasStructuredPrefixes,
+        output: input.output,
+        warnings,
+        qualityRetryCount: input.qualityRetryCount,
+      }),
       stats: {
         outputLineCount: input.output.split('\n').length,
         outputCharCount: input.output.length,
       },
-      warnings: input.orchestrated.warnings,
-      errors: {
-        request: input.orchestrated.lastError,
+      timing: {
+        elapsedMs: input.elapsedMs,
+        elapsedSec: Number((input.elapsedMs / 1000).toFixed(3)),
+        providerMs: null,
+        providerSec: null,
+        repairMs: null,
+        repairSec: null,
+        qualityRetryMs: input.qualityRetryMs,
+        qualityRetrySec:
+          typeof input.qualityRetryMs === 'number' ? Number((input.qualityRetryMs / 1000).toFixed(3)) : null,
+      },
+      diagnostics: {
+        qualityIssueCodes: warnings.filter((warning) => warning.startsWith('quality_issue_')),
+        runtimeSource: 'cloud',
+      },
+      warnings,
+      warningIssues: this.buildTranslationWarningIssues(warnings),
+      errors,
+      errorIssues: this.buildTranslationErrorIssues(errors),
+      artifacts: {
+        hasTimecodes: false,
       },
     };
   }
@@ -3216,6 +3399,7 @@ export class TranslationService {
     orchestrated: CloudTranslationOrchestratorResult;
     qualityRetryCount: number;
     strictRetrySucceeded: boolean;
+    qualityRetryMs: number | null;
   }> {
     const qualityMode = this.resolveTranslationQualityModeForRequest({
       promptTemplateId: input.promptTemplateId,
@@ -3227,6 +3411,7 @@ export class TranslationService {
         orchestrated,
         qualityRetryCount: 0,
         strictRetrySucceeded: false,
+        qualityRetryMs: null,
       };
     }
 
@@ -3250,11 +3435,13 @@ export class TranslationService {
         },
         qualityRetryCount: 0,
         strictRetrySucceeded: false,
+        qualityRetryMs: null,
       };
     }
 
     addWarning(initialWarnings, 'quality_retry_triggered');
     onProgress?.('Detected untranslated, repetitive, or target-language-mismatched output, retrying with stricter prompt...');
+    const retryStart = Date.now();
 
     try {
       onProgress?.(`Retrying translation provider (${resolvedProvider.provider}) with stricter prompt...`);
@@ -3290,6 +3477,7 @@ export class TranslationService {
           },
           qualityRetryCount: 1,
           strictRetrySucceeded: false,
+          qualityRetryMs: Date.now() - retryStart,
         };
       }
 
@@ -3311,6 +3499,7 @@ export class TranslationService {
         },
         qualityRetryCount: 1,
         strictRetrySucceeded: true,
+        qualityRetryMs: Date.now() - retryStart,
       };
     } catch {
       return {
@@ -3320,6 +3509,7 @@ export class TranslationService {
         },
         qualityRetryCount: 1,
         strictRetrySucceeded: false,
+        qualityRetryMs: Date.now() - retryStart,
       };
     }
   }
@@ -3341,6 +3531,7 @@ export class TranslationService {
     model: { key?: string; model?: string },
     onProgress?: TranslateProgressFn
   ): Promise<TranslationResult> {
+    const startedAt = Date.now();
     const initialOrchestrated = await runCloudTranslationOrchestrator(
       this.buildCloudTranslationOrchestratorInput(input, resolvedProvider, model),
       this.buildCloudTranslationOrchestratorDeps(),
@@ -3375,6 +3566,8 @@ export class TranslationService {
         qualityRetryCount: qualityRetried.qualityRetryCount,
         strictRetrySucceeded: qualityRetried.strictRetrySucceeded,
         output,
+        elapsedMs: Date.now() - startedAt,
+        qualityRetryMs: qualityRetried.qualityRetryMs,
       }),
     };
   }

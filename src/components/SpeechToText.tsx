@@ -7,12 +7,14 @@ import { sanitizeInput } from '../utils/security';
 import { PROJECT_STATUS } from '../project_status';
 import { getJson, HttpRequestError, postJson } from '../utils/http_client';
 import SubtitleRowsEditor from './SubtitleRowsEditor';
+import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
 import {
   EditableSubtitleRow,
   subtitleRowsFromText,
   subtitleRowsToLines,
   validateSubtitleRows,
 } from '../utils/subtitle_editor';
+import type { RunIssue, RunProgressEvent } from '../../shared/run_monitor';
 
 interface SpeechToTextProps {
   project: Project | null;
@@ -951,12 +953,16 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     eventSource.onmessage = (event) => {
       if (transcribeEventSourceRef.current !== eventSource) return;
       const data = JSON.parse(event.data);
+      const progressEvent = (data.event || null) as RunProgressEvent | null;
+      const errorIssue = (data.errorIssue || null) as RunIssue | null;
 
       if (data.error) {
         console.error('ASR Error:', data.error);
         alert(`${t('settings.testFailed')}: ${data.error}`);
         setModelLoadStatus('failed');
-        setModelLoadError(String(data.error || t('settings.testFailed')));
+        setModelLoadError(
+          String(errorIssue?.technicalMessage || data.error || t('settings.testFailed'))
+        );
         setIsTranscribing(false);
         setDiarizationDiagnostics(null);
         setAlignmentDiagnostics(null);
@@ -975,25 +981,33 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       if (data.status === 'processing') {
         setModelLoadStatus('ok');
         setModelLoadError(null);
-        setAsrMsg(localizeAsrMessage(String(data.message || '')));
-        // Simulate minor progress for UX during processing
-        setProgress(prev => Math.min(prev + 5, 90));
+        setAsrMsg(localizeAsrEvent(progressEvent, String(data.message || '')));
+        setProgress((prev) => {
+          const hintedProgress =
+            typeof progressEvent?.progressHint === 'number' && Number.isFinite(progressEvent.progressHint)
+              ? Math.max(prev, Math.min(progressEvent.progressHint, 90))
+              : prev;
+          return Math.min(hintedProgress + 5, 90);
+        });
       } else if (data.status === 'completed') {
         setModelLoadStatus('ok');
         setModelLoadError(null);
         const result = data.result;
-        const includeTimecodes = shouldIncludeTimecodes(result);
+        const includeTimecodes =
+          typeof result?.debug?.artifacts?.hasTimecodes === 'boolean'
+            ? Boolean(result.debug.artifacts.hasTimecodes)
+            : shouldIncludeTimecodes(result);
         const formattedChunks = formatResultToLines(result, includeTimecodes);
         setTranscription(formattedChunks);
         setHasTimecodes(includeTimecodes);
         setLastTranscribedAssetName(transcriptionAssetName);
         setPipelineMode(formatPipelineMode(result?.debug));
-        setPipelineWarnings(localizePipelineWarnings(result?.debug?.warnings));
+        setPipelineWarnings(localizePipelineWarnings(result?.debug?.warnings, result?.debug?.warningIssues));
         setProviderDebug(result?.debug?.provider || null);
         setAppliedDebug(result?.debug?.applied || null);
-        setDiarizationDiagnostics(result?.debug?.diarization || null);
-        setAlignmentDiagnostics(result?.debug?.alignment || null);
-        setCjkWordDiagnostics(result?.debug?.cjkWordDiagnostics || null);
+        setDiarizationDiagnostics(result?.debug?.diagnostics?.diarization || result?.debug?.diarization || null);
+        setAlignmentDiagnostics(result?.debug?.diagnostics?.alignment || result?.debug?.alignment || null);
+        setCjkWordDiagnostics(result?.debug?.diagnostics?.cjk || result?.debug?.cjkWordDiagnostics || null);
         const elapsedMsRaw = Number(result?.debug?.timing?.elapsedMs);
         setLastElapsedMs(Number.isFinite(elapsedMsRaw) ? elapsedMsRaw : null);
         const requestedWordAlignment = Boolean(result?.debug?.requested?.wordAlignment);
@@ -1013,7 +1027,7 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         });
         setProgress(100);
         setIsTranscribing(false);
-        setAsrMsg(t('status.completed'));
+        setAsrMsg(localizeAsrEvent(progressEvent, 'Transcription completed.'));
         setIsEditingTranscription(false);
         setEditingTranscriptionRows([]);
         transcribeEventSourceRef.current = null;
@@ -1075,6 +1089,22 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
 
     if (message === 'Provider file size/duration fallback was applied (chunked upload).') {
       return t('stt.msgFileLimitFallbackApplied');
+    }
+
+    if (message === 'Local Whisper ASR keeps full-audio transcription; VAD windows are used only for diagnostics/diarization.') {
+      return t('stt.msgVadWindowingDisabled');
+    }
+
+    if (message === 'Provider returned no timestamps, synthesized approximate timecodes for segmented transcript.') {
+      return t('stt.msgSegmentationTimestampSynthesized');
+    }
+
+    if (message === 'Forced alignment unavailable for current language/profile, keeping provider timestamps.') {
+      return t('stt.msgForcedAlignmentUnavailable');
+    }
+
+    if (message === 'Provider-native forced alignment applied.') {
+      return t('stt.msgProviderNativeForcedAlignmentApplied');
     }
 
     const fileLimitChunkSizeReducedMatch = message.match(/^Chunk uploads still exceed provider limit, reducing chunk size to (\d+)s and retrying\.\.\.$/);
@@ -1155,6 +1185,38 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
 
     return message;
   };
+
+  const localizeAsrEvent = React.useCallback((event?: RunProgressEvent | null, fallbackMessage = '') => {
+    if (!event) return localizeAsrMessage(fallbackMessage);
+    switch (event.code) {
+      case 'model.load.asr':
+        return t('stt.msgLoadingModel');
+      case 'vad.started':
+        return t('stt.msgRunningVad');
+      case 'vad.detected':
+        return localizeAsrMessage(String(event.message || fallbackMessage || ''));
+      case 'vad.windowing.disabled':
+        return t('stt.msgVadWindowingDisabled');
+      case 'vad.fallback.full_audio':
+        return t('stt.msgVadFallbackFullAudio');
+      case 'diarization.started':
+        return t('stt.msgRunningDiarization');
+      case 'timestamps.synthesized':
+        return t('stt.msgSegmentationTimestampSynthesized');
+      case 'alignment.unavailable':
+        return t('stt.msgForcedAlignmentUnavailable');
+      case 'alignment.provider_native_applied':
+        return t('stt.msgProviderNativeForcedAlignmentApplied');
+      case 'alignment.applied':
+        return localizeAsrMessage(String(event.message || fallbackMessage || ''));
+      case 'alignment.kept_provider_timestamps':
+        return t('stt.msgForcedAlignmentKeptProviderTimestamps');
+      case 'run.completed':
+        return t('status.completed');
+      default:
+        return localizeAsrMessage(String(event.message || fallbackMessage || ''));
+    }
+  }, [t]);
 
   const formatTime = (seconds: number) => {
     if (seconds === undefined || Number.isNaN(seconds)) return '00:00:00';
@@ -1424,7 +1486,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   const formatElapsedTime = React.useCallback((elapsedMs: number | null) => {
     if (!Number.isFinite(elapsedMs == null ? Number.NaN : elapsedMs)) return null;
     const safeMs = Math.max(0, Number(elapsedMs));
-    if (safeMs < 1000) return `${safeMs} ms`;
     const totalSeconds = safeMs / 1000;
     if (totalSeconds < 60) return `${totalSeconds.toFixed(1)} s`;
     const hours = Math.floor(totalSeconds / 3600);
@@ -1436,10 +1497,14 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(1).padStart(4, '0')}`;
   }, []);
 
-  const localizePipelineWarnings = (warnings: unknown): string[] => {
-    if (!Array.isArray(warnings)) return [];
-    return warnings
-      .map((item) => String(item || '').trim())
+  const localizePipelineWarnings = React.useCallback((warnings: unknown, issues?: RunIssue[] | null): string[] => {
+    const warningCodes = Array.isArray(issues) && issues.length > 0
+      ? issues.map((issue) => String(issue?.code || '').trim())
+      : Array.isArray(warnings)
+        ? warnings.map((item) => String(item || '').trim())
+        : [];
+
+    return warningCodes
       .filter(Boolean)
       .map((code) => {
         switch (code) {
@@ -1458,11 +1523,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
           case 'english_forced_alignment_applied':
           case 'forced_alignment_applied':
             return t('stt.warnForcedAlignmentApplied');
+          case 'local_vad_windowing_disabled':
+            return t('stt.warnVadWindowingDisabled');
           default:
             return code;
         }
       });
-  };
+  }, [t]);
 
   const diarizationModeOptions = React.useMemo(
     () => [
@@ -1549,16 +1616,156 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     providerForcedAlignment && !providerForcedAlignment.applied && providerForcedAlignment.error
       ? String(providerForcedAlignment.error).trim()
       : '';
-  const hasStatusDetails = Boolean(
-    pipelineMode ||
-    providerDebug ||
-    formattedElapsedTime ||
-    localizedWordAlignmentState ||
-    alignmentDiagnostics ||
-    cjkWordDiagnostics ||
-    pipelineWarnings.length > 0 ||
-    diarizationDiagnostics
-  );
+  const asrMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
+    const badges: RunMonitorBadge[] = [];
+    if (pipelineMode) {
+      for (const part of pipelineMode.split('|').map((item) => item.trim()).filter(Boolean)) {
+        badges.push({ label: part, tone: 'info' });
+      }
+    }
+    if (pipelineWarnings.length > 0) {
+      badges.push({
+        label: `${t('stt.pipelineWarnings')}: ${pipelineWarnings.length}`,
+        tone: 'warning',
+      });
+    }
+    if (alignmentDiagnostics?.applied) {
+      badges.push({ label: t('stt.warnForcedAlignmentApplied'), tone: 'success' });
+    }
+    return badges;
+  }, [alignmentDiagnostics?.applied, pipelineMode, pipelineWarnings.length, t]);
+  const asrDetailsSummary = React.useMemo(() => {
+    const parts: string[] = [];
+    if (formattedElapsedTime) parts.push(`${t('stt.elapsedTime')}: ${formattedElapsedTime}`);
+    if (localizedForcedAlignmentState) parts.push(`${t('stt.forcedAlignment')}: ${localizedForcedAlignmentState}`);
+    if (pipelineWarnings.length > 0) parts.push(`${t('stt.pipelineWarnings')}: ${pipelineWarnings.length}`);
+    return parts.join(' · ');
+  }, [formattedElapsedTime, localizedForcedAlignmentState, pipelineWarnings.length, t]);
+  const asrMonitorSections = React.useMemo<RunMonitorSection[]>(() => {
+    const sections: RunMonitorSection[] = [];
+
+    if (formattedElapsedTime || localizedWordAlignmentState) {
+      sections.push({
+        key: 'execution',
+        title: t('monitor.execution'),
+        fields: [
+          ...(formattedElapsedTime ? [{ label: t('stt.elapsedTime'), value: formattedElapsedTime }] : []),
+          ...(localizedWordAlignmentState ? [{ label: t('stt.wordAlignment'), value: localizedWordAlignmentState }] : []),
+        ],
+      });
+    }
+
+    if (providerDebug) {
+      sections.push({
+        key: 'provider',
+        title: t('monitor.provider'),
+        fields: [
+          { label: t('stt.providerProfileId'), value: providerProfileId },
+          { label: t('stt.providerProfileFamily'), value: providerProfileFamily },
+          { label: t('stt.localModelProfileId'), value: localModelProfileId },
+          { label: t('stt.localBaselineConfidence'), value: localBaselineConfidence },
+          { label: t('stt.localBaselineTaskFamily'), value: localBaselineTaskFamily },
+          { label: t('stt.localFallbackBaseline'), value: localFallbackBaseline },
+          { label: t('stt.alignmentSource'), value: alignmentSourceLabel },
+          ...(providerForcedAlignment?.modelId
+            ? [{ label: t('stt.providerForcedAlignmentModel'), value: providerForcedAlignment.modelId }]
+            : []),
+          ...(providerHelperChunking?.strategy
+            ? [{
+                label: t('stt.providerHelperChunking'),
+                value: `${formatTechnicalValue(providerHelperChunking.strategy)} / ${providerHelperChunking.maxChunkSec ?? '-'}s / ${providerHelperChunking.chunkCount ?? '-'} chunks`,
+              }]
+            : []),
+          ...(providerForcedAlignmentError
+            ? [{ label: t('stt.providerForcedAlignmentError'), value: providerForcedAlignmentError }]
+            : []),
+        ],
+      });
+    }
+
+    if (alignmentDiagnostics) {
+      sections.push({
+        key: 'alignment',
+        title: t('stt.forcedAlignment'),
+        fields: [
+          ...(localizedForcedAlignmentState ? [{ label: t('stt.statusMonitor'), value: localizedForcedAlignmentState }] : []),
+          { label: t('stt.alignmentModel'), value: alignmentDiagnostics.modelId },
+          ...(alignmentDiagnostics.language ? [{ label: t('stt.alignmentLanguage'), value: alignmentDiagnostics.language }] : []),
+          { label: t('stt.alignedSegments'), value: `${alignmentDiagnostics.alignedSegmentCount}/${alignmentDiagnostics.attemptedSegmentCount}` },
+          { label: t('stt.alignedWords'), value: alignmentDiagnostics.alignedWordCount },
+          ...(alignmentDiagnostics.avgConfidence != null
+            ? [{ label: t('stt.alignmentConfidence'), value: `${(alignmentDiagnostics.avgConfidence * 100).toFixed(1)}%` }]
+            : []),
+          ...(formattedAlignmentElapsedTime ? [{ label: t('stt.alignmentElapsedTime'), value: formattedAlignmentElapsedTime }] : []),
+        ],
+      });
+    }
+
+    if (cjkWordDiagnostics) {
+      sections.push({
+        key: 'cjk',
+        title: t('stt.cjkAlignment'),
+        fields: [
+          { label: t('stt.cjkMergeApplied'), value: cjkWordDiagnostics.mergeApplied ? t('stt.valueYes') : t('stt.valueNo') },
+          { label: t('stt.cjkChunkSource'), value: cjkWordDiagnostics.chunkSource },
+          { label: t('stt.cjkRawWords'), value: cjkWordDiagnostics.rawWordCount },
+          { label: t('stt.cjkMergedWords'), value: cjkWordDiagnostics.mergedWordCount },
+          ...(typeof cjkWordDiagnostics.lexicalWordCount === 'number' ? [{ label: t('stt.cjkLexicalWords'), value: cjkWordDiagnostics.lexicalWordCount }] : []),
+          { label: t('stt.cjkRawSingleChars'), value: cjkWordDiagnostics.rawSingleCharCount },
+          { label: t('stt.cjkMergedSingleChars'), value: cjkWordDiagnostics.mergedSingleCharCount },
+          ...(typeof cjkWordDiagnostics.lexicalSingleCharCount === 'number' ? [{ label: t('stt.cjkLexicalSingleChars'), value: cjkWordDiagnostics.lexicalSingleCharCount }] : []),
+          { label: t('stt.cjkReplacementChars'), value: cjkWordDiagnostics.replacementCharCount },
+          ...(typeof cjkWordDiagnostics.splitSegmentCount === 'number' ? [{ label: t('stt.cjkSplitSegments'), value: cjkWordDiagnostics.splitSegmentCount }] : []),
+          ...(typeof cjkWordDiagnostics.usedIntlSegmenter === 'boolean'
+            ? [{
+                label: t('stt.cjkSegmenter'),
+                value: cjkWordDiagnostics.usedIntlSegmenter
+                  ? `Intl.Segmenter (${cjkWordDiagnostics.segmenterLocale || 'n/a'})`
+                  : t('stt.valueNo'),
+              }]
+            : []),
+        ],
+      });
+    }
+
+    if (pipelineWarnings.length > 0) {
+      sections.push({
+        key: 'warnings',
+        title: t('monitor.issues'),
+        content: (
+          <>
+            {pipelineWarnings.map((warning, idx) => (
+              <div key={`${warning}-${idx}`}>- {warning}</div>
+            ))}
+          </>
+        ),
+      });
+    }
+
+    if (diarizationDiagnostics) {
+      sections.push({
+        key: 'diarization',
+        title: diarizationCopy.diagnostics,
+        content: (
+          <>
+            <div>{diarizationCopy.provider}: {localizedDiarizationProvider}</div>
+            <div>{diarizationCopy.source}: {localizedDiarizationSource}</div>
+            <div>{diarizationCopy.speechSegments}: {diarizationDiagnostics.speechSegmentCount}</div>
+            <div>{diarizationCopy.windows}: {diarizationDiagnostics.vadWindowCount}</div>
+            {diarizationDiagnostics.selectedPass && (
+              <>
+                <div>{diarizationCopy.speakers}: {diarizationDiagnostics.selectedPass.uniqueSpeakerCount}</div>
+                <div>{diarizationCopy.regions}: {diarizationDiagnostics.selectedPass.regionCount}</div>
+                <div>{diarizationCopy.threshold}: {Number(diarizationDiagnostics.selectedPass.threshold || 0).toFixed(2)}</div>
+              </>
+            )}
+          </>
+        ),
+      });
+    }
+
+    return sections;
+  }, [alignmentDiagnostics, alignmentSourceLabel, cjkWordDiagnostics, diarizationCopy, diarizationDiagnostics, formattedAlignmentElapsedTime, formattedElapsedTime, formatTechnicalValue, localBaselineConfidence, localBaselineTaskFamily, localFallbackBaseline, localizedDiarizationProvider, localizedDiarizationSource, localizedForcedAlignmentState, localizedWordAlignmentState, localModelProfileId, pipelineWarnings, providerDebug, providerForcedAlignment?.modelId, providerForcedAlignmentError, providerHelperChunking?.chunkCount, providerHelperChunking?.maxChunkSec, providerHelperChunking?.strategy, providerProfileFamily, providerProfileId, t]);
 
   const currentAudioLabel =
     sourceType === 'online'
@@ -1990,263 +2197,39 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         </div>
 
         <div className="space-y-6">
-          <section className="bg-surface-container-high p-6 rounded-[28px] border border-primary/20 shadow-xl">
-            <div className="flex items-center justify-between gap-4 mb-6">
-              <h3 className="text-sm font-bold text-secondary flex items-center gap-2">
-                {isTranscribing ? <Loader2 className="w-4 h-4 animate-spin text-tertiary" /> : <CheckCircle2 className="w-4 h-4 text-tertiary" />}
-                {t('stt.statusMonitor')}
-              </h3>
-              <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold max-w-full ${
-                isTranscribing ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-white/[0.04] text-outline border border-white/10'
-              }`}>
-                <span className={`h-2 w-2 rounded-full ${isTranscribing ? 'bg-primary animate-pulse' : 'bg-outline/40'}`} />
-                <span className="truncate">{isTranscribing ? (asrMsg || t('stt.processing')) : t('common.standby')}</span>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <StatusItem 
-                label={t('stt.modelLoad')} 
-                progress={modelLoadStatus === 'ok' ? 100 : (modelLoadStatus === 'failed' ? 0 : (modelLoadStatus === 'loading' ? 50 : 0))} 
-                status={
+          <RunMonitor
+            title={t('stt.statusMonitor')}
+            isRunning={isTranscribing}
+            standbyLabel={t('common.standby')}
+            statusLabel={asrMsg || t('stt.processing')}
+            badges={asrMonitorBadges}
+            progressItems={[
+              {
+                label: t('stt.modelLoad'),
+                progress: modelLoadStatus === 'ok' ? 100 : modelLoadStatus === 'failed' ? 0 : modelLoadStatus === 'loading' ? 50 : 0,
+                status:
                   modelLoadStatus === 'ok'
                     ? t('settings.testSuccess')
                     : modelLoadStatus === 'failed'
                       ? t('settings.testFailed')
                       : modelLoadStatus === 'loading'
                         ? t('settings.testing')
-                        : t('common.standby')
-                } 
-                tone={modelLoadStatus === 'ok' ? 'success' : (modelLoadStatus === 'failed' ? 'error' : 'normal')}
-              />
-              {modelLoadStatus === 'failed' && (
-                <div className="text-[10px] text-error/80 bg-error/5 p-3 rounded-lg border border-error/10 animate-in fade-in slide-in-from-top-1">
-                  {modelLoadError || t('settings.testFailed')}
-                </div>
-              )}
-              <StatusItem label={t('stt.transcriptionProgress')} progress={progress} />
-              {hasStatusDetails && (
-                <div className="rounded-2xl border border-white/8 bg-surface-container-lowest/50 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setShowStatusDetails((current) => !current)}
-                    className="w-full px-4 py-3 flex items-center justify-between gap-4 text-left transition-colors hover:bg-white/5"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-secondary">{t('stt.statusDetails')}</div>
-                      <div className="text-[11px] text-outline mt-1">
-                        {showStatusDetails ? t('stt.hideStatusDetails') : t('stt.showStatusDetails')}
-                      </div>
-                    </div>
-                    <div className="shrink-0 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-outline">
-                      {showStatusDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                    </div>
-                  </button>
-
-                  {showStatusDetails && (
-                    <div className="px-4 pb-4 space-y-4 border-t border-white/5">
-                      {pipelineMode && (
-                        <div className="mt-4 text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3">
-                          <span className="text-secondary font-bold mr-2">{t('stt.pipelineMode')}:</span>
-                          {pipelineMode}
-                        </div>
-                      )}
-                      {(formattedElapsedTime || localizedWordAlignmentState) && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          {formattedElapsedTime && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.elapsedTime')}:</span>
-                              {formattedElapsedTime}
-                            </div>
-                          )}
-                          {localizedWordAlignmentState && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.wordAlignment')}:</span>
-                              {localizedWordAlignmentState}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {providerDebug && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.providerProfileId')}:</span>
-                            {providerProfileId}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.providerProfileFamily')}:</span>
-                            {providerProfileFamily}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.localModelProfileId')}:</span>
-                            {localModelProfileId}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.localBaselineConfidence')}:</span>
-                            {localBaselineConfidence}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.localBaselineTaskFamily')}:</span>
-                            {localBaselineTaskFamily}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.localFallbackBaseline')}:</span>
-                            {localFallbackBaseline}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.alignmentSource')}:</span>
-                            {alignmentSourceLabel}
-                          </div>
-                          {providerForcedAlignment?.modelId && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.providerForcedAlignmentModel')}:</span>
-                              {providerForcedAlignment.modelId}
-                            </div>
-                          )}
-                          {providerHelperChunking?.strategy && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.providerHelperChunking')}:</span>
-                              {`${formatTechnicalValue(providerHelperChunking.strategy)} / ${providerHelperChunking.maxChunkSec ?? '-'}s / ${providerHelperChunking.chunkCount ?? '-'} chunks`}
-                            </div>
-                          )}
-                          {providerForcedAlignmentError && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.providerForcedAlignmentError')}:</span>
-                              {providerForcedAlignmentError}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {alignmentDiagnostics && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{t('stt.forcedAlignment')}:</div>
-                          {localizedForcedAlignmentState && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.statusMonitor')}:</span>
-                              {localizedForcedAlignmentState}
-                            </div>
-                          )}
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.alignmentModel')}:</span>
-                            {alignmentDiagnostics.modelId}
-                          </div>
-                          {alignmentDiagnostics.language && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.alignmentLanguage')}:</span>
-                              {alignmentDiagnostics.language}
-                            </div>
-                          )}
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.alignedSegments')}:</span>
-                            {alignmentDiagnostics.alignedSegmentCount}/{alignmentDiagnostics.attemptedSegmentCount}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.alignedWords')}:</span>
-                            {alignmentDiagnostics.alignedWordCount}
-                          </div>
-                          {alignmentDiagnostics.avgConfidence != null && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.alignmentConfidence')}:</span>
-                              {(alignmentDiagnostics.avgConfidence * 100).toFixed(1)}%
-                            </div>
-                          )}
-                          {formattedAlignmentElapsedTime && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.alignmentElapsedTime')}:</span>
-                              {formattedAlignmentElapsedTime}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {cjkWordDiagnostics && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{t('stt.cjkAlignment')}:</div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkMergeApplied')}:</span>
-                            {cjkWordDiagnostics.mergeApplied ? t('stt.valueYes') : t('stt.valueNo')}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkChunkSource')}:</span>
-                            {cjkWordDiagnostics.chunkSource}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkRawWords')}:</span>
-                            {cjkWordDiagnostics.rawWordCount}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkMergedWords')}:</span>
-                            {cjkWordDiagnostics.mergedWordCount}
-                          </div>
-                          {typeof cjkWordDiagnostics.lexicalWordCount === 'number' && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.cjkLexicalWords')}:</span>
-                              {cjkWordDiagnostics.lexicalWordCount}
-                            </div>
-                          )}
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkRawSingleChars')}:</span>
-                            {cjkWordDiagnostics.rawSingleCharCount}
-                          </div>
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkMergedSingleChars')}:</span>
-                            {cjkWordDiagnostics.mergedSingleCharCount}
-                          </div>
-                          {typeof cjkWordDiagnostics.lexicalSingleCharCount === 'number' && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.cjkLexicalSingleChars')}:</span>
-                              {cjkWordDiagnostics.lexicalSingleCharCount}
-                            </div>
-                          )}
-                          <div>
-                            <span className="text-secondary font-bold mr-2">{t('stt.cjkReplacementChars')}:</span>
-                            {cjkWordDiagnostics.replacementCharCount}
-                          </div>
-                          {typeof cjkWordDiagnostics.splitSegmentCount === 'number' && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.cjkSplitSegments')}:</span>
-                              {cjkWordDiagnostics.splitSegmentCount}
-                            </div>
-                          )}
-                          {typeof cjkWordDiagnostics.usedIntlSegmenter === 'boolean' && (
-                            <div>
-                              <span className="text-secondary font-bold mr-2">{t('stt.cjkSegmenter')}:</span>
-                              {cjkWordDiagnostics.usedIntlSegmenter
-                                ? `Intl.Segmenter (${cjkWordDiagnostics.segmenterLocale || 'n/a'})`
-                                : t('stt.valueNo')}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {pipelineWarnings.length > 0 && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{t('stt.pipelineWarnings')}:</div>
-                          {pipelineWarnings.map((warning, idx) => (
-                            <div key={`${warning}-${idx}`}>- {warning}</div>
-                          ))}
-                        </div>
-                      )}
-                      {diarizationDiagnostics && (
-                        <div className="text-[11px] text-outline bg-surface-container-lowest/70 border border-white/5 rounded-lg p-3 space-y-2">
-                          <div className="text-secondary font-bold">{diarizationCopy.diagnostics}:</div>
-                          <div>{diarizationCopy.provider}: {localizedDiarizationProvider}</div>
-                          <div>{diarizationCopy.source}: {localizedDiarizationSource}</div>
-                          <div>{diarizationCopy.speechSegments}: {diarizationDiagnostics.speechSegmentCount}</div>
-                          <div>{diarizationCopy.windows}: {diarizationDiagnostics.vadWindowCount}</div>
-                          {diarizationDiagnostics.selectedPass && (
-                            <>
-                              <div>{diarizationCopy.speakers}: {diarizationDiagnostics.selectedPass.uniqueSpeakerCount}</div>
-                              <div>{diarizationCopy.regions}: {diarizationDiagnostics.selectedPass.regionCount}</div>
-                              <div>{diarizationCopy.threshold}: {Number(diarizationDiagnostics.selectedPass.threshold || 0).toFixed(2)}</div>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
+                        : t('common.standby'),
+                tone: modelLoadStatus === 'ok' ? 'success' : modelLoadStatus === 'failed' ? 'error' : 'normal',
+              },
+              {
+                label: t('stt.transcriptionProgress'),
+                progress,
+              },
+            ]}
+            message={asrMsg}
+            error={modelLoadStatus === 'failed' ? (modelLoadError || t('settings.testFailed')) : null}
+            detailsTitle={t('monitor.diagnostics')}
+            detailsSummary={asrDetailsSummary}
+            showDetails={showStatusDetails}
+            onToggleDetails={() => setShowStatusDetails((current) => !current)}
+            sections={asrMonitorSections}
+          />
 
           <section className="bg-surface-container p-6 rounded-[28px] flex flex-col h-[600px] min-h-0 shadow-xl">
             <audio
@@ -2607,31 +2590,3 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   );
 }
 
-function StatusItem({
-  label,
-  progress,
-  status,
-  tone = 'normal',
-}: {
-  label: string,
-  progress: number,
-  status?: string,
-  tone?: 'success' | 'error' | 'normal',
-}) {
-  const textClass = tone === 'success' ? 'text-tertiary' : (tone === 'error' ? 'text-error' : 'text-primary');
-  const barClass = tone === 'success' ? 'bg-tertiary' : (tone === 'error' ? 'bg-error' : 'bg-primary');
-
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-between items-start gap-4 text-[11px] font-bold tracking-wider">
-        <span className="text-outline uppercase shrink-0">{label}</span>
-        <span className={`${textClass} text-right leading-relaxed max-w-[70%] break-words`}>
-          {status || `${Math.round(progress)}%`}
-        </span>
-      </div>
-      <div className="h-1.5 bg-surface-container-lowest rounded-full overflow-hidden">
-        <div className={`h-full transition-all duration-500 ${barClass}`} style={{ width: `${progress}%` }} />
-      </div>
-    </div>
-  );
-}

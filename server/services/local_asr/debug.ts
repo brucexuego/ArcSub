@@ -1,4 +1,5 @@
 import type { LocalResolvedAsrProfile } from './profile.js';
+import type { RunIssue } from '../../../shared/run_monitor.js';
 
 interface BuildAsrWarningsInput {
   segmentationForcedForDiarization: boolean;
@@ -67,6 +68,52 @@ export function buildAsrWarningCodes(input: BuildAsrWarningsInput) {
 }
 
 export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
+  const warningIssues: RunIssue[] = input.warnings.map((code) => ({
+    code,
+    severity:
+      code === 'forced_alignment_applied' || code === 'segmentation_timestamp_synthesized'
+        ? 'info'
+        : 'warning',
+    area:
+      code === 'forced_alignment_applied'
+        ? 'alignment'
+        : code.includes('diarization')
+          ? 'diarization'
+          : code.includes('vad')
+            ? 'runtime'
+            : 'provider',
+  }));
+  const errorIssues: RunIssue[] = [
+    input.alignmentError
+      ? {
+          code: 'asr.alignment.failed',
+          severity: 'error',
+          area: 'alignment',
+          technicalMessage: input.alignmentError,
+        }
+      : null,
+    input.vadError
+      ? {
+          code: 'asr.vad.failed',
+          severity: 'error',
+          area: 'runtime',
+          technicalMessage: input.vadError,
+        }
+      : null,
+    input.diarizationError
+      ? {
+          code: 'asr.diarization.failed',
+          severity: 'error',
+          area: 'diarization',
+          technicalMessage: input.diarizationError,
+        }
+      : null,
+  ].filter(Boolean) as RunIssue[];
+  const nativeWordCount = input.toFiniteNumber(
+    input.providerMeta?.rawWordCount,
+    input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.nativeWordCount, 0)
+  );
+  const syntheticWordCount = input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.syntheticWordCount, 0);
   return {
     requested: input.requestedFeatures,
     prompt: {
@@ -90,6 +137,25 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
       localBaselineTaskFamily: input.localProfile?.baseProfile.baseline.taskFamily ?? null,
       localFallbackBaseline: input.localProfile?.baseProfile.usedFallbackBaseline ?? false,
     },
+    quality: {
+      timestampReliability: input.providerMeta?.rawHasTimestamps
+        ? 'native'
+        : input.alignmentDiagnostics?.applied
+          ? 'forced'
+          : input.providerMeta?.syntheticWordFallbackUsed
+            ? 'synthetic'
+            : 'none',
+      alignmentConfidence:
+        typeof input.alignmentDiagnostics?.avgConfidence === 'number' ? input.alignmentDiagnostics.avgConfidence : null,
+      nativeWordCoverage:
+        nativeWordCount + syntheticWordCount > 0
+          ? Number((nativeWordCount / (nativeWordCount + syntheticWordCount)).toFixed(4))
+          : null,
+      diarizationConfidence:
+        typeof input.diarizationDiagnostics?.selectedPass?.threshold === 'number'
+          ? input.diarizationDiagnostics.selectedPass.threshold
+          : null,
+    },
     stats: {
       chunkCount: Array.isArray(input.result.chunks) ? input.result.chunks.length : 0,
       segmentCount: Array.isArray(input.result.segments) ? input.result.segments.length : 0,
@@ -108,8 +174,8 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
       alignmentAlignedSegments: input.toFiniteNumber(input.alignmentDiagnostics?.alignedSegmentCount, 0),
       alignmentAlignedWordCount: input.toFiniteNumber(input.alignmentDiagnostics?.alignedWordCount, 0),
       nativeWordTimestamps: Boolean(input.providerMeta?.nativeWordTimestamps),
-      nativeWordCount: input.toFiniteNumber(input.providerMeta?.rawWordCount, input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.nativeWordCount, 0)),
-      syntheticWordCount: input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.syntheticWordCount, 0),
+      nativeWordCount,
+      syntheticWordCount,
       syntheticWordAppliedSegments: input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.syntheticWordAppliedSegments, 0),
       syntheticWordFallbackUsed: Boolean(input.providerMeta?.syntheticWordFallbackUsed),
       cjkRawWordCount: input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.rawWordCount, 0),
@@ -122,7 +188,15 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
     alignment: input.alignmentDiagnostics,
     alignmentResolvedLanguage: input.resolvedAlignmentLanguage,
     diarization: input.diarizationDiagnostics,
+    diagnostics: {
+      alignment: input.alignmentDiagnostics,
+      alignmentResolvedLanguage: input.resolvedAlignmentLanguage,
+      diarization: input.diarizationDiagnostics,
+      cjk: input.providerMeta?.cjkWordDiagnostics || null,
+      helperChunking: input.providerMeta?.helperChunking || null,
+    },
     warnings: input.warnings,
+    warningIssues,
     timing: {
       elapsedMs: input.elapsedMs,
       elapsedSec: Number((input.elapsedMs / 1000).toFixed(3)),
@@ -150,6 +224,14 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
       alignment: input.alignmentError,
       vad: input.vadError,
       diarization: input.diarizationError,
+    },
+    errorIssues,
+    artifacts: {
+      hasTimecodes: input.hasUsableChunkTimestamps(input.result?.chunks || []),
+      hasWordSegments: Array.isArray(input.result.word_segments) && input.result.word_segments.length > 0,
+      hasSpeakerTags: Array.isArray(input.result.chunks)
+        ? input.result.chunks.some((chunk: any) => typeof chunk?.speaker === 'string' && chunk.speaker.trim())
+        : false,
     },
   };
 }

@@ -1,10 +1,11 @@
 import React from 'react';
-import { Search, Download, Film, Music, ArrowRight, CheckCircle2, Loader2, Clock, AlertCircle, Upload } from 'lucide-react';
+import { Search, Download, Film, Music, ArrowRight, CheckCircle2, Loader2, AlertCircle, Upload } from 'lucide-react';
 import { Project } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { Language } from '../i18n/translations';
 import { isValidUrl, sanitizeInput } from '../utils/security';
 import { PROJECT_STATUS } from '../project_status';
+import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
 
 type FetcherSourceMode = 'online' | 'upload';
 
@@ -236,6 +237,7 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
   const [downloadMsg, setDownloadMsg] = React.useState<string | null>(null);
   const [parseProgress, setParseProgress] = React.useState(0);
   const [lastSyncedProjectId, setLastSyncedProjectId] = React.useState<string | null>(null);
+  const [showStatusDetails, setShowStatusDetails] = React.useState(false);
   const videoUploadInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const projectSourceMode = inferProjectSourceMode(project);
@@ -255,6 +257,59 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
   const uploadPanelReady = uploadModeEnabled && hasDownloadedMedia;
   const stepTwoReady = onlineModeEnabled ? parseReady : uploadPanelReady;
   const videoActionLabel = uploadModeEnabled ? sourceCopy.uploadedVideoLabel : t('fetcher.downloadBtn');
+  const downloaderStatusLabel =
+    downloadMsg || ((isDownloading || isUploadingVideo)
+      ? t('fetcher.downloading')
+      : (downloadProgress === 100 ? t('fetcher.downloadComplete') : t('fetcher.pending')));
+  const downloaderMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
+    const badges: RunMonitorBadge[] = [
+      {
+        label: onlineModeEnabled ? sourceCopy.modeOnlineName : sourceCopy.modeUploadName,
+        tone: 'info',
+      },
+    ];
+    if (videoReady && audioReady) {
+      badges.push({ label: t('fetcher.mediaReadyTitle'), tone: 'success' });
+    } else if (stepTwoReady) {
+      badges.push({ label: t('fetcher.ready'), tone: 'success' });
+    }
+    return badges;
+  }, [audioReady, onlineModeEnabled, sourceCopy.modeOnlineName, sourceCopy.modeUploadName, stepTwoReady, t, videoReady]);
+  const downloaderMonitorSections = React.useMemo<RunMonitorSection[]>(() => {
+    const sections: RunMonitorSection[] = [];
+    sections.push({
+      key: 'source',
+      title: sourceCopy.modeLabel,
+      fields: [
+        { label: sourceCopy.modeLabel, value: onlineModeEnabled ? sourceCopy.modeOnlineName : sourceCopy.modeUploadName },
+        { label: sourceCopy.workflowVideoLabel, value: uploadedFileName || sourceCopy.workflowNoVideo },
+        { label: sourceCopy.workflowAudioLabel, value: audioReady ? getFileNameFromClientPath(String(project?.audioUrl || '')) || 'audio.wav' : sourceCopy.workflowNoAudio },
+      ],
+    });
+    if (onlineModeEnabled) {
+      sections.push({
+        key: 'download',
+        title: t('fetcher.downloadProgressLabel'),
+        fields: [
+          { label: t('fetcher.parseProgress'), value: `${Math.round(parseProgress)}%` },
+          { label: t('fetcher.downloadProgressLabel'), value: `${Math.round(downloadProgress)}%` },
+          ...(downloadSpeed ? [{ label: t('fetcher.downloading'), value: downloadSpeed }] : []),
+          ...(downloadEta ? [{ label: t('fetcher.pending'), value: downloadEta }] : []),
+        ],
+      });
+    } else {
+      sections.push({
+        key: 'upload',
+        title: sourceCopy.workflowTitle,
+        fields: [
+          { label: sourceCopy.workflowVideoLabel, value: uploadedFileName || sourceCopy.workflowNoVideo },
+          { label: sourceCopy.workflowAudioLabel, value: audioReady ? getFileNameFromClientPath(String(project?.audioUrl || '')) || 'audio.wav' : sourceCopy.workflowNoAudio },
+          { label: t('fetcher.downloadProgressLabel'), value: `${Math.round(downloadProgress)}%` },
+        ],
+      });
+    }
+    return sections;
+  }, [audioReady, downloadEta, downloadProgress, downloadSpeed, onlineModeEnabled, parseProgress, project?.audioUrl, sourceCopy.modeLabel, sourceCopy.modeOnlineName, sourceCopy.modeUploadName, sourceCopy.workflowAudioLabel, sourceCopy.workflowNoAudio, sourceCopy.workflowNoVideo, sourceCopy.workflowTitle, sourceCopy.workflowVideoLabel, t, uploadedFileName]);
 
   const handleProceedToAsr = () => {
     if (!canProceedToAsr) return;
@@ -896,66 +951,35 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
             </div>
           </div>
 
-          {onlineModeEnabled && (
-            <div className="relative z-10 rounded-[24px] border border-white/5 bg-white/[0.03] p-4 space-y-4">
-              <div className="flex justify-between items-center">
-                <span className="text-[11px] font-black text-outline/60 uppercase tracking-widest">{t('fetcher.parseProgress')}</span>
-                {parseReady ? (
-                  <span className="flex items-center gap-2 text-[10px] text-tertiary font-bold bg-tertiary/10 px-2.5 py-1 rounded-full">
-                    <CheckCircle2 className="w-3 h-3" />
-                    {t('status.completed')}
-                  </span>
-                ) : isParsing ? (
-                  <span className="text-[10px] text-primary font-bold animate-pulse">{parseProgress}%</span>
-                ) : (
-                  <span className="text-[10px] text-outline font-bold">{t('fetcher.pending')}</span>
-                )}
-              </div>
-              <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
-                <div
-                  className={`h-full transition-all duration-700 ease-out shadow-[0_0_12px_rgba(var(--primary),0.3)] ${parseReady ? 'bg-tertiary' : 'bg-primary'}`}
-                  style={{ width: `${parseProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="relative z-10 rounded-[24px] border border-white/5 bg-white/[0.03] p-4 space-y-4">
-            <div className="flex justify-between items-start gap-4">
-              <div>
-                <p className="text-[11px] font-black text-outline/60 uppercase tracking-widest">{t('fetcher.downloadProgressLabel')}</p>
-                <p className="mt-1 text-xs text-outline leading-relaxed">
-                  {downloadMsg || ((isDownloading || isUploadingVideo) ? t('fetcher.downloading') : (downloadProgress === 100 ? t('fetcher.downloadComplete') : t('fetcher.pending')))}
-                </p>
-              </div>
-              <div className="text-right shrink-0">
-                <span className="text-3xl font-black text-white block leading-none tracking-tighter tabular-nums">
-                  {Math.round(downloadProgress)}<span className="text-sm opacity-20 ml-0.5 font-normal">%</span>
-                </span>
-              </div>
-            </div>
-
-            <div className="h-2.5 bg-white/5 rounded-full overflow-hidden p-0.5 border border-white/5">
-              <div
-                className="h-full bg-gradient-to-r from-primary via-primary/80 to-secondary rounded-full transition-all duration-700 ease-out shadow-[0_0_15px_rgba(var(--primary),0.4)]"
-                style={{ width: `${downloadProgress}%` }}
-              />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {isDownloading && downloadSpeed && (
-                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-primary/10 rounded-lg border border-primary/20">
-                  <div className="w-1 h-1 bg-primary rounded-full animate-ping" />
-                  <span className="text-[10px] text-primary font-bold tracking-tight">{downloadSpeed}</span>
-                </div>
-              )}
-              {isDownloading && downloadEta && (
-                <div className="flex items-center gap-2 px-2.5 py-1.5 bg-white/5 rounded-lg border border-white/10">
-                  <Clock className="w-3 h-3 text-secondary" />
-                  <span className="text-[10px] text-white font-mono">{downloadEta}</span>
-                </div>
-              )}
-            </div>
+          <div className="relative z-10">
+            <RunMonitor
+              title={t('fetcher.statusTitle')}
+              isRunning={isParsing || isDownloading || isUploadingVideo}
+              standbyLabel={t('common.standby')}
+              statusLabel={downloaderStatusLabel}
+              badges={downloaderMonitorBadges}
+              compact
+              progressItems={[
+                ...(onlineModeEnabled ? [{
+                  label: t('fetcher.parseProgress'),
+                  progress: parseProgress,
+                  status: parseReady ? t('status.completed') : isParsing ? `${Math.round(parseProgress)}%` : t('fetcher.pending'),
+                  tone: parseReady ? 'success' as const : 'normal' as const,
+                }] : []),
+                {
+                  label: t('fetcher.downloadProgressLabel'),
+                  progress: downloadProgress,
+                  status: downloaderStatusLabel,
+                  tone: downloadProgress >= 100 ? 'success' : 'normal',
+                },
+              ]}
+              message={downloaderStatusLabel}
+              detailsTitle={t('stt.statusDetails')}
+              detailsSummary={showStatusDetails ? t('stt.hideStatusDetails') : t('stt.showStatusDetails')}
+              showDetails={showStatusDetails}
+              onToggleDetails={() => setShowStatusDetails((current) => !current)}
+              sections={downloaderMonitorSections}
+            />
           </div>
 
           <button
