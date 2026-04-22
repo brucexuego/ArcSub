@@ -8,7 +8,9 @@ import { PathManager } from './path_manager.js';
 import { resolveToolCommand } from './runtime_tools.js';
 import { LanguageAlignmentRegistry } from './language_alignment/registry.js';
 import { AlignmentPlanRegistry } from './language_alignment/plan_registry.js';
+import { AlignmentModelProfileRegistry } from './language_alignment/model_profiles.js';
 import type { AlignmentCtcModelProfile } from './language_alignment/model_profiles.js';
+import type { ResolvedAlignmentPlan } from './language_alignment/plan_registry.js';
 import type {
   AlignmentRun as LanguageAlignmentRun,
   AlignmentSegmentLike,
@@ -204,14 +206,84 @@ export class AlignmentService {
       };
     }
 
-    this.throwIfAborted(options.signal);
-    options.onProgress?.(`Preparing ${plan.config.progressLabel}...`);
+    const primaryResult = await this.runCtcAlignmentPlan({
+      audioPath,
+      language,
+      transcriptText,
+      segments,
+      plan,
+      startedAt,
+      onProgress: options.onProgress,
+      signal: options.signal,
+    });
+    if (!this.shouldRetryZhCnWithMmsFallback(language, plan, primaryResult.diagnostics)) {
+      return primaryResult;
+    }
+
+    const mmsProfile = AlignmentModelProfileRegistry.get('mms-300m-forced-aligner-v1');
+    if (!mmsProfile || mmsProfile.kind !== 'ctc') {
+      return primaryResult;
+    }
+
+    const fallbackPlan: ResolvedAlignmentPlan = {
+      ...plan,
+      profile: mmsProfile,
+      mode: 'ctc',
+      config: {
+        ...plan.config,
+        profileId: mmsProfile.id,
+        progressLabel: `${plan.config.progressLabel} (MMS fallback)`,
+      },
+    };
+    options.onProgress?.('zh-CN specialized aligner produced no aligned segments, retrying with MMS fallback.');
+    const fallbackResult = await this.runCtcAlignmentPlan({
+      audioPath,
+      language,
+      transcriptText,
+      segments,
+      plan: fallbackPlan,
+      startedAt,
+      onProgress: options.onProgress,
+      signal: options.signal,
+    });
+    return fallbackResult.applied ? fallbackResult : primaryResult;
+  }
+
+  private static shouldRetryZhCnWithMmsFallback(
+    language: string,
+    plan: ResolvedAlignmentPlan,
+    diagnostics: AlignmentDiagnostics
+  ) {
+    const normalizedLanguage = String(language || '').trim().toLowerCase();
+    const isZhCnRequest = normalizedLanguage === 'zh-cn' || normalizedLanguage === 'zh-hans' || normalizedLanguage === 'zh-sg';
+    const isZhCnProfile = plan.profile.id === 'zh-cn-jonatas-xlsr53-chinese-v1';
+    return Boolean(
+      isZhCnRequest &&
+        isZhCnProfile &&
+        diagnostics.attemptedSegmentCount > 0 &&
+        diagnostics.alignedSegmentCount === 0 &&
+        diagnostics.failureCount >= diagnostics.attemptedSegmentCount
+    );
+  }
+
+  private static async runCtcAlignmentPlan(input: {
+    audioPath: string;
+    language: string;
+    transcriptText: string;
+    segments: AlignmentStructuredSegment[];
+    plan: ResolvedAlignmentPlan;
+    startedAt: number;
+    onProgress?: (msg: string) => void;
+    signal?: AbortSignal;
+  }): Promise<AlignmentResult> {
+    this.throwIfAborted(input.signal);
+    input.onProgress?.(`Preparing ${input.plan.config.progressLabel}...`);
 
     const [resources, fullAudio] = await Promise.all([
-      this.getGenericResources(plan.profile as AlignmentCtcModelProfile, options.onProgress),
-      this.extractMonoAudio(audioPath),
+      this.getGenericResources(input.plan.profile as AlignmentCtcModelProfile, input.onProgress),
+      this.extractMonoAudio(input.audioPath),
     ]);
-    options.onProgress?.(`Running ${plan.config.progressLabel}...`);
+    input.onProgress?.(`Running ${input.plan.config.progressLabel}...`);
     const totalSec = fullAudio.length / this.sampleRate;
 
     let attemptedSegmentCount = 0;
@@ -222,12 +294,12 @@ export class AlignmentService {
     let confidenceSum = 0;
     let confidenceCount = 0;
 
-    const languageModule = plan.module as ForcedAlignmentLanguageModule;
+    const languageModule = input.plan.module as ForcedAlignmentLanguageModule;
     const nextSegments: AlignmentStructuredSegment[] = [];
-    for (let index = 0; index < segments.length; index += 1) {
-      this.throwIfAborted(options.signal);
-      const segment = this.cloneSegment(segments[index]);
-      const projectedWords = await languageModule.projectWordReadings(segment, language, transcriptText);
+    for (let index = 0; index < input.segments.length; index += 1) {
+      this.throwIfAborted(input.signal);
+      const segment = this.cloneSegment(input.segments[index]);
+      const projectedWords = await languageModule.projectWordReadings(segment, input.language, input.transcriptText);
       const words =
         projectedWords && projectedWords.length > 0
           ? projectedWords
@@ -258,7 +330,7 @@ export class AlignmentService {
       for (const run of runs) {
         attemptedSegmentCount += 1;
         if (attemptedSegmentCount === 1 || attemptedSegmentCount % 25 === 0) {
-          options.onProgress?.(`Running ${plan.config.progressLabel} (${attemptedSegmentCount})...`);
+          input.onProgress?.(`Running ${input.plan.config.progressLabel} (${attemptedSegmentCount})...`);
         }
         try {
           const aligned = await this.alignSegment(
@@ -268,8 +340,8 @@ export class AlignmentService {
             this.getWordEnd(updatedWords[run.endIndex]),
             run.tokens,
             resources,
-            plan.config.clipPaddingSec,
-            plan.config.minRunConfidence ?? 0.5
+            input.plan.config.clipPaddingSec,
+            input.plan.config.minRunConfidence ?? 0.5
           );
           if (!aligned || aligned.words.length !== run.tokens.length) {
             segmentFailure = true;
@@ -296,7 +368,7 @@ export class AlignmentService {
         } catch (error) {
           segmentFailure = true;
           failureCount += 1;
-          console.warn(`[ALIGN] ${plan.config.progressLabel} skipped run in segment ${index + 1}:`, error);
+          console.warn(`[ALIGN] ${input.plan.config.progressLabel} skipped run in segment ${index + 1}:`, error);
         }
       }
 
@@ -336,23 +408,23 @@ export class AlignmentService {
     });
 
     const overallAvgConfidence = confidenceCount > 0 ? Number((confidenceSum / confidenceCount).toFixed(4)) : null;
-    const requiredAlignedSegments = Math.max(1, Math.ceil(attemptedSegmentCount * plan.config.minOverallAlignedRatio));
+    const requiredAlignedSegments = Math.max(1, Math.ceil(attemptedSegmentCount * input.plan.config.minOverallAlignedRatio));
     const applied =
       attemptedSegmentCount > 0 &&
       alignedSegmentCount >= requiredAlignedSegments &&
       overallAvgConfidence != null &&
-      overallAvgConfidence >= plan.config.minOverallConfidence;
-    const elapsedMs = Math.max(0, Date.now() - startedAt);
+      overallAvgConfidence >= input.plan.config.minOverallConfidence;
+    const elapsedMs = Math.max(0, Date.now() - input.startedAt);
     return {
       applied,
       segments: normalizedSegments,
       word_segments: flattenedWords,
       diagnostics: {
         applied,
-        profileId: plan.profile.id,
+        profileId: input.plan.profile.id,
         backend: 'ctc',
-        modelId: plan.profile.modelId,
-        language: plan.variant || language || null,
+        modelId: input.plan.profile.modelId,
+        language: input.plan.variant || input.language || null,
         attemptedSegmentCount,
         alignedSegmentCount,
         skippedSegments,

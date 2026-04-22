@@ -385,6 +385,13 @@ const baseTranslations = {
     'lang.pt': '葡萄牙文',
     'lang.it': '義大利文',
     'lang.fr': '法文',
+    'lang.ru': '俄文',
+    'lang.pl': '波蘭文',
+    'lang.ar': '阿拉伯文',
+    'lang.nl': '荷蘭文',
+    'lang.el': '希臘文',
+    'lang.fa': '波斯文',
+    'lang.hu': '匈牙利文',
     'lang.jp': '日文',
     'lang.kr': '韓文',
     'lang.other': '\u5176\u4ed6',
@@ -985,6 +992,13 @@ const baseTranslations = {
     'lang.pt': 'Portuguese',
     'lang.it': 'Italian',
     'lang.fr': 'French',
+    'lang.ru': 'Russian',
+    'lang.pl': 'Polish',
+    'lang.ar': 'Arabic',
+    'lang.nl': 'Dutch',
+    'lang.el': 'Greek',
+    'lang.fa': 'Persian',
+    'lang.hu': 'Hungarian',
     'lang.jp': 'Japanese',
     'lang.kr': 'Korean',
     'lang.other': 'Other',
@@ -1571,6 +1585,13 @@ const baseTranslations = {
     'lang.pt': 'ポルトガル語',
     'lang.it': 'イタリア語',
     'lang.fr': 'フランス語',
+    'lang.ru': 'ロシア語',
+    'lang.pl': 'ポーランド語',
+    'lang.ar': 'アラビア語',
+    'lang.nl': 'オランダ語',
+    'lang.el': 'ギリシャ語',
+    'lang.fa': 'ペルシャ語',
+    'lang.hu': 'ハンガリー語',
     'lang.jp': '日本語',
     'lang.kr': '韓国語',
     'lang.other': '\u305d\u306e\u4ed6',
@@ -2110,6 +2131,13 @@ const zhCnTranslations: Record<string, string> = {
   'lang.pt': '\u8461\u8404\u7259\u8bed',
   'lang.it': '\u610f\u5927\u5229\u8bed',
   'lang.fr': '\u6cd5\u8bed',
+  'lang.ru': '\u4fc4\u8bed',
+  'lang.pl': '\u6ce2\u5170\u8bed',
+  'lang.ar': '\u963f\u62c9\u4f2f\u8bed',
+  'lang.nl': '\u8377\u5170\u8bed',
+  'lang.el': '\u5e0c\u814a\u8bed',
+  'lang.fa': '\u6ce2\u65af\u8bed',
+  'lang.hu': '\u5308\u7259\u5229\u8bed',
   'lang.jp': '\u65e5\u8bed',
   'lang.kr': '\u97e9\u8bed',
   'lang.other': '\u5176\u4ed6',
@@ -2647,6 +2675,13 @@ const deTranslations: Record<string, string> = {
   'lang.pt': 'Portugiesisch',
   'lang.it': 'Italienisch',
   'lang.fr': 'Franzoesisch',
+  'lang.ru': 'Russisch',
+  'lang.pl': 'Polnisch',
+  'lang.ar': 'Arabisch',
+  'lang.nl': 'Niederlaendisch',
+  'lang.el': 'Griechisch',
+  'lang.fa': 'Persisch',
+  'lang.hu': 'Ungarisch',
   'lang.jp': 'Japanisch',
   'lang.kr': 'Koreanisch',
   'lang.other': 'Andere',
@@ -4118,11 +4153,37 @@ function normalizePromptTemplateTargetLanguage(targetLang: string): PromptTarget
   return 'en';
 }
 
+function resolveExtendedPromptTemplateTargetEnglishName(targetLang: string) {
+  const normalized = String(targetLang || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return null;
+  if (normalized === 'ru' || normalized.startsWith('ru-')) return 'Russian';
+  if (normalized === 'pl' || normalized.startsWith('pl-')) return 'Polish';
+  if (normalized === 'ar' || normalized.startsWith('ar-')) return 'Arabic';
+  if (normalized === 'nl' || normalized.startsWith('nl-')) return 'Dutch';
+  if (normalized === 'el' || normalized.startsWith('el-')) return 'Greek';
+  if (normalized === 'fa' || normalized.startsWith('fa-')) return 'Persian';
+  if (normalized === 'hu' || normalized.startsWith('hu-')) return 'Hungarian';
+  return null;
+}
+
+function retargetEnglishPromptTemplate(template: string, targetEnglishName: string) {
+  if (!template) return template;
+  const lines = template.split('\n');
+  if (lines.length === 0) return template;
+  lines[0] = lines[0].replace(/\bEnglish\b/g, targetEnglishName);
+  return lines.join('\n');
+}
+
 export function getTranslationPromptTemplateText(
   templateId: TranslationPromptTemplateId,
   targetLang: string
 ): string {
   if (!templateId) return '';
+  const extendedTarget = resolveExtendedPromptTemplateTargetEnglishName(targetLang);
+  if (extendedTarget) {
+    const englishTemplate = translationPromptTemplatesByTargetLanguage[templateId]?.en || '';
+    return retargetEnglishPromptTemplate(englishTemplate, extendedTarget);
+  }
   const normalizedTarget = normalizePromptTemplateTargetLanguage(targetLang);
   return translationPromptTemplatesByTargetLanguage[templateId]?.[normalizedTarget] || '';
 }

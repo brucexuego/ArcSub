@@ -1,0 +1,14 @@
+{
+  "key": "ru",
+  "aliases": ["ru", "ru-ru"],
+  "alignmentProfileId": "ru-jonatas-xlsr53-russian-v1",
+  "clipPaddingSec": 0.24,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.54,
+  "minOverallAlignedRatio": 0.34,
+  "progressLabel": "Russian forced alignment",
+  "maxRunGapSec": 0.44,
+  "minRunTokenLength": 2,
+  "scriptPattern": "[\\u0400-\\u04ff]"
+}
+

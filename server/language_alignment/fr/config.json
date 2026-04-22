@@ -1,7 +1,7 @@
 {
   "key": "fr",
   "aliases": ["fr", "fr-fr", "fr-ca"],
-  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "alignmentProfileId": "fr-jonatas-xlsr53-french-v1",
   "clipPaddingSec": 0.24,
   "minRunConfidence": 0.46,
   "minOverallConfidence": 0.54,

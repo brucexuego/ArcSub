@@ -1,0 +1,13 @@
+{
+  "key": "fa",
+  "aliases": ["fa", "fa-ir", "fa-af"],
+  "alignmentProfileId": "fa-jonatas-xlsr53-persian-v1",
+  "clipPaddingSec": 0.24,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.54,
+  "minOverallAlignedRatio": 0.3,
+  "progressLabel": "Persian forced alignment",
+  "maxRunGapSec": 0.44,
+  "minRunTokenLength": 2,
+  "scriptPattern": "[\\u0600-\\u06ff]"
+}

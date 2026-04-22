@@ -1,0 +1,7 @@
+{
+  "stopwords": ["i", "w", "na", "nie", "to", "jest", "z", "jak", "dla", "sie", "ale"],
+  "priorityWords": ["dlaczego", "dzis", "polska", "mowie", "ludzie", "bardzo"],
+  "rawMarkers": ["[\\u0105\\u0107\\u0119\\u0142\\u0144\\u00f3\\u015b\\u017a\\u017c]"],
+  "minScore": 3
+}
+

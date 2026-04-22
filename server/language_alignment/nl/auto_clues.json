@@ -1,0 +1,6 @@
+{
+  "stopwords": ["de", "het", "een", "en", "van", "in", "op", "voor", "met", "dat", "die", "niet"],
+  "priorityWords": ["waarom", "vandaag", "nederland", "belgie", "mensen", "eigenlijk"],
+  "rawMarkers": ["[\\u00eb\\u00ef\\u00f6\\u00fc]"],
+  "minScore": 3
+}

@@ -1,0 +1,14 @@
+{
+  "key": "ar",
+  "aliases": ["ar", "ar-eg", "ar-sa", "ar-ae", "ar-jo", "ar-ly", "ar-tn", "ar-ma"],
+  "alignmentProfileId": "ar-jonatas-xlsr53-arabic-v1",
+  "clipPaddingSec": 0.24,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.54,
+  "minOverallAlignedRatio": 0.3,
+  "progressLabel": "Arabic forced alignment",
+  "maxRunGapSec": 0.44,
+  "minRunTokenLength": 2,
+  "scriptPattern": "[\\u0600-\\u06ff]"
+}
+
