@@ -1881,9 +1881,11 @@ export class TranslationService {
         .replace(/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\s]/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+      const cjkCompact = cjkNormalized.replace(/\s+/g, '');
       if (
         cjkNormalized &&
-        /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{3,10})\s+\1/u.test(cjkNormalized)
+        (/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,10})\s+\1/u.test(cjkNormalized) ||
+          /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,10})\1/u.test(cjkCompact))
       ) {
         return true;
       }
@@ -1999,7 +2001,7 @@ export class TranslationService {
       if (nonLatinScriptCount >= 4 && latinCount <= nonLatinScriptCount) {
         return true;
       }
-      if (words.length >= 10 && englishHits === 0 && /[^\x00-\x7F]/.test(plain)) {
+      if (words.length >= 10 && englishHits === 0) {
         return true;
       }
       return false;

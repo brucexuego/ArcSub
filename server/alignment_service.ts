@@ -255,7 +255,11 @@ export class AlignmentService {
     diagnostics: AlignmentDiagnostics
   ) {
     const normalizedLanguage = String(language || '').trim().toLowerCase();
-    const isZhCnRequest = normalizedLanguage === 'zh-cn' || normalizedLanguage === 'zh-hans' || normalizedLanguage === 'zh-sg';
+    const isZhCnRequest =
+      normalizedLanguage === 'zh' ||
+      normalizedLanguage === 'zh-cn' ||
+      normalizedLanguage === 'zh-hans' ||
+      normalizedLanguage === 'zh-sg';
     const isZhCnProfile = plan.profile.id === 'zh-cn-jonatas-xlsr53-chinese-v1';
     return Boolean(
       isZhCnRequest &&
