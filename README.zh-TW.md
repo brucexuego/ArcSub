@@ -30,10 +30,10 @@ Speech to Text：選擇辨識模型、設定進階選項，並為後續字幕翻
 
 如果這個 repository 已經發布安裝包，請先到 [Releases](../../releases/latest) 下載。
 
-目前 `v0.9.0` 的資產：
+目前 `v0.9.1` 的資產：
 
-- `ArcSub-v0.9.0-windows-x64.zip`
-- `ArcSub-v0.9.0-linux-x64.tar.gz`
+- `ArcSub-v0.9.1-windows-x64.zip`
+- `ArcSub-v0.9.1-linux-x64.tar.gz`
 
 ### 正式使用
 

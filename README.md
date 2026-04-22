@@ -30,10 +30,10 @@ Speech to Text: choose a recognition model, configure advanced features, and pre
 
 When packaged assets are published for this repository, download them from [Releases](../../releases/latest).
 
-Current `v0.9.0` assets:
+Current `v0.9.1` assets:
 
-- `ArcSub-v0.9.0-windows-x64.zip`
-- `ArcSub-v0.9.0-linux-x64.tar.gz`
+- `ArcSub-v0.9.1-windows-x64.zip`
+- `ArcSub-v0.9.1-linux-x64.tar.gz`
 
 ### Packaged Release
 

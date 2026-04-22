@@ -396,7 +396,13 @@ PY
   curl -fsSL "$download_url" -o "$download_dir/$archive_name"
   mkdir -p "$extract_dir"
   tar -xJf "$download_dir/$archive_name" -C "$extract_dir"
-  mv "$extract_dir/node-${version}-linux-x64" "$portable_node_dir"
+  local extracted_node_dir="$extract_dir/node-${version}-linux-x64"
+  # On some WSL + drvfs mounts, renaming extracted directories can fail with EPERM.
+  # Fall back to copy+remove so release packaging can still complete.
+  if ! mv "$extracted_node_dir" "$portable_node_dir"; then
+    cp -a "$extracted_node_dir" "$portable_node_dir"
+    rm -rf "$extracted_node_dir"
+  fi
   rm -rf "$extract_dir"
 
   [[ -x "$portable_node_bin" ]] || fail "Portable Node.js bootstrap failed."
