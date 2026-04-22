@@ -1,5 +1,5 @@
 import React from 'react';
-import { Captions, FileText, FolderOpen, Loader2, MonitorPlay, SlidersHorizontal, Upload, X } from 'lucide-react';
+import { FileText, FolderOpen, Loader2, MonitorPlay, SlidersHorizontal, Upload, X } from 'lucide-react';
 import Artplayer from 'artplayer';
 import type { Material, Project } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -10,7 +10,7 @@ interface VideoPlayerProps {
 
 type SubtitleMode = 'ai' | 'original' | 'project' | 'none';
 type VideoSourceProvider = 'none' | 'local' | 'online';
-type SubtitleInteractionMode = 'none' | 'move' | 'resize';
+type SubtitleInteractionMode = 'none' | 'move' | 'resize-width' | 'resize-height';
 
 interface SubtitleCue {
   start: number;
@@ -31,6 +31,12 @@ interface VideoSourceOption {
 const SUBTITLE_EXTENSIONS = new Set(['.srt', '.vtt', '.ass', '.ssa', '.txt', '.json']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi', '.flv', '.wmv', '.ts', '.m3u8']);
 const AUDIO_EXTENSIONS = new Set(['.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg', '.opus', '.wma']);
+const SUBTITLE_WIDTH_MIN_PCT = 28;
+const SUBTITLE_WIDTH_MAX_PCT = 92;
+const SUBTITLE_HEIGHT_MIN_PCT = 6;
+const SUBTITLE_HEIGHT_MAX_PCT = 36;
+const SUBTITLE_POSITION_MIN_PCT = 5;
+const SUBTITLE_POSITION_MAX_PCT = 95;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -98,6 +104,20 @@ function formatTime(time: number) {
 function formatDelayLabel(delayMs: number) {
   const seconds = delayMs / 1000;
   return `${seconds >= 0 ? '+' : ''}${seconds.toFixed(1)}s`;
+}
+
+function toRgbaFromHex(rawHex: string, opacityPct: number) {
+  const value = String(rawHex || '').trim();
+  const match = value.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  const normalized = match ? value.toUpperCase() : '#000000';
+  const hex = normalized.length === 4
+    ? normalized.split('').map((ch, idx) => (idx === 0 ? ch : ch + ch)).join('')
+    : normalized;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const alpha = clamp(opacityPct, 0, 100) / 100;
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(2)})`;
 }
 
 function formatUploadDate(raw: string) {
@@ -588,6 +608,17 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   const pendingSwitchPlaybackRef = React.useRef(false);
   const pendingSwitchSourceRef = React.useRef('');
   const isSwitchingSourceRef = React.useRef(false);
+  const subtitleInteractionRef = React.useRef({
+    mode: 'none' as SubtitleInteractionMode,
+    pointerId: null as number | null,
+    startClientX: 0,
+    startClientY: 0,
+    startPosition: { xPct: 50, yPct: 82 },
+    startWidthPct: 56,
+    startHeightPct: 10,
+    containerWidth: 0,
+    containerHeight: 0,
+  });
   const subtitleTrackStateRef = React.useRef<{
     activeCues: SubtitleCue[];
     subtitleMode: SubtitleMode;
@@ -599,9 +630,12 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   });
   const subtitleStyleStateRef = React.useRef({
     subtitleColor: '#FFFFFF',
+    subtitleBackgroundColor: '#000000',
+    subtitleBackgroundOpacityPct: 0,
     subtitleFontSizePx: 30,
     subtitlePosition: { xPct: 50, yPct: 82 },
     subtitleWidthPct: 56,
+    subtitleHeightPct: 10,
   });
 
   const [materials, setMaterials] = React.useState<Material[]>([]);
@@ -626,9 +660,13 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
 
   const [subtitlePosition, setSubtitlePosition] = React.useState({ xPct: 50, yPct: 82 });
   const [subtitleWidthPct, setSubtitleWidthPct] = React.useState(56);
+  const [subtitleHeightPct, setSubtitleHeightPct] = React.useState(10);
   const [subtitleFontSizePx, setSubtitleFontSizePx] = React.useState(30);
   const [subtitleColor, setSubtitleColor] = React.useState('#FFFFFF');
+  const [subtitleBackgroundColor, setSubtitleBackgroundColor] = React.useState('#000000');
+  const [subtitleBackgroundOpacityPct, setSubtitleBackgroundOpacityPct] = React.useState(0);
   const [subtitleDelayMs, setSubtitleDelayMs] = React.useState(0);
+  const [subtitleInteractionMode, setSubtitleInteractionMode] = React.useState<SubtitleInteractionMode>('none');
 
   const destroyArtplayer = React.useCallback(() => {
     if (currentSubtitleBlobUrlRef.current) {
@@ -672,21 +710,136 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     const art = artInstance || artPlayerRef.current;
     if (!art) return;
 
-    const { subtitleColor, subtitleFontSizePx, subtitlePosition, subtitleWidthPct } = subtitleStyleStateRef.current;
+    const {
+      subtitleColor,
+      subtitleBackgroundColor,
+      subtitleBackgroundOpacityPct,
+      subtitleFontSizePx,
+      subtitlePosition,
+      subtitleWidthPct,
+      subtitleHeightPct,
+    } = subtitleStyleStateRef.current;
+    const subtitleBackgroundRgba = toRgbaFromHex(subtitleBackgroundColor, subtitleBackgroundOpacityPct);
     art.subtitle.style({
       color: subtitleColor,
       fontSize: `${subtitleFontSizePx}px`,
+      backgroundColor: subtitleBackgroundRgba,
     });
 
     const subtitleEl = art.template?.$subtitle;
     if (!subtitleEl) return;
 
     subtitleEl.style.width = `${subtitleWidthPct}%`;
+    subtitleEl.style.minHeight = `${subtitleHeightPct}%`;
+    subtitleEl.style.height = 'auto';
     subtitleEl.style.left = `${subtitlePosition.xPct}%`;
     subtitleEl.style.top = `${subtitlePosition.yPct}%`;
     subtitleEl.style.bottom = 'auto';
     subtitleEl.style.transform = 'translate(-50%, -50%)';
+    subtitleEl.style.display = 'flex';
+    subtitleEl.style.alignItems = 'center';
+    subtitleEl.style.justifyContent = 'center';
+    subtitleEl.style.boxSizing = 'border-box';
+    subtitleEl.style.backgroundColor = subtitleBackgroundRgba;
+    subtitleEl.style.padding = subtitleBackgroundOpacityPct > 0 ? '0.08em 0.55em' : '0';
+    subtitleEl.style.borderRadius = subtitleBackgroundOpacityPct > 0 ? '0.45rem' : '0';
   }, []);
+
+  const endSubtitleInteraction = React.useCallback(() => {
+    subtitleInteractionRef.current.mode = 'none';
+    subtitleInteractionRef.current.pointerId = null;
+    setSubtitleInteractionMode('none');
+  }, []);
+
+  const beginSubtitleInteraction = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>, mode: Exclude<SubtitleInteractionMode, 'none'>) => {
+      const container = playerContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      if (!Number.isFinite(rect.width) || rect.width <= 0 || !Number.isFinite(rect.height) || rect.height <= 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore pointer capture failures.
+      }
+
+      subtitleInteractionRef.current.mode = mode;
+      subtitleInteractionRef.current.pointerId = event.pointerId;
+      subtitleInteractionRef.current.startClientX = event.clientX;
+      subtitleInteractionRef.current.startClientY = event.clientY;
+      subtitleInteractionRef.current.startPosition = { ...subtitlePosition };
+      subtitleInteractionRef.current.startWidthPct = subtitleWidthPct;
+      subtitleInteractionRef.current.startHeightPct = subtitleHeightPct;
+      subtitleInteractionRef.current.containerWidth = rect.width;
+      subtitleInteractionRef.current.containerHeight = rect.height;
+      setSubtitleInteractionMode(mode);
+    },
+    [subtitleHeightPct, subtitlePosition, subtitleWidthPct]
+  );
+
+  React.useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const session = subtitleInteractionRef.current;
+      if (session.mode === 'none') return;
+      if (session.pointerId !== null && event.pointerId !== session.pointerId) return;
+
+      const deltaXPct = ((event.clientX - session.startClientX) / Math.max(1, session.containerWidth)) * 100;
+      const deltaYPct = ((event.clientY - session.startClientY) / Math.max(1, session.containerHeight)) * 100;
+
+      if (session.mode === 'move') {
+        const nextX = clamp(
+          session.startPosition.xPct + deltaXPct,
+          SUBTITLE_POSITION_MIN_PCT,
+          SUBTITLE_POSITION_MAX_PCT
+        );
+        const nextY = clamp(
+          session.startPosition.yPct + deltaYPct,
+          SUBTITLE_POSITION_MIN_PCT,
+          SUBTITLE_POSITION_MAX_PCT
+        );
+        setSubtitlePosition({ xPct: nextX, yPct: nextY });
+        return;
+      }
+
+      if (session.mode === 'resize-width') {
+        const nextWidth = clamp(
+          session.startWidthPct + deltaXPct,
+          SUBTITLE_WIDTH_MIN_PCT,
+          SUBTITLE_WIDTH_MAX_PCT
+        );
+        setSubtitleWidthPct(nextWidth);
+        return;
+      }
+
+      if (session.mode === 'resize-height') {
+        const nextHeight = clamp(
+          session.startHeightPct + deltaYPct,
+          SUBTITLE_HEIGHT_MIN_PCT,
+          SUBTITLE_HEIGHT_MAX_PCT
+        );
+        setSubtitleHeightPct(nextHeight);
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const session = subtitleInteractionRef.current;
+      if (session.mode === 'none') return;
+      if (session.pointerId !== null && event.pointerId !== session.pointerId) return;
+      endSubtitleInteraction();
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [endSubtitleInteraction]);
 
   const restorePlaybackAfterSwitch = React.useCallback((artInstance?: any | null) => {
     const art = artInstance || artPlayerRef.current;
@@ -862,6 +1015,20 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     () => videoSourceOptions.find((option) => option.id === selectedVideoSourceId) || null,
     [selectedVideoSourceId, videoSourceOptions]
   );
+  const showSubtitleDragOverlay = Boolean(selectedVideoSourceOption) && subtitleMode !== 'none';
+  const subtitleDragOverlayStyle = React.useMemo(
+    () => ({
+      width: `${subtitleWidthPct}%`,
+      height: `${subtitleHeightPct}%`,
+      left: `${subtitlePosition.xPct}%`,
+      top: `${subtitlePosition.yPct}%`,
+      transform: 'translate(-50%, -50%)',
+    }),
+    [subtitleHeightPct, subtitlePosition, subtitleWidthPct]
+  );
+  const subtitleResizeHandleVisibilityClass = subtitleInteractionMode === 'none'
+    ? 'opacity-0 pointer-events-none group-hover/subtitle-frame:opacity-100 group-hover/subtitle-frame:pointer-events-auto'
+    : 'opacity-100 pointer-events-auto';
 
   React.useEffect(() => {
     selectedVideoSourceIdRef.current = selectedVideoSourceId;
@@ -982,12 +1149,29 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   React.useEffect(() => {
     subtitleStyleStateRef.current = {
       subtitleColor,
+      subtitleBackgroundColor,
+      subtitleBackgroundOpacityPct,
       subtitleFontSizePx,
       subtitlePosition,
       subtitleWidthPct,
+      subtitleHeightPct,
     };
     applySubtitleStyleToArt();
-  }, [applySubtitleStyleToArt, subtitleColor, subtitleFontSizePx, subtitlePosition, subtitleWidthPct]);
+  }, [
+    applySubtitleStyleToArt,
+    subtitleBackgroundColor,
+    subtitleBackgroundOpacityPct,
+    subtitleColor,
+    subtitleFontSizePx,
+    subtitleHeightPct,
+    subtitlePosition,
+    subtitleWidthPct,
+  ]);
+
+  React.useEffect(() => {
+    if (showSubtitleDragOverlay) return;
+    endSubtitleInteraction();
+  }, [endSubtitleInteraction, showSubtitleDragOverlay]);
 
   // Build the player once the initial source becomes available. Later source changes use Artplayer.switch.
   React.useEffect(() => {
@@ -1019,6 +1203,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
         style: {
           color: subtitleColor,
           fontSize: `${subtitleFontSizePx}px`,
+          backgroundColor: toRgbaFromHex(subtitleBackgroundColor, subtitleBackgroundOpacityPct),
         },
       },
     });
@@ -1084,6 +1269,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     restorePlaybackAfterSwitch,
     selectedVideoSourceOption?.src,
     subtitleColor,
+    subtitleBackgroundColor,
+    subtitleBackgroundOpacityPct,
     subtitleFontSizePx,
     t,
   ]);
@@ -1204,8 +1391,11 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   const resetSubtitleLayout = () => {
     setSubtitlePosition({ xPct: 50, yPct: 82 });
     setSubtitleWidthPct(56);
+    setSubtitleHeightPct(10);
     setSubtitleFontSizePx(30);
     setSubtitleColor('#FFFFFF');
+    setSubtitleBackgroundColor('#000000');
+    setSubtitleBackgroundOpacityPct(0);
     setSubtitleDelayMs(0);
   };
 
@@ -1286,6 +1476,34 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
                 <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-surface-container-high border border-white/10 text-sm text-secondary">
                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
                   <span>{t('common.loading')}</span>
+                </div>
+              </div>
+            )}
+
+            {showSubtitleDragOverlay && (
+              <div className="absolute inset-0 z-30 pointer-events-none">
+                <div
+                  style={subtitleDragOverlayStyle}
+                  className="absolute group/subtitle-frame"
+                >
+                  <button
+                    type="button"
+                    onPointerDown={(event) => beginSubtitleInteraction(event, 'move')}
+                    className="pointer-events-auto absolute inset-0 cursor-move bg-transparent"
+                    aria-label={t('player.subtitleDragHint')}
+                  />
+                  <button
+                    type="button"
+                    onPointerDown={(event) => beginSubtitleInteraction(event, 'resize-width')}
+                    className={`${subtitleResizeHandleVisibilityClass} absolute -right-2 top-1/2 h-5 w-5 -translate-y-1/2 cursor-ew-resize rounded border border-white/30 bg-surface-container-high shadow-lg transition-opacity`}
+                    title={t('player.subtitleWidth')}
+                  />
+                  <button
+                    type="button"
+                    onPointerDown={(event) => beginSubtitleInteraction(event, 'resize-height')}
+                    className={`${subtitleResizeHandleVisibilityClass} absolute left-1/2 -bottom-2 h-5 w-5 -translate-x-1/2 cursor-ns-resize rounded border border-white/30 bg-surface-container-high shadow-lg transition-opacity`}
+                    title={t('player.subtitleHeight')}
+                  />
                 </div>
               </div>
             )}
@@ -1442,7 +1660,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
                 <h3 className="text-sm font-bold uppercase tracking-widest text-secondary">{t('player.subtitleStyle')}</h3>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="block rounded-xl border border-white/5 bg-white/[0.04] px-4 py-3 text-xs text-outline space-y-2">
                   <span className="block">{t('player.subtitleSize')}: {Math.round(subtitleFontSizePx)}px</span>
                   <input
@@ -1460,11 +1678,23 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
                   <span className="block">{t('player.subtitleWidth')}: {Math.round(subtitleWidthPct)}%</span>
                   <input
                     type="range"
-                    min={28}
-                    max={92}
+                    min={SUBTITLE_WIDTH_MIN_PCT}
+                    max={SUBTITLE_WIDTH_MAX_PCT}
                     step={1}
                     value={subtitleWidthPct}
                     onChange={(event) => setSubtitleWidthPct(Number(event.target.value))}
+                    className="w-full accent-primary"
+                  />
+                </label>
+                <label className="block rounded-xl border border-white/5 bg-white/[0.04] px-4 py-3 text-xs text-outline space-y-2">
+                  <span className="block">{t('player.subtitleHeight')}: {Math.round(subtitleHeightPct)}%</span>
+                  <input
+                    type="range"
+                    min={SUBTITLE_HEIGHT_MIN_PCT}
+                    max={SUBTITLE_HEIGHT_MAX_PCT}
+                    step={1}
+                    value={subtitleHeightPct}
+                    onChange={(event) => setSubtitleHeightPct(Number(event.target.value))}
                     className="w-full accent-primary"
                   />
                 </label>
@@ -1475,8 +1705,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
                   <span className="block">{t('player.subtitlePositionX') || 'Horizontal'}: {Math.round(subtitlePosition.xPct)}%</span>
                   <input
                     type="range"
-                    min={5}
-                    max={95}
+                    min={SUBTITLE_POSITION_MIN_PCT}
+                    max={SUBTITLE_POSITION_MAX_PCT}
                     step={1}
                     value={subtitlePosition.xPct}
                     onChange={(event) => setSubtitlePosition(prev => ({ ...prev, xPct: Number(event.target.value) }))}
@@ -1488,8 +1718,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
                   <span className="block">{t('player.subtitlePositionY') || 'Vertical'}: {Math.round(subtitlePosition.yPct)}%</span>
                   <input
                     type="range"
-                    min={5}
-                    max={95}
+                    min={SUBTITLE_POSITION_MIN_PCT}
+                    max={SUBTITLE_POSITION_MAX_PCT}
                     step={1}
                     value={subtitlePosition.yPct}
                     onChange={(event) => setSubtitlePosition(prev => ({ ...prev, yPct: Number(event.target.value) }))}
@@ -1512,20 +1742,41 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
               </label>
 
               <div className="rounded-xl border border-white/5 bg-white/[0.04] px-4 py-4 space-y-3">
-                <div className="flex items-center gap-2 text-secondary">
-                  <Captions className="w-4 h-4 text-outline" />
-                  <span className="block text-xs text-outline">{t('player.subtitleColor')}</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-3 flex-1">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-black/20 px-3 py-2">
+                    <span className="w-24 shrink-0 text-xs text-outline">{t('player.subtitleColor')}</span>
                     <input
                       type="color"
                       value={subtitleColor}
                       onChange={(event) => setSubtitleColor(event.target.value)}
-                      className="h-10 w-14 rounded-lg border border-white/10 bg-transparent cursor-pointer"
+                      className="h-9 w-12 rounded-md border border-white/10 bg-transparent cursor-pointer"
                     />
-                    <div className="text-sm font-mono text-secondary">{subtitleColor.toUpperCase()}</div>
+                    <div className="ml-auto min-w-[90px] text-right text-sm font-mono text-secondary">{subtitleColor.toUpperCase()}</div>
                   </div>
+                  <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-black/20 px-3 py-2">
+                    <span className="w-24 shrink-0 text-xs text-outline">{t('player.subtitleBoxColor')}</span>
+                    <input
+                      type="color"
+                      value={subtitleBackgroundColor}
+                      onChange={(event) => setSubtitleBackgroundColor(event.target.value)}
+                      className="h-9 w-12 rounded-md border border-white/10 bg-transparent cursor-pointer"
+                    />
+                    <div className="ml-auto min-w-[90px] text-right text-sm font-mono text-secondary">{subtitleBackgroundColor.toUpperCase()}</div>
+                  </div>
+                </div>
+                <label className="block rounded-lg border border-white/5 bg-black/20 px-3 py-2 text-xs text-outline space-y-2">
+                  <span className="block">{t('player.subtitleBoxOpacity')}: {Math.round(subtitleBackgroundOpacityPct)}%</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={subtitleBackgroundOpacityPct}
+                    onChange={(event) => setSubtitleBackgroundOpacityPct(Number(event.target.value))}
+                    className="w-full accent-primary"
+                  />
+                </label>
+                <div className="flex justify-end">
                   <button
                     onClick={resetSubtitleLayout}
                     className="shrink-0 rounded-xl border border-white/10 px-4 py-2.5 text-sm font-semibold text-outline hover:text-white hover:bg-white/8 transition-colors"
