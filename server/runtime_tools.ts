@@ -32,6 +32,11 @@ function getPathCandidates(command: string) {
   return dirs.flatMap((dir) => commandNames.map((name) => path.join(dir, name)));
 }
 
+function resolveCommandOnPath(command: string) {
+  const candidates = getPathCandidates(command);
+  return candidates.find((candidatePath) => isFile(candidatePath)) || null;
+}
+
 export function getBundledToolPath(baseName: string) {
   return path.join(PathManager.getToolsPath(), getExecutableFileName(baseName));
 }
@@ -46,6 +51,6 @@ export function isCommandAvailable(command: string) {
 }
 
 export function resolveToolCommand(baseName: string, fallbackCommand = baseName) {
-  return getBundledToolPathIfExists(baseName) || fallbackCommand;
+  return getBundledToolPathIfExists(baseName) || resolveCommandOnPath(fallbackCommand) || fallbackCommand;
 }
 
