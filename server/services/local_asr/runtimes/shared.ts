@@ -49,6 +49,14 @@ export interface LocalAsrRuntimeInput {
   prompt?: string;
   segmentation?: boolean;
   wordAlignment?: boolean;
+  decodePolicy?: {
+    pipelineMode?: 'stable' | 'throughput';
+    alignmentStrategy?: 'provider-first' | 'alignment-first';
+    temperature?: number | null;
+    beamSize?: number | null;
+    noSpeechThreshold?: number | null;
+    conditionOnPreviousText?: boolean | null;
+  };
   extractStructuredTranscript: (
     transcript: { text?: string; segments?: any[] },
     language?: string,
@@ -67,6 +75,7 @@ export async function runOpenvinoLocalAsr(input: LocalAsrRuntimeInput) {
     prompt: input.prompt,
     segmentation: input.segmentation,
     wordAlignment: input.wordAlignment,
+    decodePolicy: input.decodePolicy,
   });
 }
 

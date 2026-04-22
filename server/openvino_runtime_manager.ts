@@ -1465,7 +1465,11 @@ export class OpenvinoRuntimeManager {
     );
   }
 
-  private static getLocalAsrCacheDir(modelId?: string) {
+  private static getLocalAsrCacheDir(
+    modelId?: string,
+    requestedDevice?: string,
+    wordTimestampsEnabled = true
+  ) {
     const configured = String(
       process.env.OPENVINO_LOCAL_ASR_CACHE_DIR || ''
     ).trim();
@@ -1473,17 +1477,32 @@ export class OpenvinoRuntimeManager {
     const safeModelId = String(modelId || 'default')
       .trim()
       .replace(/[^a-z0-9._-]+/gi, '_');
-    const resolved = path.join(cacheRoot, safeModelId);
+    const safeDevice = this.normalizeRequestedDevice(requestedDevice, 'AUTO')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/gi, '_');
+    const wordTimestampKey = wordTimestampsEnabled ? 'wt1' : 'wt0';
+    const cacheKey = `${safeModelId}__${safeDevice}__${wordTimestampKey}`;
+    const resolved = path.join(cacheRoot, cacheKey);
     fs.ensureDirSync(resolved);
     return resolved;
   }
 
-  private static getAsrPipelineProperties(modelId?: string, wordTimestampsEnabled = true, useCache = true) {
+  private static getAsrPipelineProperties(
+    modelId?: string,
+    wordTimestampsEnabled = true,
+    useCache = true,
+    requestedDevice?: string
+  ) {
     const properties: Record<string, unknown> = {
       word_timestamps: wordTimestampsEnabled,
     };
     if (useCache) {
-      properties.CACHE_DIR = this.getLocalAsrCacheDir(modelId);
+      properties.CACHE_DIR = this.getLocalAsrCacheDir(
+        modelId,
+        requestedDevice,
+        wordTimestampsEnabled
+      );
     }
     return properties;
   }
@@ -2435,6 +2454,14 @@ export class OpenvinoRuntimeManager {
     segmentation?: boolean;
     wordAlignment?: boolean;
     prompt?: string;
+    decodePolicy?: {
+      pipelineMode?: 'stable' | 'throughput';
+      alignmentStrategy?: 'provider-first' | 'alignment-first';
+      temperature?: number | null;
+      beamSize?: number | null;
+      noSpeechThreshold?: number | null;
+      conditionOnPreviousText?: boolean | null;
+    };
   }) {
     const normalizedLanguage = this.normalizeWhisperLanguage(input.language);
     const isMultilingual = await this.isWhisperMultilingualModel(input.modelPath);
@@ -2453,6 +2480,25 @@ export class OpenvinoRuntimeManager {
     }
     if (input.prompt && input.prompt.trim()) {
       generationConfig.initial_prompt = input.prompt.trim();
+    }
+    const decodePolicy = input.decodePolicy;
+    const beamSize = Number(decodePolicy?.beamSize);
+    if (Number.isFinite(beamSize) && beamSize >= 1) {
+      generationConfig.num_beams = Math.round(beamSize);
+    }
+    const temperature = Number(decodePolicy?.temperature);
+    if (Number.isFinite(temperature) && temperature > 0) {
+      generationConfig.do_sample = true;
+      generationConfig.temperature = Math.max(0, Math.min(1, temperature));
+    } else {
+      generationConfig.do_sample = false;
+    }
+    const noSpeechThreshold = Number(decodePolicy?.noSpeechThreshold);
+    if (Number.isFinite(noSpeechThreshold)) {
+      generationConfig.no_speech_threshold = Math.max(0, Math.min(1, noSpeechThreshold));
+    }
+    if (typeof decodePolicy?.conditionOnPreviousText === 'boolean') {
+      generationConfig.condition_on_prev_tokens = decodePolicy.conditionOnPreviousText;
     }
 
     return generationConfig;
@@ -2680,6 +2726,14 @@ export class OpenvinoRuntimeManager {
     prompt?: string;
     segmentation?: boolean;
     wordAlignment?: boolean;
+    decodePolicy?: {
+      pipelineMode?: 'stable' | 'throughput';
+      alignmentStrategy?: 'provider-first' | 'alignment-first';
+      temperature?: number | null;
+      beamSize?: number | null;
+      noSpeechThreshold?: number | null;
+      conditionOnPreviousText?: boolean | null;
+    };
   }) {
     const requestedDevice = await this.getLocalAsrDevice();
     const cacheDir = this.getLocalAsrCacheDir(input.modelPath);
@@ -2945,7 +2999,12 @@ export class OpenvinoRuntimeManager {
     let lastError: unknown = null;
     for (const device of candidates) {
       for (const useCache of [true, false]) {
-        const properties = this.getAsrPipelineProperties(modelId, wordTimestampsEnabled, useCache);
+        const properties = this.getAsrPipelineProperties(
+          modelId,
+          wordTimestampsEnabled,
+          useCache,
+          device
+        );
         const timeoutMs = this.getAsrTimeoutMs('load');
         const startedAt = Date.now();
         try {
@@ -3332,6 +3391,14 @@ export class OpenvinoRuntimeManager {
     prompt?: string;
     segmentation?: boolean;
     wordAlignment?: boolean;
+    decodePolicy?: {
+      pipelineMode?: 'stable' | 'throughput';
+      alignmentStrategy?: 'provider-first' | 'alignment-first';
+      temperature?: number | null;
+      beamSize?: number | null;
+      noSpeechThreshold?: number | null;
+      conditionOnPreviousText?: boolean | null;
+    };
   }) {
     const normalizedRuntime = this.normalizeAsrRuntimeValue(input.runtime);
     const detectedHelperRuntimeKind =
@@ -3353,6 +3420,7 @@ export class OpenvinoRuntimeManager {
         segmentation: input.segmentation,
         wordAlignment: input.wordAlignment,
         prompt: input.prompt,
+        decodePolicy: input.decodePolicy,
       });
       const runNativeWhisper = async (cachedPipeline: CachedAsrPipeline) => {
         const pipeline = cachedPipeline.pipeline;

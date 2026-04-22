@@ -3,10 +3,15 @@
 
 # Runtime root
 runtime/
-# Private materials
-
+# Private AI/agent materials (local only, never publish)
 .private/
 .agents/
+
+# Local experimental test scripts (root-level)
+/_tmp_*.ts
+/_tmp_*.js
+/_tmp_*.mjs
+/_tmp_*.ps1
 
 # Local Data Storage
 Projects/
@@ -36,9 +41,8 @@ tools/
 Thumbs.db
 
 # Local Test Scripts (Root)
-check_addon.js
-check_exports.js
-test_whisper_import.js
+/check_*.js
+/test_*.js
 
 # Performance & Dist
 dist/

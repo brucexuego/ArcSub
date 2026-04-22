@@ -61,6 +61,41 @@ type AsrProviderResult = AsrStructuredTranscript & {
   meta: Record<string, any>;
 };
 
+type AsrPipelineMode = 'stable' | 'throughput';
+
+type AsrAlignmentStrategy = 'provider-first' | 'alignment-first';
+
+type AsrDecodePolicy = {
+  pipelineMode: AsrPipelineMode;
+  alignmentStrategy: AsrAlignmentStrategy;
+  temperature: number | null;
+  beamSize: number | null;
+  noSpeechThreshold: number | null;
+  conditionOnPreviousText: boolean | null;
+};
+
+type AsrVadWindowTask = {
+  index: number;
+  start: number;
+  end: number;
+  durationSec: number;
+  bucket: 'short' | 'medium' | 'long';
+};
+
+type AsrWindowScheduleStats = {
+  enabled: boolean;
+  schedulerEnabled: boolean;
+  mode: AsrPipelineMode;
+  batchSize: number;
+  concurrency: number;
+  maxRetries: number;
+  taskCount: number;
+  attemptedCount: number;
+  succeededCount: number;
+  skippedCount: number;
+  retries: number;
+};
+
 export class AsrService {
   private static pipeline: any = null;
 
@@ -133,6 +168,277 @@ export class AsrService {
     if (typeof min === 'number' && parsed < min) return min;
     if (typeof max === 'number' && parsed > max) return max;
     return parsed;
+  }
+
+  private static getEnvBoolean(name: string, fallback: boolean) {
+    const raw = process.env[name];
+    if (typeof raw !== 'string') return fallback;
+    const normalized = raw.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+    return fallback;
+  }
+
+  private static resolvePipelineMode(rawMode?: string): AsrPipelineMode {
+    const requested = String(rawMode || process.env.ASR_PIPELINE_MODE || '')
+      .trim()
+      .toLowerCase();
+    if (requested === 'throughput') return 'throughput';
+    return 'stable';
+  }
+
+  private static resolveAlignmentStrategy(mode: AsrPipelineMode): AsrAlignmentStrategy {
+    const envValue = String(process.env.ASR_ALIGNMENT_STRATEGY || '')
+      .trim()
+      .toLowerCase();
+    if (envValue === 'provider-first') return 'provider-first';
+    if (envValue === 'alignment-first') return 'alignment-first';
+    return mode === 'stable' ? 'alignment-first' : 'provider-first';
+  }
+
+  private static buildDecodePolicy(input: {
+    mode: AsrPipelineMode;
+    effectiveWordAlignment: boolean;
+  }): AsrDecodePolicy {
+    const mode = input.mode;
+    const stableDefaults = {
+      temperature: 0,
+      beamSize: 1,
+      noSpeechThreshold: 0.5,
+      conditionOnPreviousText: true,
+    };
+    const throughputDefaults = {
+      temperature: 0,
+      beamSize: 1,
+      noSpeechThreshold: 0.5,
+      conditionOnPreviousText: false,
+    };
+    const defaults = mode === 'throughput' ? throughputDefaults : stableDefaults;
+    const temperature = this.getEnvNumber(
+      mode === 'throughput' ? 'ASR_DECODE_TEMPERATURE_THROUGHPUT' : 'ASR_DECODE_TEMPERATURE_STABLE',
+      defaults.temperature,
+      0,
+      1
+    );
+    const beamSize = Math.round(
+      this.getEnvNumber(
+        mode === 'throughput' ? 'ASR_DECODE_BEAM_SIZE_THROUGHPUT' : 'ASR_DECODE_BEAM_SIZE_STABLE',
+        defaults.beamSize,
+        1,
+        10
+      )
+    );
+    const noSpeechThreshold = this.getEnvNumber(
+      mode === 'throughput' ? 'ASR_DECODE_NO_SPEECH_THROUGHPUT' : 'ASR_DECODE_NO_SPEECH_STABLE',
+      defaults.noSpeechThreshold,
+      0,
+      1
+    );
+    const conditionOnPreviousText = this.getEnvBoolean(
+      mode === 'throughput'
+        ? 'ASR_DECODE_CONDITION_ON_PREV_TEXT_THROUGHPUT'
+        : 'ASR_DECODE_CONDITION_ON_PREV_TEXT_STABLE',
+      defaults.conditionOnPreviousText
+    );
+    const alignmentStrategy = this.resolveAlignmentStrategy(mode);
+    return {
+      pipelineMode: mode,
+      alignmentStrategy: input.effectiveWordAlignment ? alignmentStrategy : 'provider-first',
+      temperature: Number.isFinite(temperature) ? temperature : null,
+      beamSize: Number.isFinite(beamSize) ? beamSize : null,
+      noSpeechThreshold: Number.isFinite(noSpeechThreshold) ? noSpeechThreshold : null,
+      conditionOnPreviousText:
+        typeof conditionOnPreviousText === 'boolean' ? conditionOnPreviousText : null,
+    };
+  }
+
+  private static getVadWindowBatchSize(mode: AsrPipelineMode) {
+    return Math.round(
+      this.getEnvNumber(
+        mode === 'throughput' ? 'ASR_VAD_WINDOW_BATCH_SIZE_THROUGHPUT' : 'ASR_VAD_WINDOW_BATCH_SIZE_STABLE',
+        mode === 'throughput' ? 4 : 1,
+        1,
+        64
+      )
+    );
+  }
+
+  private static getVadWindowConcurrency(mode: AsrPipelineMode, useLocalProvider: boolean) {
+    const defaultConcurrency = useLocalProvider ? 1 : mode === 'throughput' ? 4 : 1;
+    return Math.round(
+      this.getEnvNumber(
+        mode === 'throughput' ? 'ASR_VAD_WINDOW_CONCURRENCY_THROUGHPUT' : 'ASR_VAD_WINDOW_CONCURRENCY_STABLE',
+        defaultConcurrency,
+        1,
+        16
+      )
+    );
+  }
+
+  private static buildVadWindowTasks(windows: Array<{ start: number; end: number }>) {
+    return windows.map((window, index) => {
+      const durationSec = Math.max(0, this.toFiniteNumber(window.end, 0) - this.toFiniteNumber(window.start, 0));
+      const bucket: AsrVadWindowTask['bucket'] =
+        durationSec <= 6 ? 'short' : durationSec <= 20 ? 'medium' : 'long';
+      return {
+        index,
+        start: this.toFiniteNumber(window.start, 0),
+        end: this.toFiniteNumber(window.end, 0),
+        durationSec,
+        bucket,
+      } satisfies AsrVadWindowTask;
+    });
+  }
+
+  private static chunkTasksByBatchSize(tasks: AsrVadWindowTask[], batchSize: number) {
+    if (batchSize <= 1 || tasks.length <= 1) return tasks.map((task) => [task]);
+    const buckets = {
+      short: tasks.filter((task) => task.bucket === 'short'),
+      medium: tasks.filter((task) => task.bucket === 'medium'),
+      long: tasks.filter((task) => task.bucket === 'long'),
+    };
+    const ordered = [...buckets.short, ...buckets.medium, ...buckets.long];
+    const batches: AsrVadWindowTask[][] = [];
+    for (let index = 0; index < ordered.length; index += batchSize) {
+      batches.push(ordered.slice(index, index + batchSize));
+    }
+    return batches;
+  }
+
+  private static async runTaskPool<T>(
+    tasks: AsrVadWindowTask[],
+    concurrency: number,
+    worker: (task: AsrVadWindowTask) => Promise<T>
+  ) {
+    if (tasks.length === 0) return [] as T[];
+    const boundedConcurrency = Math.max(1, Math.min(concurrency, tasks.length));
+    const results = new Array<T>(tasks.length);
+    let cursor = 0;
+    const runner = async () => {
+      while (cursor < tasks.length) {
+        const current = cursor;
+        cursor += 1;
+        results[current] = await worker(tasks[current]);
+      }
+    };
+    await Promise.all(Array.from({ length: boundedConcurrency }, () => runner()));
+    return results;
+  }
+
+  private static dedupeWordSegmentsByBoundary(words: AsrWordSegment[]) {
+    const sorted = words
+      .map((word) => ({
+        ...word,
+        start_ts: this.toFiniteNumber(word.start_ts, 0),
+        end_ts: Number.isFinite(Number(word.end_ts)) ? this.toFiniteNumber(word.end_ts, 0) : undefined,
+        text: this.normalizeWordText(String(word.text || '')),
+      }))
+      .filter((word) => word.text.length > 0)
+      .sort((a, b) => a.start_ts - b.start_ts);
+    const deduped: AsrWordSegment[] = [];
+    for (const word of sorted) {
+      const previous = deduped[deduped.length - 1];
+      if (!previous) {
+        deduped.push(word);
+        continue;
+      }
+      const sameText = this.normalizeNoSpaceAlignmentText(previous.text) === this.normalizeNoSpaceAlignmentText(word.text);
+      const nearBoundary = Math.abs(previous.start_ts - word.start_ts) <= 0.12;
+      if (sameText && nearBoundary) {
+        const prevEnd = this.toFiniteNumber(previous.end_ts, previous.start_ts);
+        const nextEnd = this.toFiniteNumber(word.end_ts, word.start_ts);
+        previous.end_ts = Math.max(prevEnd, nextEnd);
+        continue;
+      }
+      deduped.push(word);
+    }
+    return deduped;
+  }
+
+  private static reconcileBoundaryChunks(
+    chunks: AsrTranscriptChunk[],
+    language?: string,
+    overlapSec = 0.18
+  ) {
+    const sorted = [...chunks]
+      .map((chunk) => ({
+        ...chunk,
+        text: this.normalizeChunkText(chunk.text || ''),
+        start_ts: this.toFiniteNumber(chunk.start_ts, 0),
+        end_ts: Number.isFinite(Number(chunk.end_ts)) ? this.toFiniteNumber(chunk.end_ts, 0) : undefined,
+      }))
+      .filter((chunk) => chunk.text.length > 0)
+      .sort((a, b) => a.start_ts - b.start_ts);
+    const output: AsrTranscriptChunk[] = [];
+    for (const chunk of sorted) {
+      const previous = output[output.length - 1];
+      if (!previous) {
+        output.push(chunk);
+        continue;
+      }
+      const previousEnd = this.toFiniteNumber(previous.end_ts, previous.start_ts);
+      const gap = chunk.start_ts - previousEnd;
+      const normalizedPrevious = this.normalizeNoSpaceAlignmentText(previous.text);
+      const normalizedCurrent = this.normalizeNoSpaceAlignmentText(chunk.text);
+      const nearBoundary = gap <= overlapSec;
+      const sameLine = normalizedPrevious.length > 0 && normalizedPrevious === normalizedCurrent;
+      if (nearBoundary && sameLine) {
+        const nextEnd = this.toFiniteNumber(chunk.end_ts, chunk.start_ts);
+        previous.end_ts = Math.max(previousEnd, nextEnd);
+        continue;
+      }
+      if (chunk.start_ts < previousEnd) {
+        chunk.start_ts = Number((previousEnd + 0.02).toFixed(3));
+        if (Number.isFinite(Number(chunk.end_ts)) && this.toFiniteNumber(chunk.end_ts, chunk.start_ts) <= chunk.start_ts) {
+          chunk.end_ts = Number((chunk.start_ts + 0.1).toFixed(3));
+        }
+      }
+      output.push(chunk);
+    }
+    return this.mergeDisplayChunks(output, language);
+  }
+
+  private static reconcileWindowedTranscript(
+    transcript: AsrStructuredTranscript,
+    language?: string
+  ): AsrStructuredTranscript {
+    const overlapSec = this.getEnvNumber('ASR_VAD_RECONCILE_OVERLAP_SEC', 0.18, 0.02, 1.5);
+    const reconcileEnabled = this.getEnvBoolean('ASR_VAD_RECONCILE_ENABLED', true);
+    if (!reconcileEnabled) {
+      return transcript;
+    }
+    const reconciledChunks = this.reconcileBoundaryChunks(transcript.chunks || [], language, overlapSec);
+    const reconciledWords = this.dedupeWordSegmentsByBoundary(transcript.word_segments || []);
+    let tokenIndex = 0;
+    const normalizedWords = reconciledWords.map((word) => ({
+      ...word,
+      source_segment_index: undefined,
+      token_index: tokenIndex++,
+    }));
+    const resolvedSegments =
+      Array.isArray(transcript.segments) && transcript.segments.length > 0
+        ? transcript.segments
+            .map((segment) => ({
+              ...segment,
+              text: this.normalizeChunkText(segment.text || ''),
+              start_ts: this.toFiniteNumber(segment.start_ts, 0),
+              end_ts: Number.isFinite(Number(segment.end_ts)) ? this.toFiniteNumber(segment.end_ts, 0) : undefined,
+            }))
+            .filter((segment) => segment.text.length > 0)
+            .sort((a, b) => a.start_ts - b.start_ts)
+        : reconciledChunks.map((chunk) => ({
+            text: chunk.text,
+            start_ts: chunk.start_ts,
+            end_ts: chunk.end_ts,
+          }));
+    return {
+      ...transcript,
+      chunks: reconciledChunks,
+      segments: resolvedSegments,
+      word_segments: normalizedWords,
+      text: this.buildTranscriptTextFromChunks(reconciledChunks, language),
+    };
   }
 
   private static getCloudAsrPreemptiveChunkThresholdBytes() {
@@ -396,7 +702,15 @@ export class AsrService {
   private static async transcribeCloudChunked(
     filePath: string,
     config: any,
-    options: { language?: string; prompt?: string; segmentation?: boolean; wordAlignment?: boolean; vad?: boolean; diarization?: boolean },
+    options: {
+      language?: string;
+      prompt?: string;
+      segmentation?: boolean;
+      wordAlignment?: boolean;
+      vad?: boolean;
+      diarization?: boolean;
+      decodePolicy?: AsrDecodePolicy;
+    },
     onProgress: (msg: string) => void,
     signal?: AbortSignal
   ) {
@@ -489,7 +803,15 @@ export class AsrService {
   private static async transcribeCloudWithFileLimitFallback(
     filePath: string,
     config: any,
-    options: { language?: string; prompt?: string; segmentation?: boolean; wordAlignment?: boolean; vad?: boolean; diarization?: boolean },
+    options: {
+      language?: string;
+      prompt?: string;
+      segmentation?: boolean;
+      wordAlignment?: boolean;
+      vad?: boolean;
+      diarization?: boolean;
+      decodePolicy?: AsrDecodePolicy;
+    },
     onProgress: (msg: string) => void,
     signal?: AbortSignal
   ) {
@@ -526,7 +848,15 @@ export class AsrService {
       localModelRuntime?: string;
       localModelPath?: string;
       cloudModelConfig?: any;
-      options: { language?: string; prompt?: string; segmentation?: boolean; wordAlignment?: boolean; vad?: boolean; diarization?: boolean };
+      options: {
+        language?: string;
+        prompt?: string;
+        segmentation?: boolean;
+        wordAlignment?: boolean;
+        vad?: boolean;
+        diarization?: boolean;
+        decodePolicy?: AsrDecodePolicy;
+      };
       onProgress: (msg: string) => void;
       signal?: AbortSignal;
     }
@@ -545,6 +875,7 @@ export class AsrService {
         prompt: input.options.prompt,
         segmentation: input.options.segmentation,
         wordAlignment: input.options.wordAlignment,
+        decodePolicy: input.options.decodePolicy,
         extractStructuredTranscript: (transcript, transcriptLanguage, extractOptions = {}) =>
           this.extractStructuredTranscript(transcript, transcriptLanguage, {
             ...extractOptions,
@@ -574,24 +905,42 @@ export class AsrService {
       wordAlignment?: boolean,
       vad?: boolean,
       diarization?: boolean,
+      pipelineMode?: AsrPipelineMode,
       diarizationOptions?: DiarizationOptions
     },
     onProgress: (msg: string) => void,
     signal?: AbortSignal
   ) {
     this.throwIfAborted(signal);
-    const { modelId, assetName, language, prompt, segmentation, wordAlignment, vad, diarization, diarizationOptions } = options;
+    const {
+      modelId,
+      assetName,
+      language,
+      prompt,
+      segmentation,
+      wordAlignment,
+      vad,
+      diarization,
+      pipelineMode: requestedPipelineMode,
+      diarizationOptions,
+    } = options;
     const startedAt = Date.now();
     const effectiveSegmentation = Boolean(segmentation) || Boolean(diarization);
     const requestedWordAlignment = wordAlignment !== false;
     const effectiveWordAlignment = effectiveSegmentation && requestedWordAlignment;
     const effectiveVad = Boolean(vad) || Boolean(diarization);
+    const pipelineMode = this.resolvePipelineMode(requestedPipelineMode);
+    const decodePolicy = this.buildDecodePolicy({
+      mode: pipelineMode,
+      effectiveWordAlignment,
+    });
     const segmentationForcedForDiarization = Boolean(diarization) && !Boolean(segmentation);
     const requestedFeatures = {
       segmentation: Boolean(segmentation),
       wordAlignment: requestedWordAlignment,
       vad: Boolean(vad),
       diarization: Boolean(diarization),
+      pipelineMode,
       diarizationOptions: diarizationOptions || null,
     };
 
@@ -608,7 +957,11 @@ export class AsrService {
     const localProfile = localModel ? resolveLocalAsrProfile(localModel) : null;
     const useLocalProvider = Boolean(localModel);
     const localModelPath = localModel ? getLocalModelInstallDir(localModel) : undefined;
-    const allowVadWindowedTranscription = true;
+    const allowVadWindowedTranscription = this.getEnvBoolean('ASR_VAD_WINDOWING_ENABLED', true);
+    const schedulerEnabled = this.getEnvBoolean('ASR_VAD_SCHEDULER_ENABLED', true);
+    const vadWindowBatchSize = this.getVadWindowBatchSize(pipelineMode);
+    const vadWindowConcurrency = this.getVadWindowConcurrency(pipelineMode, useLocalProvider);
+    const vadWindowMaxRetries = Math.round(this.getEnvNumber('ASR_VAD_WINDOW_MAX_RETRIES', 1, 0, 5));
     const effectivePrompt = useLocalProvider
       ? this.buildEffectiveLocalAsrPrompt(language, prompt)
       : String(prompt || '').trim();
@@ -636,10 +989,24 @@ export class AsrService {
     let diarizationApplied = false;
     let alignmentError: string | null = null;
     let alignmentDiagnostics: any = null;
+    let deferredSyntheticTimecodes = false;
     let vadMs = 0;
     let providerWallMs = 0;
     let alignmentWallMs = 0;
     let diarizationMs = 0;
+    const windowScheduleStats: AsrWindowScheduleStats = {
+      enabled: effectiveVad,
+      schedulerEnabled,
+      mode: pipelineMode,
+      batchSize: vadWindowBatchSize,
+      concurrency: vadWindowConcurrency,
+      maxRetries: vadWindowMaxRetries,
+      taskCount: 0,
+      attemptedCount: 0,
+      succeededCount: 0,
+      skippedCount: 0,
+      retries: 0,
+    };
 
     if (effectiveVad) {
       const vadStartedAt = Date.now();
@@ -650,6 +1017,8 @@ export class AsrService {
 
         if (speechSegments.length > 0) {
           vadWindows = this.buildVadWindows(speechSegments);
+          const windowTasks = this.buildVadWindowTasks(vadWindows);
+          windowScheduleStats.taskCount = windowTasks.length;
           onProgress(`VAD detected ${speechSegments.length} speech segments (${vadWindows.length} windows).`);
 
           if (!allowVadWindowedTranscription) {
@@ -666,50 +1035,92 @@ export class AsrService {
           const skippedWindowErrors: string[] = [];
 
           if (allowVadWindowedTranscription) {
-            for (let i = 0; i < vadWindows.length; i += 1) {
-              this.throwIfAborted(signal);
-              const window = vadWindows[i];
-              const windowLabel = `${i + 1}_${Math.round(window.start * 1000)}_${Math.round(window.end * 1000)}`;
-              const windowAudioPath = await this.extractAudioWindow(audioPath, window.start, window.end, windowLabel);
+            const batches = schedulerEnabled
+              ? this.chunkTasksByBatchSize(windowTasks, vadWindowBatchSize)
+              : windowTasks.map((task) => [task]);
 
-              try {
-                onProgress(`Calling ASR provider (VAD window ${i + 1}/${vadWindows.length})...`);
-                const providerStartedAt = Date.now();
-                try {
-                  const cloudResult = await this.transcribeWithProvider(windowAudioPath, {
-                    useLocalProvider,
-                    localModelId: localModel?.id,
-                    localModelRuntime: localModel?.runtime,
-                    localModelPath,
-                    cloudModelConfig: modelConfig,
-                    options: {
-                      language,
-                      prompt: effectivePrompt,
-                      segmentation: effectiveSegmentation,
-                      wordAlignment: effectiveWordAlignment,
-                      vad: effectiveVad,
-                      diarization,
-                    },
-                    onProgress,
-                    signal,
-                  });
-                  providerWallMs += Math.max(0, Date.now() - providerStartedAt);
-                  providerMetaList.push(cloudResult.meta);
-                  const shifted = this.offsetStructuredTranscript(cloudResult, window.start);
+            for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+              this.throwIfAborted(signal);
+              const batch = batches[batchIndex];
+              const label = schedulerEnabled
+                ? `batch ${batchIndex + 1}/${batches.length}`
+                : `window group ${batchIndex + 1}/${batches.length}`;
+              onProgress(`Calling ASR provider (${label}, ${batch.length} windows)...`);
+
+              const results = await this.runTaskPool(
+                batch,
+                schedulerEnabled ? vadWindowConcurrency : 1,
+                async (task) => {
+                  this.throwIfAborted(signal);
+                  let attempts = 0;
+                  while (true) {
+                    attempts += 1;
+                    windowScheduleStats.attemptedCount += 1;
+                    const windowLabel = `${task.index + 1}_${Math.round(task.start * 1000)}_${Math.round(task.end * 1000)}`;
+                    const windowAudioPath = await this.extractAudioWindow(audioPath, task.start, task.end, windowLabel);
+                    try {
+                      const providerStartedAt = Date.now();
+                      const providerResult = await this.transcribeWithProvider(windowAudioPath, {
+                        useLocalProvider,
+                        localModelId: localModel?.id,
+                        localModelRuntime: localModel?.runtime,
+                        localModelPath,
+                        cloudModelConfig: modelConfig,
+                        options: {
+                          language,
+                          prompt: effectivePrompt,
+                          segmentation: effectiveSegmentation,
+                          wordAlignment: effectiveWordAlignment,
+                          vad: effectiveVad,
+                          diarization,
+                          decodePolicy,
+                        },
+                        onProgress,
+                        signal,
+                      });
+                      providerWallMs += Math.max(0, Date.now() - providerStartedAt);
+                      windowScheduleStats.succeededCount += 1;
+                      return {
+                        task,
+                        ok: true as const,
+                        providerResult,
+                      };
+                    } catch (windowErr) {
+                      if (this.isAbortError(windowErr)) {
+                        throw windowErr;
+                      }
+                      const message = windowErr instanceof Error ? windowErr.message : String(windowErr);
+                      if (attempts <= vadWindowMaxRetries) {
+                        windowScheduleStats.retries += 1;
+                        onProgress(
+                          `VAD window ${task.index + 1}/${vadWindows.length} failed (${message}), retrying (${attempts}/${vadWindowMaxRetries})...`
+                        );
+                        continue;
+                      }
+                      windowScheduleStats.skippedCount += 1;
+                      return {
+                        task,
+                        ok: false as const,
+                        message,
+                      };
+                    } finally {
+                      await fs.remove(windowAudioPath).catch(() => {});
+                    }
+                  }
+                }
+              );
+
+              for (const item of results) {
+                if (item.ok) {
+                  const shifted = this.offsetStructuredTranscript(item.providerResult, item.task.start);
+                  providerMetaList.push(item.providerResult.meta);
                   mergedWindowTranscript.chunks.push(...shifted.chunks);
                   mergedWindowTranscript.segments.push(...shifted.segments);
                   mergedWindowTranscript.word_segments.push(...shifted.word_segments);
-                } catch (windowErr) {
-                  providerWallMs += Math.max(0, Date.now() - providerStartedAt);
-                  if (this.isAbortError(windowErr)) {
-                    throw windowErr;
-                  }
-                  const message = windowErr instanceof Error ? windowErr.message : String(windowErr);
-                  skippedWindowErrors.push(`window_${i + 1}: ${message}`);
-                  console.warn(`[ASR] VAD window ${i + 1}/${vadWindows.length} skipped: ${message}`);
+                } else {
+                  skippedWindowErrors.push(`window_${item.task.index + 1}: ${item.message}`);
+                  console.warn(`[ASR] VAD window ${item.task.index + 1}/${vadWindows.length} skipped: ${item.message}`);
                 }
-              } finally {
-                await fs.remove(windowAudioPath).catch(() => {});
               }
             }
           }
@@ -719,14 +1130,16 @@ export class AsrService {
           }
 
           if (allowVadWindowedTranscription && mergedWindowTranscript.chunks.length > 0) {
-            windowedTranscript = {
+            windowedTranscript = this.reconcileWindowedTranscript({
               text: mergedWindowTranscript.chunks.map((chunk) => chunk.text).filter(Boolean).join(' ').trim(),
               chunks: mergedWindowTranscript.chunks.sort((a, b) => a.start_ts - b.start_ts),
               segments: mergedWindowTranscript.segments.sort((a, b) => a.start_ts - b.start_ts),
               word_segments: mergedWindowTranscript.word_segments.sort((a, b) => a.start_ts - b.start_ts),
-            };
+            }, language);
             providerMetaFromWindows = this.mergeProviderMeta(providerMetaList);
-            onProgress(`ASR provider completed (${vadWindows.length} VAD windows).`);
+            onProgress(
+              `ASR provider completed (${windowScheduleStats.succeededCount}/${vadWindows.length} VAD windows, skipped ${windowScheduleStats.skippedCount}).`
+            );
           } else {
             onProgress('VAD windows produced no transcript text, falling back to full-audio request.');
           }
@@ -763,6 +1176,7 @@ export class AsrService {
           wordAlignment: effectiveWordAlignment,
           vad: effectiveVad,
           diarization,
+          decodePolicy,
         },
         onProgress,
         signal,
@@ -776,22 +1190,36 @@ export class AsrService {
         word_segments: cloudResult.word_segments,
       };
     }
+    providerMeta = {
+      ...(providerMeta || {}),
+      pipelineMode,
+      decodePolicy,
+      windowScheduler: {
+        ...windowScheduleStats,
+      },
+    };
 
     let timestampsSynthesized = false;
     const allowSyntheticSegmentationTimestamps =
       effectiveSegmentation &&
       (!effectiveWordAlignment || !this.isLanguageWithoutSpaces(language));
+    const shouldPreferAlignmentFirst =
+      decodePolicy.alignmentStrategy === 'alignment-first' && effectiveWordAlignment;
     if (
       allowSyntheticSegmentationTimestamps &&
       Array.isArray(result?.chunks) &&
       result.chunks.length > 0 &&
       !this.hasUsableChunkTimestamps(result.chunks)
     ) {
-      const synthesized = await this.synthesizeChunkTimestamps(result.chunks, audioPath);
-      if (synthesized.synthesized) {
-        result.chunks = synthesized.chunks;
-        timestampsSynthesized = true;
-        onProgress('Provider returned no timestamps, synthesized approximate timecodes for segmented transcript.');
+      if (shouldPreferAlignmentFirst) {
+        deferredSyntheticTimecodes = true;
+      } else {
+        const synthesized = await this.synthesizeChunkTimestamps(result.chunks, audioPath);
+        if (synthesized.synthesized) {
+          result.chunks = synthesized.chunks;
+          timestampsSynthesized = true;
+          onProgress('Provider returned no timestamps, synthesized approximate timecodes for segmented transcript.');
+        }
       }
     }
 
@@ -879,6 +1307,21 @@ export class AsrService {
       }
     }
 
+    if (
+      deferredSyntheticTimecodes &&
+      allowSyntheticSegmentationTimestamps &&
+      Array.isArray(result?.chunks) &&
+      result.chunks.length > 0 &&
+      !this.hasUsableChunkTimestamps(result.chunks)
+    ) {
+      const synthesized = await this.synthesizeChunkTimestamps(result.chunks, audioPath);
+      if (synthesized.synthesized) {
+        result.chunks = synthesized.chunks;
+        timestampsSynthesized = true;
+        onProgress('Forced alignment did not produce usable timestamps, synthesized approximate segmented timecodes.');
+      }
+    }
+
     let diarizationDiagnostics: any = null;
     if (diarization && Array.isArray(result.chunks) && result.chunks.length > 0) {
       this.throwIfAborted(signal);
@@ -939,6 +1382,8 @@ export class AsrService {
       userPrompt: prompt,
       effectivePrompt,
       localAsrPromptApplied,
+      pipelineMode,
+      decodePolicy,
       providerMeta,
       localProfile,
       effectiveSegmentation,
@@ -948,6 +1393,7 @@ export class AsrService {
       result,
       speechSegments,
       vadWindows,
+      windowScheduleStats,
       diarizationDiagnostics,
       alignmentDiagnostics,
       resolvedAlignmentLanguage,
@@ -984,7 +1430,15 @@ export class AsrService {
   private static async transcribeCloud(
     filePath: string,
     config: any,
-    options: { language?: string; prompt?: string; segmentation?: boolean; wordAlignment?: boolean; vad?: boolean; diarization?: boolean },
+    options: {
+      language?: string;
+      prompt?: string;
+      segmentation?: boolean;
+      wordAlignment?: boolean;
+      vad?: boolean;
+      diarization?: boolean;
+      decodePolicy?: AsrDecodePolicy;
+    },
     signal?: AbortSignal
   ) {
     const resolvedProvider = resolveCloudAsrProvider({

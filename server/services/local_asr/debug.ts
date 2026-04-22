@@ -19,6 +19,15 @@ interface BuildAsrDebugInfoInput {
   userPrompt: string | undefined;
   effectivePrompt: string;
   localAsrPromptApplied: boolean;
+  pipelineMode: 'stable' | 'throughput';
+  decodePolicy: {
+    pipelineMode: 'stable' | 'throughput';
+    alignmentStrategy: 'provider-first' | 'alignment-first';
+    temperature: number | null;
+    beamSize: number | null;
+    noSpeechThreshold: number | null;
+    conditionOnPreviousText: boolean | null;
+  };
   providerMeta: any;
   localProfile: LocalResolvedAsrProfile | null;
   effectiveSegmentation: boolean;
@@ -32,6 +41,19 @@ interface BuildAsrDebugInfoInput {
   };
   speechSegments: Array<{ start: number; end: number }>;
   vadWindows: Array<{ start: number; end: number }>;
+  windowScheduleStats?: {
+    enabled: boolean;
+    schedulerEnabled: boolean;
+    mode: 'stable' | 'throughput';
+    batchSize: number;
+    concurrency: number;
+    maxRetries: number;
+    taskCount: number;
+    attemptedCount: number;
+    succeededCount: number;
+    skippedCount: number;
+    retries: number;
+  };
   diarizationDiagnostics: any;
   alignmentDiagnostics: any;
   resolvedAlignmentLanguage: string | null;
@@ -116,6 +138,11 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
   const syntheticWordCount = input.toFiniteNumber(input.providerMeta?.cjkWordDiagnostics?.syntheticWordCount, 0);
   return {
     requested: input.requestedFeatures,
+    pipeline: {
+      mode: input.pipelineMode,
+      decodePolicy: input.decodePolicy,
+      scheduler: input.windowScheduleStats || null,
+    },
     prompt: {
       userProvided: Boolean(String(input.userPrompt || '').trim()),
       effectiveProvided: Boolean(String(input.effectivePrompt || '').trim()),
@@ -123,6 +150,9 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
     },
     provider: {
       ...(input.providerMeta || {}),
+      pipelineMode: input.pipelineMode,
+      decodePolicy: input.decodePolicy,
+      windowScheduler: input.windowScheduleStats || input.providerMeta?.windowScheduler || null,
       profileId: input.localProfile?.baseProfile.profileId ?? null,
       profileFamily: input.localProfile?.baseProfile.profileFamily ?? null,
     },
