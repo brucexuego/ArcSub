@@ -806,7 +806,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
 
       if (session.mode === 'resize-width') {
         const nextWidth = clamp(
-          session.startWidthPct + deltaXPct,
+          session.startWidthPct + (deltaXPct * 2),
           SUBTITLE_WIDTH_MIN_PCT,
           SUBTITLE_WIDTH_MAX_PCT
         );
@@ -816,7 +816,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
 
       if (session.mode === 'resize-height') {
         const nextHeight = clamp(
-          session.startHeightPct + deltaYPct,
+          session.startHeightPct + (deltaYPct * 2),
           SUBTITLE_HEIGHT_MIN_PCT,
           SUBTITLE_HEIGHT_MAX_PCT
         );
