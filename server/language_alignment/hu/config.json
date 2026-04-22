@@ -1,12 +1,12 @@
 {
-  "key": "es",
-  "aliases": ["es", "es-es", "es-mx"],
-  "alignmentProfileId": "es-jonatas-xlsr53-spanish-v1",
+  "key": "hu",
+  "aliases": ["hu", "hu-hu"],
+  "alignmentProfileId": "hu-jonatas-xlsr53-hungarian-v1",
   "clipPaddingSec": 0.24,
   "minRunConfidence": 0.46,
   "minOverallConfidence": 0.54,
   "minOverallAlignedRatio": 0.34,
-  "progressLabel": "Spanish forced alignment",
+  "progressLabel": "Hungarian forced alignment",
   "maxRunGapSec": 0.44,
   "minRunTokenLength": 2
 }

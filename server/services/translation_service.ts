@@ -413,7 +413,7 @@ export class TranslationService {
         'Do not leave translated lines in the original non-English language unless the content is a proper noun, brand, code identifier, or unavoidable quoted term.',
       ];
     }
-    if (['fi', 'es', 'de', 'pt', 'it', 'fr'].includes(normalized)) {
+    if (['fi', 'es', 'de', 'pt', 'it', 'fr', 'ru', 'pl', 'ar', 'nl', 'el', 'fa', 'hu'].includes(normalized)) {
       return [
         `Use natural ${this.normalizeTargetLanguage(targetLang)} output.`,
         'Do not keep the source line in English unless the content is a proper noun, brand, or code identifier.',
@@ -1866,14 +1866,27 @@ export class TranslationService {
     if (!plain.trim()) return false;
 
     const lines = plain.split('\n').map((line) => this.stripStructuredPrefix(this.stripLineMarker(line)).trim());
+    const benignRepeatedTokens = new Set(['hello', 'hi', 'hey']);
     for (const line of lines) {
       if (!line) continue;
-      const normalizedLine = line.replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-      if (/\b([\p{L}\p{N}]{2,})\s+\1\b/iu.test(normalizedLine)) {
-        return true;
+      const repeatedWordMatch = line.match(/\b([\p{L}\p{N}]{2,})\s+\1\b/iu);
+      if (repeatedWordMatch) {
+        const token = String(repeatedWordMatch[1] || '').toLowerCase();
+        if (!benignRepeatedTokens.has(token)) {
+          return true;
+        }
       }
-      const compactLine = normalizedLine.replace(/\s+/g, '');
-      if (/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{1,3})\1/u.test(compactLine)) {
+
+      const cjkNormalized = line
+        .replace(/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\s]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      const cjkCompact = cjkNormalized.replace(/\s+/g, '');
+      if (
+        cjkNormalized &&
+        (/([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,10})\s+\1/u.test(cjkNormalized) ||
+          /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]{2,10})\1/u.test(cjkCompact))
+      ) {
         return true;
       }
     }
@@ -1982,14 +1995,13 @@ export class TranslationService {
       const words = Array.from(
         plain
           .toLowerCase()
-          .matchAll(/\b[a-z][a-z'’-]*\b/g)
+          .matchAll(/\b[a-z][a-z']*\b/g)
       ).map((match) => match[0]);
       const englishHits = this.countStopwordHits(words, this.getLanguageStopwords('en'));
-      const englishRatio = words.length > 0 ? englishHits / words.length : 0;
       if (nonLatinScriptCount >= 4 && latinCount <= nonLatinScriptCount) {
         return true;
       }
-      if (latinCount >= 6 && words.length >= 6 && englishHits <= 1 && englishRatio < 0.12) {
+      if (words.length >= 10 && englishHits === 0) {
         return true;
       }
       return false;

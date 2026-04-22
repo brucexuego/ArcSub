@@ -1,7 +1,7 @@
 {
   "key": "fi",
   "aliases": ["fi", "fi-fi"],
-  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "alignmentProfileId": "fi-jonatas-xlsr53-finnish-v1",
   "clipPaddingSec": 0.24,
   "minRunConfidence": 0.46,
   "minOverallConfidence": 0.54,

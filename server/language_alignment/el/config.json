@@ -1,0 +1,13 @@
+{
+  "key": "el",
+  "aliases": ["el", "el-gr"],
+  "alignmentProfileId": "el-jonatas-xlsr53-greek-v1",
+  "clipPaddingSec": 0.24,
+  "minRunConfidence": 0.46,
+  "minOverallConfidence": 0.54,
+  "minOverallAlignedRatio": 0.3,
+  "progressLabel": "Greek forced alignment",
+  "maxRunGapSec": 0.44,
+  "minRunTokenLength": 2,
+  "scriptPattern": "[\\u0370-\\u03ff\\u1f00-\\u1fff]"
+}

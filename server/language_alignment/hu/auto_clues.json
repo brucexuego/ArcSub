@@ -1,0 +1,6 @@
+{
+  "stopwords": ["\\u00e9s", "hogy", "nem", "van", "egy", "a", "az", "is", "de", "ha", "mert"],
+  "priorityWords": ["mi\\u00e9rt", "ma", "magyarorsz\\u00e1g", "emberek", "most", "szerintem"],
+  "rawMarkers": ["[\\u00e1\\u00e9\\u00ed\\u00f3\\u00f6\\u0151\\u00fa\\u00fc\\u0171]"],
+  "minScore": 3
+}

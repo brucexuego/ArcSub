@@ -1,5 +1,5 @@
 {
-  "alignmentProfileId": "mms-300m-forced-aligner-v1",
+  "alignmentProfileId": "zh-cn-jonatas-xlsr53-chinese-v1",
   "clipPaddingSec": 0.18,
   "minRunConfidence": 0.46,
   "minOverallConfidence": 0.5,

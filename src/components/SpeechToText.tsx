@@ -1772,29 +1772,27 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     ? Boolean(project?.audioUrl || project?.videoUrl)
     : Boolean(selectedAssetName);
   const selectedModelName = asrModels.find((model) => model.id === selectedModelId)?.name || t('stt.noModels');
-  const selectedLanguageLabel = selectedLanguage === 'auto'
-    ? t('stt.autoDetect')
-    : selectedLanguage === 'en'
-      ? t('lang.en')
-      : selectedLanguage === 'zh'
-        ? t('lang.zh-audio')
-        : selectedLanguage === 'fi'
-          ? t('lang.fi')
-          : selectedLanguage === 'es'
-            ? t('lang.es')
-            : selectedLanguage === 'de'
-              ? t('lang.de')
-              : selectedLanguage === 'pt'
-                ? t('lang.pt')
-                : selectedLanguage === 'it'
-                  ? t('lang.it')
-                  : selectedLanguage === 'fr'
-                    ? t('lang.fr')
-                    : selectedLanguage === 'ja'
-                      ? t('lang.jp')
-                      : selectedLanguage === 'ko'
-                      ? t('lang.kr')
-                        : selectedLanguage;
+  const selectedLanguageLabelMap: Record<string, string> = {
+    en: t('lang.en'),
+    zh: t('lang.zh-audio'),
+    fi: t('lang.fi'),
+    es: t('lang.es'),
+    de: t('lang.de'),
+    pt: t('lang.pt'),
+    it: t('lang.it'),
+    fr: t('lang.fr'),
+    ru: t('lang.ru'),
+    pl: t('lang.pl'),
+    ar: t('lang.ar'),
+    nl: t('lang.nl'),
+    el: t('lang.el'),
+    fa: t('lang.fa'),
+    hu: t('lang.hu'),
+    ja: t('lang.jp'),
+    ko: t('lang.kr'),
+  };
+  const selectedLanguageLabel =
+    selectedLanguage === 'auto' ? t('stt.autoDetect') : selectedLanguageLabelMap[selectedLanguage] || selectedLanguage;
   React.useEffect(() => {
     if (diarization || vad || !segmentation || prompt.trim()) {
       setShowAdvanced(true);
@@ -1915,6 +1913,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                 <option value="pt" className="bg-surface-container-high text-white">{t('lang.pt')}</option>
                 <option value="it" className="bg-surface-container-high text-white">{t('lang.it')}</option>
                 <option value="fr" className="bg-surface-container-high text-white">{t('lang.fr')}</option>
+                <option value="ru" className="bg-surface-container-high text-white">{t('lang.ru')}</option>
+                <option value="pl" className="bg-surface-container-high text-white">{t('lang.pl')}</option>
+                <option value="ar" className="bg-surface-container-high text-white">{t('lang.ar')}</option>
+                <option value="nl" className="bg-surface-container-high text-white">{t('lang.nl')}</option>
+                <option value="el" className="bg-surface-container-high text-white">{t('lang.el')}</option>
+                <option value="fa" className="bg-surface-container-high text-white">{t('lang.fa')}</option>
+                <option value="hu" className="bg-surface-container-high text-white">{t('lang.hu')}</option>
                 <option value="ja" className="bg-surface-container-high text-white">{t('lang.jp')}</option>
                 <option value="ko" className="bg-surface-container-high text-white">{t('lang.kr')}</option>
               </select>
