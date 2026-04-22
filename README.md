@@ -20,9 +20,21 @@ ArcSub is a local-first subtitle workstation for downloading media, converting s
 
 Dashboard overview: manage subtitle projects, monitor system resources, and move through the full workflow.
 
+![ArcSub video fetcher workflow](./docs/assets/screenshots/video-fetcher-overview.png)
+
+Video Fetcher: parse source metadata, select downloadable formats, and prepare assets for transcription.
+
 ![ArcSub speech to text workflow](./docs/assets/screenshots/speech-to-text-overview.png)
 
-Speech to Text: choose a recognition model, configure advanced features, and prepare subtitles for translation.
+Speech to Text: choose a recognition model, configure advanced features, and generate transcript output.
+
+![ArcSub text translation workflow](./docs/assets/screenshots/text-translation-overview.png)
+
+Text Translation: configure model and language options, then review side-by-side source and translated subtitles.
+
+![ArcSub video player workflow](./docs/assets/screenshots/video-player-overview.png)
+
+Video Player: preview final subtitles on video and fine-tune subtitle styling before export.
 
 ## Quick Paths
 

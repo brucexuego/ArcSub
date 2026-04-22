@@ -20,9 +20,21 @@ ArcSub 是一款 local-first 的字幕工作台，用來下載媒體、進行語
 
 Dashboard 總覽：管理字幕專案、查看系統資源，並串起整個工作流程。
 
+![ArcSub video fetcher workflow](./docs/assets/screenshots/video-fetcher-overview.png)
+
+Video Fetcher：解析來源中繼資料、選擇下載格式，並準備後續語音辨識素材。
+
 ![ArcSub speech to text workflow](./docs/assets/screenshots/speech-to-text-overview.png)
 
-Speech to Text：選擇辨識模型、設定進階選項，並為後續字幕翻譯做準備。
+Speech to Text：選擇辨識模型、設定進階選項，並產生逐字稿輸出。
+
+![ArcSub text translation workflow](./docs/assets/screenshots/text-translation-overview.png)
+
+Text Translation：設定模型與語言選項，並檢視原文與翻譯字幕的對照結果。
+
+![ArcSub video player workflow](./docs/assets/screenshots/video-player-overview.png)
+
+Video Player：預覽最終字幕套用效果，並在匯出前微調字幕樣式。
 
 ## 快速入口
 

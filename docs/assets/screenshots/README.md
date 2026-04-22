@@ -3,7 +3,10 @@
 Place public README screenshots in this folder with these filenames:
 
 - `dashboard-overview.png`
+- `video-fetcher-overview.png`
 - `speech-to-text-overview.png`
+- `text-translation-overview.png`
+- `video-player-overview.png`
 
 These files are referenced by:
 
