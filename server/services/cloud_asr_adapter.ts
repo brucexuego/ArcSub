@@ -9,6 +9,14 @@ export interface CloudAsrAdapterRequestOptions {
   wordAlignment?: boolean;
   vad?: boolean;
   diarization?: boolean;
+  decodePolicy?: {
+    pipelineMode?: 'stable' | 'throughput';
+    alignmentStrategy?: 'provider-first' | 'alignment-first';
+    temperature?: number | null;
+    beamSize?: number | null;
+    noSpeechThreshold?: number | null;
+    conditionOnPreviousText?: boolean | null;
+  };
 }
 
 export interface CloudAsrStructuredSegment {
@@ -108,6 +116,9 @@ const cloudAsrAdapters: Record<CloudAsrProvider, CloudAsrAdapter> = {
       if (options.prompt && options.prompt.trim()) {
         formData.append('prompt', options.prompt.trim());
       }
+      if (Number.isFinite(Number(options.decodePolicy?.temperature))) {
+        formData.append('temperature', String(Number(options.decodePolicy?.temperature)));
+      }
       return formData;
     },
   },
@@ -136,6 +147,15 @@ const cloudAsrAdapters: Record<CloudAsrProvider, CloudAsrAdapter> = {
         formData.append('timestamp_granularities[]', 'segment');
         formData.append('timestamp_granularities[]', 'word');
       }
+      if (Number.isFinite(Number(options.decodePolicy?.temperature))) {
+        formData.append('temperature', String(Number(options.decodePolicy?.temperature)));
+      }
+      if (Number.isFinite(Number(options.decodePolicy?.beamSize))) {
+        formData.append('beam_size', String(Math.max(1, Math.round(Number(options.decodePolicy?.beamSize)))));
+      }
+      if (Number.isFinite(Number(options.decodePolicy?.noSpeechThreshold))) {
+        formData.append('no_speech_thold', String(Number(options.decodePolicy?.noSpeechThreshold)));
+      }
       return formData;
     },
   },
@@ -161,12 +181,17 @@ export async function requestCloudAsr(
   const fileBuffer = await fs.readFile(filePath);
   const preferredFormats = adapter.getPreferredResponseFormats(options);
   const headers: Record<string, string> = {};
+  const cloudRequestTimeoutMs = (() => {
+    const parsed = Number(process.env.ASR_CLOUD_REQUEST_TIMEOUT_MS || 120000);
+    if (!Number.isFinite(parsed)) return 120000;
+    return Math.max(15000, Math.min(1800000, Math.round(parsed)));
+  })();
   if (config.key) {
     headers.Authorization = `Bearer ${config.key}`;
   }
 
   const sendOnce = async (includeLanguage: boolean, responseFormat: string) => {
-    const request = deps.createAbortSignalWithTimeout(120000, signal);
+    const request = deps.createAbortSignalWithTimeout(cloudRequestTimeoutMs, signal);
     try {
       const response = await fetch(resolvedProvider.endpointUrl, {
         method: 'POST',

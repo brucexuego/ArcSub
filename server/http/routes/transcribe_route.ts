@@ -30,7 +30,7 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
     }, 10000);
 
     const { projectId } = req.params;
-    const { modelId, assetName, language, prompt, segmentation, wordAlignment, vad, diarization } = req.query;
+    const { modelId, assetName, language, prompt, segmentation, wordAlignment, vad, diarization, pipelineMode } = req.query;
     const diarizationProvider = typeof req.query.diarizationProvider === 'string' ? req.query.diarizationProvider : undefined;
     const diarizationMode = typeof req.query.diarizationMode === 'string' ? req.query.diarizationMode : undefined;
     const diarizationScenePreset = typeof req.query.diarizationScenePreset === 'string' ? req.query.diarizationScenePreset : undefined;
@@ -106,6 +106,7 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
       wordAlignment: wordAlignment !== 'false',
       vad: vad === 'true',
       diarization: diarization === 'true',
+      pipelineMode: typeof pipelineMode === 'string' ? pipelineMode : '',
       diarizationOptions: diarization === 'true' ? diarizationOptions : null,
       hasPrompt: Boolean(prompt),
     });
@@ -122,6 +123,7 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
         wordAlignment: wordAlignment !== 'false',
         vad: vad === 'true',
         diarization: diarization === 'true',
+        pipelineMode: typeof pipelineMode === 'string' ? (pipelineMode as 'stable' | 'throughput') : undefined,
         diarizationOptions: diarization === 'true' ? diarizationOptions : undefined,
       },
       (msg) => {
