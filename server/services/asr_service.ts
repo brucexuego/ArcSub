@@ -315,14 +315,26 @@ export class AsrService {
     const boundedConcurrency = Math.max(1, Math.min(concurrency, tasks.length));
     const results = new Array<T>(tasks.length);
     let cursor = 0;
+    let firstError: unknown = null;
     const runner = async () => {
       while (cursor < tasks.length) {
+        if (firstError) return;
         const current = cursor;
         cursor += 1;
-        results[current] = await worker(tasks[current]);
+        try {
+          results[current] = await worker(tasks[current]);
+        } catch (error) {
+          if (!firstError) {
+            firstError = error;
+          }
+          return;
+        }
       }
     };
     await Promise.all(Array.from({ length: boundedConcurrency }, () => runner()));
+    if (firstError) {
+      throw firstError;
+    }
     return results;
   }
 
