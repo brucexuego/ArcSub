@@ -1,5 +1,11 @@
 import express from 'express';
 import { resolveCloudAsrProvider } from '../../services/cloud_asr_provider.js';
+import type { ApiModelRequestOptions } from '../../../src/types.js';
+
+function sanitizeModelOptions(raw: unknown): ApiModelRequestOptions | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  return raw as ApiModelRequestOptions;
+}
 
 export interface SettingsTestConnectionRouteDeps {
   parseHttpUrl: (raw: string) => URL | null;
@@ -46,11 +52,13 @@ export function registerSettingsTestConnectionRoute(
       const requestedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
       const requestedUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
       const providedKey = typeof req.body?.key === 'string' ? req.body.key : '';
+      const requestedOptions = sanitizeModelOptions(req.body?.options);
 
       let finalUrl = requestedUrl;
       let finalKey = providedKey;
       let finalModel = requestedModel;
       let finalName = requestedName;
+      let finalOptions = requestedOptions;
 
       if (isMaskedKey(providedKey)) {
         if (!modelId) {
@@ -69,6 +77,7 @@ export function registerSettingsTestConnectionRoute(
         finalKey = String(found.key || '');
         finalModel = String(found.model || requestedModel || '');
         finalName = String(found.name || requestedName || '');
+        finalOptions = requestedOptions ?? sanitizeModelOptions(found.options);
       }
 
       if (finalKey && /[^\x20-\x7E]/.test(finalKey)) {
@@ -110,6 +119,7 @@ export function registerSettingsTestConnectionRoute(
           key: finalKey,
           model: finalModel,
           name: finalName,
+          options: finalOptions,
         });
         if (translatedConnection.success) {
           return res.json({ success: true, message: translatedConnection.message || 'Connection succeeded.' });

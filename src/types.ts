@@ -73,8 +73,22 @@ export interface ApiConfig {
   url: string;
   key: string;
   model?: string;
+  options?: ApiModelRequestOptions;
   isLocal?: boolean;
   provider?: 'cloud' | 'local-openvino';
+}
+
+export interface ApiModelSamplingOptions {
+  temperature?: number | null;
+  topP?: number | null;
+  maxOutputTokens?: number | null;
+}
+
+export interface ApiModelRequestOptions {
+  sampling?: ApiModelSamplingOptions;
+  headers?: Record<string, string>;
+  body?: Record<string, unknown>;
+  timeoutMs?: number | null;
 }
 
 export interface LocalModelSelection {

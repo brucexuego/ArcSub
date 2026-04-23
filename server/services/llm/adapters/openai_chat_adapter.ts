@@ -3,6 +3,25 @@ import type { CanonicalLlmRequest, CanonicalLlmResponse } from '../canonical/llm
 import { buildOpenAiChatMessages, wantsJsonObject, wantsJsonSchema } from '../mapping/provider_payloads.js';
 import type { LlmAdapter, LlmAdapterContext, ProviderHttpResponse } from './base.js';
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function deepMerge(base: Record<string, unknown>, override: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, overrideValue] of Object.entries(override)) {
+    const baseValue = merged[key];
+    if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+      merged[key] = deepMerge(baseValue, overrideValue);
+      continue;
+    }
+    merged[key] = overrideValue;
+  }
+  return merged;
+}
+
 function parseOpenAiLikeContent(content: any) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -78,11 +97,27 @@ function buildOpenAiChatRequest(input: CanonicalLlmRequest, context: LlmAdapterC
     };
   }
 
+  const requestHeaders = isPlainObject(input.providerHints?.requestHeaders)
+    ? (input.providerHints?.requestHeaders as Record<string, unknown>)
+    : null;
+  if (requestHeaders) {
+    for (const [key, value] of Object.entries(requestHeaders)) {
+      if (typeof value === 'string' && key.trim()) {
+        headers[key] = value;
+      }
+    }
+  }
+
+  const requestBody = isPlainObject(input.providerHints?.requestBody)
+    ? (input.providerHints?.requestBody as Record<string, unknown>)
+    : null;
+  const finalBody = requestBody ? deepMerge(body, requestBody) : body;
+
   return {
     method: 'POST' as const,
     url: context.endpointUrl,
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify(finalBody),
     timeoutMs: 120000,
   };
 }

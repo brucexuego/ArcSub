@@ -58,6 +58,7 @@ import {
 } from './llm/orchestrators/translation_quality_policy.js';
 import type { ResolvedCloudTranslateProvider } from './cloud_translate_provider.js';
 import type { RunIssue } from '../../shared/run_monitor.js';
+import type { ApiModelRequestOptions } from '../../src/types.js';
 
 type TranslateProvider = CloudTranslateProvider | 'openvino-local';
 
@@ -81,6 +82,7 @@ interface TranslateRequestOptions {
   promptTemplateId?: PromptTemplateId | string;
   key?: string;
   model?: string;
+  modelOptions?: ApiModelRequestOptions;
   isConnectionTest?: boolean;
   lineSafeMode?: boolean;
   systemPromptOverride?: string;
@@ -2958,6 +2960,7 @@ export class TranslationService {
       promptTemplateId?: string;
       key?: string;
       model?: string;
+      modelOptions?: ApiModelRequestOptions;
     },
     onProgress?: TranslateProgressFn,
     signal?: AbortSignal
@@ -3012,6 +3015,7 @@ export class TranslationService {
           promptTemplateId: options.promptTemplateId,
           key: options.key,
           model: options.model,
+          modelOptions: options.modelOptions,
           lineSafeMode: false,
           signal,
         });
@@ -3059,6 +3063,7 @@ export class TranslationService {
           promptTemplateId: options.promptTemplateId,
           key: options.key,
           model: options.model,
+          modelOptions: options.modelOptions,
           lineSafeMode: false,
           systemPromptOverride: this.buildJsonLineRepairPrompt(options.targetLang, options.glossary, options.promptTemplateId),
           jsonResponse: true,
@@ -3235,7 +3240,7 @@ export class TranslationService {
       signal?: AbortSignal;
     },
     resolvedProvider: ResolvedCloudTranslateProvider,
-    model: { key?: string; model?: string }
+    model: { key?: string; model?: string; options?: ApiModelRequestOptions }
   ): CloudTranslationOrchestratorInput {
     const qualityMode = this.resolveTranslationQualityModeForRequest({
       promptTemplateId: input.promptTemplateId,
@@ -3258,6 +3263,7 @@ export class TranslationService {
         endpointUrl: resolvedProvider.endpointUrl,
         key: model.key,
         model: resolvedProvider.effectiveModel || model.model,
+        modelOptions: model.options,
       },
       signal: input.signal,
     };
@@ -3404,7 +3410,7 @@ export class TranslationService {
       signal?: AbortSignal;
     },
     resolvedProvider: ResolvedCloudTranslateProvider,
-    model: { key?: string; model?: string },
+    model: { key?: string; model?: string; options?: ApiModelRequestOptions },
     orchestrated: CloudTranslationOrchestratorResult,
     onProgress?: TranslateProgressFn
   ): Promise<{
@@ -3540,7 +3546,7 @@ export class TranslationService {
       signal?: AbortSignal;
     },
     resolvedProvider: ResolvedCloudTranslateProvider,
-    model: { key?: string; model?: string },
+    model: { key?: string; model?: string; options?: ApiModelRequestOptions },
     onProgress?: TranslateProgressFn
   ): Promise<TranslationResult> {
     const startedAt = Date.now();
@@ -3584,7 +3590,13 @@ export class TranslationService {
     };
   }
 
-  static async testConnection(input: { url: string; key?: string; model?: string; name?: string }) {
+  static async testConnection(input: {
+    url: string;
+    key?: string;
+    model?: string;
+    name?: string;
+    options?: ApiModelRequestOptions;
+  }) {
     return runCloudTranslationConnectionProbe(input, {
       buildOrchestratorInput: this.buildCloudTranslationOrchestratorInput.bind(this),
       buildOrchestratorDeps: this.buildCloudTranslationOrchestratorDeps.bind(this),
@@ -3658,6 +3670,7 @@ export class TranslationService {
       {
         key: model.key,
         model: model.model,
+        options: model.options,
       },
       onProgress
     );

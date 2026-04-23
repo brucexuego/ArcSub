@@ -3523,6 +3523,63 @@ const monitorSectionOverrides: Record<Language, Record<string, string>> = {
   Object.assign(translations[language], translationPipelineMessagingOverrides[language]);
 });
 
+const settingsAdvancedOptionsOverrides: Record<Language, Record<string, string>> = {
+  'zh-tw': {
+    'settings.advancedOptionsTitle': '進階請求參數',
+    'settings.advancedOptionsJsonTitle': '進階請求參數（JSON）',
+    'settings.advancedOptionsConfigured': '已設定',
+    'settings.advancedOptionsHint':
+      '支援 OpenAI 相容 API 的完整 provider 參數，包括 stream 與 chat_template_kwargs。',
+    'settings.advancedOptionsErrorObject': '進階參數必須是 JSON 物件。',
+    'settings.advancedOptionsErrorInvalidJson': '進階參數 JSON 格式無效。',
+    'settings.connectionTimeout': '連線逾時（{seconds} 秒）。',
+  },
+  'zh-cn': {
+    'settings.advancedOptionsTitle': '高级请求参数',
+    'settings.advancedOptionsJsonTitle': '高级请求参数（JSON）',
+    'settings.advancedOptionsConfigured': '已配置',
+    'settings.advancedOptionsHint':
+      '支持 OpenAI 兼容 API 的完整 provider 参数，包括 stream 和 chat_template_kwargs。',
+    'settings.advancedOptionsErrorObject': '高级参数必须是 JSON 对象。',
+    'settings.advancedOptionsErrorInvalidJson': '高级参数 JSON 格式无效。',
+    'settings.connectionTimeout': '连接超时（{seconds} 秒）。',
+  },
+  en: {
+    'settings.advancedOptionsTitle': 'Advanced Request Options',
+    'settings.advancedOptionsJsonTitle': 'Advanced Request Options (JSON)',
+    'settings.advancedOptionsConfigured': 'Configured',
+    'settings.advancedOptionsHint':
+      'Supports full provider parameters for OpenAI-compatible APIs, including stream and chat_template_kwargs.',
+    'settings.advancedOptionsErrorObject': 'Advanced options must be a JSON object.',
+    'settings.advancedOptionsErrorInvalidJson': 'Advanced options JSON is invalid.',
+    'settings.connectionTimeout': 'Connection timeout ({seconds}s).',
+  },
+  jp: {
+    'settings.advancedOptionsTitle': '高度なリクエスト設定',
+    'settings.advancedOptionsJsonTitle': '高度なリクエスト設定（JSON）',
+    'settings.advancedOptionsConfigured': '設定済み',
+    'settings.advancedOptionsHint':
+      'OpenAI 互換 API 向けに、stream や chat_template_kwargs を含む全ての provider パラメータを指定できます。',
+    'settings.advancedOptionsErrorObject': '高度な設定は JSON オブジェクトである必要があります。',
+    'settings.advancedOptionsErrorInvalidJson': '高度な設定の JSON が無効です。',
+    'settings.connectionTimeout': '接続がタイムアウトしました（{seconds}秒）。',
+  },
+  de: {
+    'settings.advancedOptionsTitle': 'Erweiterte Anfrageoptionen',
+    'settings.advancedOptionsJsonTitle': 'Erweiterte Anfrageoptionen (JSON)',
+    'settings.advancedOptionsConfigured': 'Konfiguriert',
+    'settings.advancedOptionsHint':
+      'Unterstuetzt vollstaendige Provider-Parameter fuer OpenAI-kompatible APIs, einschliesslich stream und chat_template_kwargs.',
+    'settings.advancedOptionsErrorObject': 'Erweiterte Optionen muessen ein JSON-Objekt sein.',
+    'settings.advancedOptionsErrorInvalidJson': 'JSON fuer erweiterte Optionen ist ungueltig.',
+    'settings.connectionTimeout': 'Zeitueberschreitung bei der Verbindung ({seconds}s).',
+  },
+};
+
+(Object.keys(settingsAdvancedOptionsOverrides) as Language[]).forEach((language) => {
+  Object.assign(translations[language], settingsAdvancedOptionsOverrides[language]);
+});
+
 type PromptTargetLanguage =
   | 'zh-tw'
   | 'zh-cn'
