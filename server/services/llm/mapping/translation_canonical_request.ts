@@ -16,6 +16,13 @@ export interface BuildCanonicalTranslationRequestInput {
   isConnectionTest?: boolean;
   promptTemplateId?: string;
   glossary?: string;
+  samplingOverrides?: {
+    temperature?: number | null;
+    topP?: number | null;
+    topK?: number | null;
+    maxOutputTokens?: number | null;
+  };
+  providerHints?: Record<string, unknown>;
 }
 
 export interface BuildCanonicalTranslationRequestResult {
@@ -35,23 +42,34 @@ function buildStructuredOutput(jsonResponse: boolean | undefined): CanonicalStru
   return jsonResponse ? { mode: 'json_object' } : { mode: 'text' };
 }
 
+function toFiniteNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export function buildCanonicalTranslationRequest(input: BuildCanonicalTranslationRequestInput): BuildCanonicalTranslationRequestResult {
   const providerTranslationProfile = resolveProviderTranslationProfile({
     providerFamily: input.providerFamily,
     runtimeFamily: input.adapterKey,
     modelName: input.model,
   });
+  const samplingOverrides = input.samplingOverrides || {};
+  const overrideTemperature = toFiniteNumber(samplingOverrides.temperature);
+  const overrideTopP = toFiniteNumber(samplingOverrides.topP);
+  const overrideTopK = toFiniteNumber(samplingOverrides.topK);
+  const overrideMaxOutputTokens = toFiniteNumber(samplingOverrides.maxOutputTokens);
   const baseRequest: CanonicalLlmRequest = {
     model: String(input.model || '').trim(),
     instructions: String(input.systemPrompt || '').trim() || undefined,
     messages: [buildUserMessage(input.text)],
     structuredOutput: buildStructuredOutput(input.jsonResponse),
     sampling: {
-      temperature: providerTranslationProfile?.arcsubDefaults.temperature ?? 0.2,
-      topP: providerTranslationProfile?.arcsubDefaults.topP,
-      topK: providerTranslationProfile?.arcsubDefaults.topK,
-      maxOutputTokens: input.isConnectionTest ? 32 : undefined,
+      temperature: overrideTemperature ?? providerTranslationProfile?.arcsubDefaults.temperature ?? 0.2,
+      topP: overrideTopP ?? providerTranslationProfile?.arcsubDefaults.topP,
+      topK: overrideTopK ?? providerTranslationProfile?.arcsubDefaults.topK,
+      maxOutputTokens: input.isConnectionTest ? 32 : overrideMaxOutputTokens,
     },
+    providerHints: input.providerHints,
     metadata: {
       targetLang: String(input.targetLang || '').trim(),
       sourceLang: String(input.sourceLang || '').trim(),

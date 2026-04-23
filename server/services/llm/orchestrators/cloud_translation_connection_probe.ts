@@ -4,12 +4,14 @@ import {
   type CloudTranslationOrchestratorInput,
 } from './cloud_translation_orchestrator.js';
 import { resolveCloudTranslateProvider, type ResolvedCloudTranslateProvider } from '../../cloud_translate_provider.js';
+import type { ApiModelRequestOptions } from '../../../../src/types.js';
 
 export interface CloudTranslationConnectionProbeInput {
   url: string;
   key?: string;
   model?: string;
   name?: string;
+  options?: ApiModelRequestOptions;
 }
 
 export interface CloudTranslationConnectionProbeResult {
@@ -28,7 +30,7 @@ export interface CloudTranslationConnectionProbeDeps {
       isConnectionTest: boolean;
     },
     resolvedProvider: ResolvedCloudTranslateProvider,
-    model: { key?: string; model?: string }
+    model: { key?: string; model?: string; options?: ApiModelRequestOptions }
   ): CloudTranslationOrchestratorInput;
   buildOrchestratorDeps(): CloudTranslationOrchestratorDeps;
   mapConnectionError(error: unknown): string;
@@ -42,6 +44,7 @@ export async function runCloudTranslationConnectionProbe(
   const key = String(input.key || '').trim();
   const model = String(input.model || '').trim();
   const name = String(input.name || '').trim();
+  const options = input.options;
 
   try {
     const resolvedProvider = resolveCloudTranslateProvider({
@@ -62,6 +65,7 @@ export async function runCloudTranslationConnectionProbe(
         {
           key,
           model: resolvedProvider.effectiveModel || model,
+          options,
         }
       ),
       deps.buildOrchestratorDeps()

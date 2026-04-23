@@ -1,10 +1,10 @@
 ﻿import React from 'react';
 import { Save, Plus, Globe, Key, Trash2, Info, Edit2, Check, ChevronDown, Zap, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
-import { ApiConfig, Project } from '../types';
+import { ApiConfig, ApiModelRequestOptions, Project } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import { Language } from '../i18n/translations';
 import { sanitizeInput, isValidUrl, isValidApiKey, maskApiKey, isMaskedApiKey } from '../utils/security';
-import { getJson, postJson } from '../utils/http_client';
+import { getJson, HttpRequestError, postJson } from '../utils/http_client';
 
 type LocalModelType = 'asr' | 'translate';
 
@@ -1224,7 +1224,9 @@ export default function Settings({ project }: { project: Project | null }) {
                 />
               </div>
               <div className="space-y-2">
-                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">Save</label>
+                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
+                  {pyannoteCopy.saveToken}
+                </label>
                 <button
                   type="button"
                   onClick={() => void handleSavePyannoteToken()}
@@ -1235,7 +1237,9 @@ export default function Settings({ project }: { project: Project | null }) {
                 </button>
               </div>
               <div className="space-y-2">
-                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">Install</label>
+                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
+                  {pyannoteCopy.install}
+                </label>
                 <button
                   type="button"
                   onClick={() => void handleInstallPyannote()}
@@ -1290,7 +1294,9 @@ export default function Settings({ project }: { project: Project | null }) {
                 />
               </div>
               <div className="space-y-2">
-                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">Install</label>
+                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
+                  {t('settings.localInstall')}
+                </label>
                 <button
                   type="button"
                   onClick={() => void handleInstallLocalModel()}
@@ -1481,6 +1487,39 @@ export default function Settings({ project }: { project: Project | null }) {
   );
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function serializeModelOptions(options: ApiModelRequestOptions | undefined): string {
+  if (!options || !isPlainObject(options) || Object.keys(options).length === 0) return '';
+  try {
+    return JSON.stringify(options, null, 2);
+  } catch {
+    return '';
+  }
+}
+
+function parseModelOptions(raw: string): {
+  value?: ApiModelRequestOptions;
+  errorKey?: 'settings.advancedOptionsErrorObject' | 'settings.advancedOptionsErrorInvalidJson';
+} {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return { value: undefined };
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!isPlainObject(parsed)) {
+      return { errorKey: 'settings.advancedOptionsErrorObject' };
+    }
+    return { value: parsed as ApiModelRequestOptions };
+  } catch {
+    return { errorKey: 'settings.advancedOptionsErrorInvalidJson' };
+  }
+}
+
 const ModelItem: React.FC<{ 
   model: ApiConfig, 
   modelType: 'asr' | 'translate',
@@ -1499,24 +1538,77 @@ const ModelItem: React.FC<{
   const { t } = useLanguage();
   const [isEditing, setIsEditing] = React.useState(isNew);
   const [editedModel, setEditedModel] = React.useState(model);
+  const [modelOptionsText, setModelOptionsText] = React.useState(() => serializeModelOptions(model.options));
   const [testStatus, setTestStatus] = React.useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [testError, setTestError] = React.useState<string | null>(null);
-  const [errors, setErrors] = React.useState<{name?: string, url?: string, key?: string}>({});
+  const [errors, setErrors] = React.useState<{name?: string, url?: string, key?: string, options?: string}>({});
 
-  const validate = (data: ApiConfig) => {
-    const newErrors: {name?: string, url?: string, key?: string} = {};
+  React.useEffect(() => {
+    if (isEditing) return;
+    setEditedModel(model);
+    setModelOptionsText(serializeModelOptions(model.options));
+  }, [isEditing, model]);
+
+  const validate = (data: ApiConfig, optionsError?: string | null) => {
+    const newErrors: {name?: string, url?: string, key?: string, options?: string} = {};
     if (!data.name.trim()) newErrors.name = t('settings.errorNameRequired');
     if (!isValidUrl(data.url)) newErrors.url = t('settings.errorInvalidUrl');
     if (data.key && !isValidApiKey(data.key) && !isMaskedApiKey(data.key)) {
       newErrors.key = t('settings.errorInvalidKey');
+    }
+    if (modelType === 'translate' && optionsError) {
+      newErrors.options = optionsError;
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleTestConnection = async () => {
-    const target = isEditing ? editedModel : model;
+    const parsedOptions = isEditing && modelType === 'translate' ? parseModelOptions(modelOptionsText) : {};
+    if (parsedOptions.errorKey) {
+      const localized = t(parsedOptions.errorKey);
+      setErrors((prev) => ({ ...prev, options: localized }));
+      setTestStatus('failed');
+      setTestError(localized);
+      setTimeout(() => {
+        setTestStatus('idle');
+      }, 5000);
+      return;
+    }
+
+    const target = isEditing
+      ? {
+          ...editedModel,
+          options: modelType === 'translate' ? parsedOptions.value : editedModel.options,
+        }
+      : model;
     if (!target.url) return;
+    const configuredTimeoutMs = Number(target.options?.timeoutMs);
+    const connectionTimeoutMs =
+      Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+        ? Math.round(configuredTimeoutMs)
+        : modelType === 'translate'
+          ? 120_000
+          : 20_000;
+
+    const parseHttpErrorBody = (bodyText: string) => {
+      const raw = String(bodyText || '').trim();
+      if (!raw) return '';
+      try {
+        const parsed = JSON.parse(raw);
+        const nested = parsed?.error;
+        const nestedMessage =
+          typeof nested === 'string'
+            ? nested
+            : nested?.message || parsed?.message || parsed?.detail || parsed?.error_description;
+        if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
+          return nestedMessage.trim();
+        }
+      } catch {
+        // Non-JSON body; use raw text.
+      }
+      return raw;
+    };
     
     setTestStatus('testing');
     setTestError(null);
@@ -1530,8 +1622,9 @@ const ModelItem: React.FC<{
           modelId: target.id,
           model: target.model || '',
           name: target.name || '',
+          options: target.options,
         },
-        { timeoutMs: 12_000, retries: 0 }
+        { timeoutMs: connectionTimeoutMs, retries: 0 }
       );
       
       if (data.success) {
@@ -1542,7 +1635,19 @@ const ModelItem: React.FC<{
       }
     } catch (error: any) {
       setTestStatus('failed');
-      setTestError(error.message || t('settings.testFailed'));
+      const rawMessage = String(error?.message || '').trim();
+      const isAbortLike = error?.name === 'AbortError' || /abort|aborted|timeout/i.test(rawMessage);
+      if (isAbortLike) {
+        const timeoutMessage = t('settings.connectionTimeout').replace(
+          '{seconds}',
+          String(Math.round(connectionTimeoutMs / 1000))
+        );
+        setTestError(timeoutMessage);
+      } else if (error instanceof HttpRequestError) {
+        setTestError(parseHttpErrorBody(error.bodyText) || rawMessage || t('settings.testFailed'));
+      } else {
+        setTestError(rawMessage || t('settings.testFailed'));
+      }
     } finally {
       // Always reset to idle after 5 seconds to let user try again
       setTimeout(() => {
@@ -1552,13 +1657,16 @@ const ModelItem: React.FC<{
   };
 
   const handleSave = () => {
+    const parsedOptions = modelType === 'translate' ? parseModelOptions(modelOptionsText) : {};
     const sanitized = {
       ...editedModel,
       name: sanitizeInput(editedModel.name),
       url: editedModel.url.trim(),
-      key: editedModel.key.trim()
+      key: editedModel.key.trim(),
+      options: modelType === 'translate' ? parsedOptions.value : editedModel.options,
     };
-    if (!validate(sanitized)) return;
+    const optionsError = parsedOptions.errorKey ? t(parsedOptions.errorKey) : null;
+    if (!validate(sanitized, optionsError)) return;
     onSave(sanitized);
     setIsEditing(false);
   };
@@ -1568,6 +1676,7 @@ const ModelItem: React.FC<{
       onCancelNew();
     } else {
       setEditedModel(model);
+      setModelOptionsText(serializeModelOptions(model.options));
       setIsEditing(false);
     }
   };
@@ -1604,6 +1713,18 @@ const ModelItem: React.FC<{
                 {model.model || (modelType === 'asr' ? 'whisper-1' : 'gpt-4o-mini')}
               </div>
             </div>
+            {modelType === 'translate' && model.options && (
+              <div className="rounded-xl border border-white/5 bg-surface-container-high px-4 py-3 sm:col-span-2">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-outline">
+                  {t('settings.advancedOptionsTitle')}
+                </div>
+                <div className="mt-1 truncate text-xs text-secondary">
+                  {Object.keys(model.options).length > 0
+                    ? t('settings.advancedOptionsConfigured')
+                    : t('settings.notSet')}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -1728,6 +1849,32 @@ const ModelItem: React.FC<{
           />
           <p className="text-[10px] text-outline/50 mt-1">{t('settings.modelIdHint')}</p>
         </div>
+        {modelType === 'translate' && (
+          <div className="space-y-2 md:col-span-2 xl:col-span-4">
+            <label className="text-[10px] font-bold text-primary uppercase tracking-widest">
+              {t('settings.advancedOptionsJsonTitle')}
+            </label>
+            <textarea
+              value={modelOptionsText}
+              onChange={(e) => {
+                setModelOptionsText(e.target.value);
+                if (errors.options) setErrors({ ...errors, options: undefined });
+              }}
+              placeholder={`{\n  \"sampling\": {\n    \"temperature\": 1,\n    \"topP\": 0.95,\n    \"maxOutputTokens\": 16384\n  },\n  \"body\": {\n    \"stream\": true,\n    \"chat_template_kwargs\": {\n      \"enable_thinking\": true,\n      \"clear_thinking\": false\n    }\n  },\n  \"headers\": {\n    \"Accept\": \"text/event-stream\"\n  },\n  \"timeoutMs\": 180000\n}`}
+              rows={12}
+              className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary font-mono focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
+                errors.options ? 'border-error/50' : 'border-white/10'
+              }`}
+            />
+            {errors.options ? (
+              <p className="text-[10px] text-error font-bold mt-1">{errors.options}</p>
+            ) : (
+              <p className="text-[10px] text-outline/50 mt-1">
+                {t('settings.advancedOptionsHint')}
+              </p>
+            )}
+          </div>
+        )}
       </div>
       
       <div className="flex flex-col gap-3 border-t border-white/5 pt-6 sm:flex-row sm:justify-end">

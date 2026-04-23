@@ -1,4 +1,5 @@
 import type { CloudTranslateProvider } from '../../cloud_translate_provider.js';
+import type { ApiModelRequestOptions } from '../../../../src/types.js';
 import {
   usesJsonStrictAlignment,
   usesTemplateValidatedQualityChecks,
@@ -50,6 +51,7 @@ export interface CloudTranslationProviderRequest {
   endpointUrl: string;
   key?: string;
   model?: string;
+  modelOptions?: ApiModelRequestOptions;
 }
 
 export interface CloudTranslationOrchestratorInput {
@@ -93,6 +95,7 @@ export interface CloudTranslationOrchestratorDeps {
       promptTemplateId?: string;
       key?: string;
       model?: string;
+      modelOptions?: ApiModelRequestOptions;
       isConnectionTest?: boolean;
       lineSafeMode?: boolean;
       systemPromptOverride?: string;
@@ -117,6 +120,7 @@ export interface CloudTranslationOrchestratorDeps {
       promptTemplateId?: string;
       key?: string;
       model?: string;
+      modelOptions?: ApiModelRequestOptions;
     },
     onProgress?: (message: string) => void,
     signal?: AbortSignal
@@ -230,6 +234,7 @@ export async function runCloudTranslationOrchestrator(
             promptTemplateId: input.promptTemplateId,
             key: input.providerRequest.key,
             model: input.providerRequest.model,
+            modelOptions: input.providerRequest.modelOptions,
             lineSafeMode: requestOptions.lineSafeMode,
             isConnectionTest: input.isConnectionTest,
             systemPromptOverride: String(requestOptions.promptOverride ?? input.prompt ?? '').trim(),
@@ -316,6 +321,7 @@ export async function runCloudTranslationOrchestrator(
             promptTemplateId: input.promptTemplateId,
             key: input.providerRequest.key,
             model: input.providerRequest.model,
+            modelOptions: input.providerRequest.modelOptions,
           },
           onProgress,
           input.signal
@@ -359,12 +365,13 @@ export async function runCloudTranslationOrchestrator(
           targetLang: input.targetLang,
           sourceLang: input.sourceLang,
           glossary: input.glossary,
-          promptTemplateId: input.promptTemplateId,
-          key: input.providerRequest.key,
-          model: input.providerRequest.model,
-        },
-        onProgress,
-        input.signal
+            promptTemplateId: input.promptTemplateId,
+            key: input.providerRequest.key,
+            model: input.providerRequest.model,
+            modelOptions: input.providerRequest.modelOptions,
+          },
+          onProgress,
+          input.signal
       );
 
       if (repaired) {

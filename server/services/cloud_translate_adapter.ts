@@ -4,6 +4,7 @@ import { llmAdapterRegistry } from './llm/adapters/registry.js';
 import type { LlmAdapterKey } from './llm/canonical/llm_capabilities.js';
 import { buildCanonicalTranslationRequest } from './llm/mapping/translation_canonical_request.js';
 import { deepLCloudTranslateAdapter } from './cloud_translate_deepl_adapter.js';
+import type { ApiModelRequestOptions } from '../../src/types.js';
 import {
   ollamaChatCloudTranslateAdapter,
   ollamaGenerateCloudTranslateAdapter,
@@ -18,6 +19,7 @@ export interface CloudTranslateAdapterRequestOptions {
   promptTemplateId?: string;
   key?: string;
   model?: string;
+  modelOptions?: ApiModelRequestOptions;
   isConnectionTest?: boolean;
   lineSafeMode?: boolean;
   systemPromptOverride?: string;
@@ -83,6 +85,173 @@ export interface CloudTranslateAdapter {
 
 ensureBuiltinLlmAdaptersRegistered();
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseJsonSafe(raw: string | undefined) {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+type ParsedOpenAiChatEventStreamResult =
+  | { kind: 'completion'; body: Record<string, unknown> }
+  | { kind: 'error'; message: string; status?: number }
+  | null;
+
+function extractSseErrorFrame(parsed: any): { message: string; status?: number } | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const topLevelError = parsed.error;
+  if (typeof topLevelError === 'string' && topLevelError.trim()) {
+    return { message: topLevelError.trim() };
+  }
+
+  if (isPlainObject(topLevelError)) {
+    const messageCandidate =
+      topLevelError.message ||
+      topLevelError.detail ||
+      topLevelError.error_description ||
+      topLevelError.error ||
+      parsed.message;
+    const statusCandidate =
+      topLevelError.status ?? topLevelError.http_status ?? topLevelError.status_code ?? topLevelError.code;
+    const parsedStatus = Number(statusCandidate);
+    const status =
+      Number.isFinite(parsedStatus) && parsedStatus >= 100 && parsedStatus <= 599 ? Math.round(parsedStatus) : undefined;
+    if (typeof messageCandidate === 'string' && messageCandidate.trim()) {
+      return {
+        message: messageCandidate.trim(),
+        status,
+      };
+    }
+  }
+
+  const objectType = String(parsed.object || parsed.type || '').toLowerCase();
+  if (
+    objectType.includes('error') &&
+    typeof parsed.message === 'string' &&
+    parsed.message.trim()
+  ) {
+    const parsedStatus = Number(parsed.status ?? parsed.code ?? 0);
+    const status =
+      Number.isFinite(parsedStatus) && parsedStatus >= 100 && parsedStatus <= 599 ? Math.round(parsedStatus) : undefined;
+    return {
+      message: parsed.message.trim(),
+      status,
+    };
+  }
+
+  return null;
+}
+
+function parseOpenAiChatEventStream(rawText: string): ParsedOpenAiChatEventStreamResult {
+  const chunks = String(rawText || '').split(/\r?\n/);
+  let id = '';
+  let model = '';
+  let created = 0;
+  let finishReason: string | undefined;
+  let messageContent = '';
+  let reasoningContent = '';
+  let usage: Record<string, unknown> | undefined;
+  let sawChunk = false;
+
+  for (const line of chunks) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) continue;
+
+    const payload = trimmed.slice('data:'.length).trim();
+    if (!payload) continue;
+    if (payload === '[DONE]') break;
+
+    const parsed = parseJsonSafe(payload);
+    if (!parsed || typeof parsed !== 'object') continue;
+
+    const sseError = extractSseErrorFrame(parsed);
+    if (sseError) {
+      return {
+        kind: 'error',
+        message: sseError.message,
+        status: sseError.status,
+      };
+    }
+
+    if (!id && typeof (parsed as any).id === 'string') id = (parsed as any).id;
+    if (!model && typeof (parsed as any).model === 'string') model = (parsed as any).model;
+    if (!created) {
+      const parsedCreated = Number((parsed as any).created);
+      if (Number.isFinite(parsedCreated) && parsedCreated > 0) created = parsedCreated;
+    }
+    if (isPlainObject((parsed as any).usage)) {
+      usage = (parsed as any).usage;
+    }
+
+    const choices = Array.isArray((parsed as any).choices) ? (parsed as any).choices : [];
+    let frameHasChoicePayload = false;
+    for (const choice of choices) {
+      const delta = (choice as any)?.delta;
+      if (delta && typeof delta === 'object') {
+        frameHasChoicePayload = true;
+      }
+      if (typeof delta?.content === 'string') {
+        messageContent += delta.content;
+      } else if (Array.isArray(delta?.content)) {
+        messageContent += delta.content
+          .map((part: any) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
+          .join('');
+      }
+      if (typeof delta?.reasoning_content === 'string') {
+        reasoningContent += delta.reasoning_content;
+      }
+      if (!finishReason && typeof (choice as any)?.finish_reason === 'string' && (choice as any).finish_reason) {
+        finishReason = (choice as any).finish_reason;
+      }
+      if (typeof (choice as any)?.finish_reason === 'string' && (choice as any).finish_reason) {
+        frameHasChoicePayload = true;
+      }
+    }
+
+    if (frameHasChoicePayload) {
+      sawChunk = true;
+    }
+  }
+
+  if (!sawChunk) return null;
+
+  return {
+    kind: 'completion',
+    body: {
+      id: id || undefined,
+      object: 'chat.completion',
+      created: created || Math.floor(Date.now() / 1000),
+      model: model || '',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: messageContent,
+            reasoning_content: reasoningContent || undefined,
+          },
+          finish_reason: finishReason || 'stop',
+        },
+      ],
+      usage,
+    },
+  };
+}
+
 async function executeLlmAdapterRequest(input: {
   adapterKey: LlmAdapterKey;
   providerFamily: CloudTranslateProvider;
@@ -104,6 +273,15 @@ async function executeLlmAdapterRequest(input: {
     isConnectionTest: input.options.isConnectionTest,
     promptTemplateId: input.options.promptTemplateId,
     glossary: input.options.glossary,
+    samplingOverrides: {
+      temperature: input.options.modelOptions?.sampling?.temperature,
+      topP: input.options.modelOptions?.sampling?.topP,
+      maxOutputTokens: input.options.modelOptions?.sampling?.maxOutputTokens,
+    },
+    providerHints: {
+      requestHeaders: input.options.modelOptions?.headers,
+      requestBody: input.options.modelOptions?.body,
+    },
   });
   const canonicalRequest = canonical.request;
 
@@ -113,14 +291,38 @@ async function executeLlmAdapterRequest(input: {
     modelOverride: canonicalRequest.model,
   });
 
+  const requestBody =
+    typeof providerRequest.body === 'string'
+      ? providerRequest.body
+      : providerRequest.body == null
+        ? undefined
+        : JSON.stringify(providerRequest.body);
+
+  const parsedRequestBody =
+    typeof requestBody === 'string' ? parseJsonSafe(requestBody) : null;
+  const isStreamingRequest = Boolean(
+    parsedRequestBody &&
+      typeof parsedRequestBody === 'object' &&
+      !Array.isArray(parsedRequestBody) &&
+      (parsedRequestBody as any).stream === true
+  );
+  const requestHeaders: Record<string, string> = { ...(providerRequest.headers || {}) };
+  const hasAcceptHeader = Object.keys(requestHeaders).some((key) => key.toLowerCase() === 'accept');
+  if (isStreamingRequest && !hasAcceptHeader) {
+    requestHeaders.Accept = 'text/event-stream';
+  }
+  const timeoutOverride = toFiniteNumber(input.options.modelOptions?.timeoutMs);
+  const effectiveTimeoutMs =
+    timeoutOverride && timeoutOverride > 0 ? timeoutOverride : providerRequest.timeoutMs ?? 120000;
+
   const response = await input.deps.fetchWithTimeout(
     providerRequest.url,
     {
       method: providerRequest.method,
-      headers: providerRequest.headers,
-      body: typeof providerRequest.body === 'string' ? providerRequest.body : JSON.stringify(providerRequest.body),
+      headers: requestHeaders,
+      body: requestBody,
     },
-    providerRequest.timeoutMs ?? 120000,
+    effectiveTimeoutMs,
     input.options.signal
   );
   const rawText = await response.text();
@@ -134,10 +336,27 @@ async function executeLlmAdapterRequest(input: {
   }
 
   let body: unknown = null;
-  try {
-    body = JSON.parse(rawText || '{}');
-  } catch {
-    body = rawText;
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  const streamResult =
+    isStreamingRequest || contentType.includes('text/event-stream')
+      ? parseOpenAiChatEventStream(rawText)
+    : null;
+  if (streamResult?.kind === 'error') {
+    throw input.deps.makeProviderHttpError(
+      input.errorPrefix,
+      streamResult.status ?? 502,
+      streamResult.message,
+      input.deps.parseRetryAfterMs(response)
+    );
+  }
+  if (streamResult?.kind === 'completion') {
+    body = streamResult.body;
+  } else {
+    try {
+      body = JSON.parse(rawText || '{}');
+    } catch {
+      body = rawText;
+    }
   }
 
   const parsed = adapter.parseResponse(
