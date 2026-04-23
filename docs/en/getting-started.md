@@ -17,8 +17,8 @@ Windows
 2. Run:
 
 ```powershell
-.\deploy.ps1
-.\start.production.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 ```
 
 Linux

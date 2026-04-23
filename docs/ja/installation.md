@@ -6,10 +6,10 @@
 
 この repository で release asset が公開されている場合は、まず [Releases](../../releases/latest) から取得してください。
 
-現在の `v0.9.0` アセット：
+現在の `v0.9.1` アセット：
 
-- `ArcSub-v0.9.0-windows-x64.zip`
-- `ArcSub-v0.9.0-linux-x64.tar.gz`
+- `ArcSub-v0.9.1-windows-x64.zip`
+- `ArcSub-v0.9.1-linux-x64.tar.gz`
 
 ## 推奨プラットフォーム
 
@@ -23,8 +23,8 @@
 3. 次を実行：
 
 ```powershell
-.\deploy.ps1
-.\start.production.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 ```
 
 `deploy.ps1` は runtime、ツール、baseline assets を準備します。

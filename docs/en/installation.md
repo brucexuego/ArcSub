@@ -6,10 +6,10 @@ This page is mainly for normal packaged use.
 
 If release assets are available for this repository, start from [Releases](../../releases/latest).
 
-Current `v0.9.0` assets:
+Current `v0.9.1` assets:
 
-- `ArcSub-v0.9.0-windows-x64.zip`
-- `ArcSub-v0.9.0-linux-x64.tar.gz`
+- `ArcSub-v0.9.1-windows-x64.zip`
+- `ArcSub-v0.9.1-linux-x64.tar.gz`
 
 ## Recommended Platform
 
@@ -23,8 +23,8 @@ Current `v0.9.0` assets:
 3. Run:
 
 ```powershell
-.\deploy.ps1
-.\start.production.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 ```
 
 `deploy.ps1` prepares the runtime, tools, and baseline assets.
