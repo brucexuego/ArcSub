@@ -44,6 +44,7 @@ export interface LocalTranslateGenerationOptions {
   frequencyPenalty?: number;
   noRepeatNgramSize?: number;
   applyChatTemplate?: boolean;
+  chatTemplateKwargs?: Record<string, unknown>;
 }
 
 export type LocalOpenvinoBaselineConfidence = 'full_public' | 'partial_public' | 'gated_partial';

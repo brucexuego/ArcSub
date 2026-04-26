@@ -27,4 +27,5 @@
 - 一般使用者請優先閱讀 packaged release 流程。
 - 若你是從 source repo 開發，可搭配 `start.ps1` 或 `start.sh` 使用。
 - 原始碼 repo 不會附帶本地 runtime 資料、已下載模型與個人憑證。
+- 本地 ASR / 翻譯模型會從 **Settings** 透過 Hugging Face 模型 id 安裝；需要授權的模型與 pyannote 共用 `HF_TOKEN`。
 - 不保留過時版號、舊流程、一次性驗證筆記與舊性能數字。

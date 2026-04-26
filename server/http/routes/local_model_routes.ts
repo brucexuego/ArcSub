@@ -132,6 +132,24 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
     }
   });
 
+  app.post('/api/local-models/inspect', async (req, res) => {
+    try {
+      const LocalModelService = await getLocalModelService();
+      const rawType = typeof req.body?.type === 'string' ? req.body.type.trim() : '';
+      if (rawType !== 'asr' && rawType !== 'translate') {
+        return res.status(400).json({ error: 'type must be asr or translate.' });
+      }
+      const repoId = typeof req.body?.repoId === 'string' ? req.body.repoId.trim() : '';
+      if (!repoId) {
+        return res.status(400).json({ error: 'repoId is required.' });
+      }
+      const data = await LocalModelService.inspectModel(rawType, repoId);
+      return res.json(data);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message || 'Failed to inspect local model metadata.' });
+    }
+  });
+
   app.post('/api/local-models/install', async (req, res) => {
     try {
       const LocalModelService = await getLocalModelService();
@@ -172,8 +190,8 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
         });
       }
 
-      const data = await LocalModelService.installModel(rawType, repoId);
-      return res.json(data);
+      const data = await LocalModelService.startInstallModel(rawType, repoId);
+      return res.status(202).json(data);
     } catch (error: any) {
       return res.status(400).json({ error: error?.message || 'Failed to install local model.' });
     }

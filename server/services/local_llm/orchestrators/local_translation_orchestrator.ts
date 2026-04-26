@@ -1,8 +1,9 @@
 import { getLocalModelInstallDir, type LocalModelDefinition } from '../../../local_model_catalog.js';
 import { OpenvinoRuntimeManager } from '../../../openvino_runtime_manager.js';
-import type { TranslationDebugInfo, TranslationResult } from '../../translation_service.js';
+import type { LocalTranslationBatchDebugInfo, TranslationDebugInfo, TranslationResult } from '../../translation_service.js';
 import type { LocalOpenvinoResolvedProfile, LocalTranslateModelStrategy } from '../types.js';
 import type { LocalTranslationResolvedProfile } from '../model_profiles.js';
+import type { EffectiveLocalTranslationProfile } from '../effective_profile.js';
 import type { TranslationQualityMode } from '../../llm/orchestrators/translation_quality_policy.js';
 import type { RunIssue } from '../../../../shared/run_monitor.js';
 
@@ -48,6 +49,29 @@ function getRepetitionRisk(warnings: string[]) {
 function getMarkerPreservation(sourceHasStructuredPrefixes: boolean, warnings: string[]) {
   if (!sourceHasStructuredPrefixes) return undefined;
   return warnings.includes('quality_issue_marker_loss') ? ('lost' as const) : ('ok' as const);
+}
+
+function qualityIssueToWarningCode(issue: TranslationQualityIssueCode) {
+  switch (issue) {
+    case 'empty_output':
+      return 'quality_issue_empty_output';
+    case 'repetition_loop':
+      return 'quality_issue_repetition_loop';
+    case 'adjacent_duplicate':
+      return 'quality_issue_adjacent_duplicate';
+    case 'pass_through':
+      return 'quality_issue_pass_through';
+    case 'zh_tw_naturalization_needed':
+      return 'quality_issue_zh_tw_naturalization_needed';
+    case 'target_lang_mismatch':
+      return 'quality_issue_target_lang_mismatch';
+    case 'line_count_loss':
+      return 'quality_issue_line_count_loss';
+    case 'marker_loss':
+      return 'quality_issue_marker_loss';
+    default:
+      return null;
+  }
 }
 
 function buildTranslationWarningIssues(warnings: string[]): RunIssue[] {
@@ -138,6 +162,7 @@ export interface RunLocalTranslationOrchestratorInput {
   modelStrategy: LocalTranslateModelStrategy;
   localProfile: LocalOpenvinoResolvedProfile;
   localTranslationProfile: LocalTranslationResolvedProfile;
+  effectiveLocalProfile?: EffectiveLocalTranslationProfile;
   translationQualityMode: TranslationQualityMode;
   residualRetryLimit: number;
   jsonRepairMaxLinesBeforeSplit: number;
@@ -154,9 +179,15 @@ export interface RunLocalTranslationOrchestratorDeps {
     input?: {
       localModel?: LocalModelDefinition;
       modelStrategy?: LocalTranslateModelStrategy;
+      targetLang?: string;
+      sourceLang?: string;
+      glossary?: string;
+      prompt?: string;
+      promptTemplateId?: string;
       translationQualityMode?: TranslationQualityMode;
+      onBatchPlan?: (plan: LocalTranslationBatchDebugInfo) => void;
     }
-  ): LineSafeUnit[][];
+  ): Promise<LineSafeUnit[][]>;
   splitLineSafeUnitsForTranslateGemma(
     units: LineSafeUnit[],
     input: {
@@ -164,7 +195,11 @@ export interface RunLocalTranslationOrchestratorDeps {
       modelStrategy: LocalTranslateModelStrategy;
       targetLang: string;
       sourceLang?: string;
+      glossary?: string;
+      prompt?: string;
+      promptTemplateId?: string;
       translationQualityMode?: TranslationQualityMode;
+      onBatchPlan?: (plan: LocalTranslationBatchDebugInfo) => void;
     }
   ): Promise<LineSafeUnit[][]>;
   stripStructuredPrefix(line: string): string;
@@ -190,6 +225,7 @@ export interface RunLocalTranslationOrchestratorDeps {
     text: string;
     lineCount: number;
     lineSafeMode: boolean;
+    localModel?: LocalModelDefinition;
     jsonMode?: boolean;
     strictMode?: boolean;
   }): number;
@@ -252,6 +288,7 @@ export async function runLocalTranslationOrchestrator(
     modelStrategy,
     localProfile,
     localTranslationProfile,
+    effectiveLocalProfile,
     translationQualityMode,
     residualRetryLimit,
     jsonRepairMaxLinesBeforeSplit,
@@ -273,6 +310,27 @@ export async function runLocalTranslationOrchestrator(
   const customPrompt = String(input.prompt || '').trim();
   const enableJsonLineRepair = input.enableJsonLineRepair !== false;
   const localPlainProbeMode = deps.isPlainTranslationProbeMode(translationQualityMode);
+  let localBatchingDebug: LocalTranslationBatchDebugInfo | null = null;
+  const captureLocalBatchPlan = (plan: LocalTranslationBatchDebugInfo) => {
+    localBatchingDebug = {
+      ...plan,
+      durationsMs: [],
+      totalDurationMs: null,
+      maxDurationMs: null,
+    };
+  };
+  const recordLocalBatchDuration = (batchIndex: number, durationMs: number) => {
+    if (!localBatchingDebug || batchIndex < 0) return;
+    const durations = [...(localBatchingDebug.durationsMs || [])];
+    durations[batchIndex] = Math.max(0, Math.round(durationMs));
+    const finiteDurations = durations.filter((value) => typeof value === 'number' && Number.isFinite(value));
+    localBatchingDebug = {
+      ...localBatchingDebug,
+      durationsMs: durations,
+      totalDurationMs: finiteDurations.length > 0 ? finiteDurations.reduce((sum, value) => sum + value, 0) : null,
+      maxDurationMs: finiteDurations.length > 0 ? Math.max(...finiteDurations) : null,
+    };
+  };
 
   const runLocalTranslation = async (
     providerInputText: string,
@@ -286,6 +344,7 @@ export async function runLocalTranslationOrchestrator(
       text: providerInputText,
       lineCount,
       lineSafeMode,
+      localModel,
       strictMode,
     });
     const prompt = deps.buildLocalTranslationPrompt({
@@ -383,6 +442,7 @@ export async function runLocalTranslationOrchestrator(
           text: sourceLine,
           lineCount: 1,
           lineSafeMode: false,
+          localModel,
           strictMode: true,
         }),
         generation: deps.buildLocalGenerationOptions({
@@ -419,6 +479,16 @@ export async function runLocalTranslationOrchestrator(
       const sourceLine = deps.stripStructuredPrefix(unit.content);
       if (!sourceLine) {
         translatedRows.push(unit.prefix ? unit.prefix.trimEnd() : '');
+        continue;
+      }
+
+      if (localPlainProbeMode) {
+        const raw = await runLocalTranslation(sourceLine, false, false, '');
+        const cleaned = deps.normalizeTargetLanguageOutput(
+          deps.stripStructuredPrefix(deps.stripInjectedSpeakerContext(raw)),
+          input.targetLang
+        );
+        translatedRows.push(unit.prefix ? `${unit.prefix}${cleaned}` : cleaned);
         continue;
       }
 
@@ -496,6 +566,46 @@ export async function runLocalTranslationOrchestrator(
     const leftText = leftUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(leftUnits) : '';
     const rightText = rightUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(rightUnits) : '';
     return [leftText, rightText].filter(Boolean).join('\n');
+  };
+
+  const stripLineSafeMarker = (text: string) =>
+    String(text || '')
+      .replace(/^\s*\[\[L\d{5}\]\]\s*/, '')
+      .replace(/^\s*L\d{5}\s*[:：-]\s*/, '')
+      .trim();
+
+  const processPlainProbeLineSafeChunk = async (units: LineSafeUnit[]): Promise<string> => {
+    const providerInputText = deps.buildLineSafeInput(units);
+    const chunkOutput = await runLocalTranslation(providerInputText, true, false, customPrompt);
+
+    const restored = deps.parseLineSafeOutput(chunkOutput, units);
+    if (restored !== null) {
+      addWarning('line_safe_alignment_applied');
+      return restored;
+    }
+
+    const rebound = deps.rebindByLineIndex(units, chunkOutput);
+    if (rebound !== null) {
+      addWarning('line_index_rebind_applied');
+      return rebound;
+    }
+
+    if (units.length > 1) {
+      addWarning('local_recursive_chunk_split_applied');
+      const [leftUnits, rightUnits] = deps.splitLineSafeUnits(units);
+      const leftText = leftUnits.length > 0 ? await processPlainProbeLineSafeChunk(leftUnits) : '';
+      const rightText = rightUnits.length > 0 ? await processPlainProbeLineSafeChunk(rightUnits) : '';
+      return [leftText, rightText].filter(Boolean).join('\n');
+    }
+
+    const [unit] = units;
+    const firstLine =
+      String(chunkOutput || '')
+        .split('\n')
+        .map((line) => stripLineSafeMarker(deps.stripInjectedSpeakerContext(line)))
+        .filter(Boolean)[0] || deps.stripStructuredPrefix(unit?.content || '');
+    const cleaned = forceZhTwNormalization ? deps.normalizeTargetLanguageOutput(firstLine, input.targetLang) : firstLine;
+    return unit?.prefix ? `${unit.prefix}${cleaned}` : cleaned;
   };
 
   const processLineSafeChunk = async (units: LineSafeUnit[]): Promise<string> => {
@@ -700,6 +810,7 @@ export async function runLocalTranslationOrchestrator(
             text: retryContext,
             lineCount: 3,
             lineSafeMode: false,
+            localModel,
             strictMode: true,
           }),
           generation: deps.buildLocalGenerationOptions({
@@ -742,13 +853,17 @@ export async function runLocalTranslationOrchestrator(
   let output = '';
 
   if (modelStrategy.family === 'translategemma') {
-    if (useLineSafeMode) {
+    if (useLineSafeMode && localPlainProbeMode) {
       const localBatches = await deps.splitLineSafeUnitsForTranslateGemma(lineSafeUnits, {
         localModel,
         modelStrategy,
         targetLang: input.targetLang,
         sourceLang: input.sourceLang,
+        glossary: input.glossary,
+        prompt: customPrompt,
+        promptTemplateId: input.promptTemplateId,
         translationQualityMode,
+        onBatchPlan: captureLocalBatchPlan,
       });
       if (localBatches.length > 1) {
         addWarning('translategemma_batch_translation_applied');
@@ -756,40 +871,104 @@ export async function runLocalTranslationOrchestrator(
       const merged: string[] = [];
       for (let batchIndex = 0; batchIndex < localBatches.length; batchIndex += 1) {
         onProgress?.(`Translating TranslateGemma subtitle batch (${batchIndex + 1}/${localBatches.length})...`);
+        const batchStartedAt = Date.now();
+        const chunk = await processPlainProbeLineSafeChunk(localBatches[batchIndex]);
+        recordLocalBatchDuration(batchIndex, Date.now() - batchStartedAt);
+        merged.push(...chunk.split('\n'));
+      }
+      output = merged.join('\n');
+    } else if (useLineSafeMode) {
+      const localBatches = await deps.splitLineSafeUnitsForTranslateGemma(lineSafeUnits, {
+        localModel,
+        modelStrategy,
+        targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
+        glossary: input.glossary,
+        prompt: customPrompt,
+        promptTemplateId: input.promptTemplateId,
+        translationQualityMode,
+        onBatchPlan: captureLocalBatchPlan,
+      });
+      if (localBatches.length > 1) {
+        addWarning('translategemma_batch_translation_applied');
+      }
+      const merged: string[] = [];
+      for (let batchIndex = 0; batchIndex < localBatches.length; batchIndex += 1) {
+        onProgress?.(`Translating TranslateGemma subtitle batch (${batchIndex + 1}/${localBatches.length})...`);
+        const batchStartedAt = Date.now();
         const chunk = await translateTranslateGemmaSubtitleBatch(localBatches[batchIndex]);
+        recordLocalBatchDuration(batchIndex, Date.now() - batchStartedAt);
         merged.push(...chunk.split('\n'));
       }
       output = merged.join('\n');
     } else {
       output = deps.normalizeTargetLanguageOutput(await runLocalTranslation(sourceText, false, false, ''), input.targetLang);
-      const wholeRequestIssues = deps
-        .getTranslationQualityIssues(sourceText, output, input.targetLang)
-        .filter((code) => code === 'empty_output' || code === 'target_lang_mismatch' || code === 'pass_through');
-      deps.addQualityIssueWarnings(wholeRequestIssues, addWarning);
-      if (wholeRequestIssues.length > 0) {
-        addWarning('translategemma_single_line_retry_applied');
-        output = await translateTranslateGemmaUnitsIndividually(lineSafeUnits);
+      if (!localPlainProbeMode) {
+        const wholeRequestIssues = deps
+          .getTranslationQualityIssues(sourceText, output, input.targetLang)
+          .filter((code) => code === 'empty_output' || code === 'target_lang_mismatch' || code === 'pass_through');
+        deps.addQualityIssueWarnings(wholeRequestIssues, addWarning);
+        if (wholeRequestIssues.length > 0) {
+          addWarning('translategemma_single_line_retry_applied');
+          output = await translateTranslateGemmaUnitsIndividually(lineSafeUnits);
+        }
       }
     }
+  } else if (localPlainProbeMode && useLineSafeMode) {
+    const localBatches = await deps.splitLineSafeUnitsForLocalTranslation(lineSafeUnits, {
+      localModel,
+      modelStrategy,
+      targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
+      glossary: input.glossary,
+      prompt: customPrompt,
+      promptTemplateId: input.promptTemplateId,
+      translationQualityMode,
+      onBatchPlan: captureLocalBatchPlan,
+    });
+    if (localBatches.length > 1) {
+      addWarning('local_batch_translation_applied');
+    }
+    const merged: string[] = [];
+    for (let batchIndex = 0; batchIndex < localBatches.length; batchIndex += 1) {
+      if (localBatches.length > 1) {
+        onProgress?.(`Translating local subtitle batch (${batchIndex + 1}/${localBatches.length})...`);
+      }
+      const batchStartedAt = Date.now();
+      const chunk = await processPlainProbeLineSafeChunk(localBatches[batchIndex]);
+      recordLocalBatchDuration(batchIndex, Date.now() - batchStartedAt);
+      merged.push(...chunk.split('\n'));
+    }
+    output = merged.join('\n');
   } else if (localPlainProbeMode) {
     output = await runLocalTranslation(sourceText, false, false);
   } else if (useLineSafeMode) {
-    const localBatches = deps.splitLineSafeUnitsForLocalTranslation(lineSafeUnits, {
+    const localBatches = await deps.splitLineSafeUnitsForLocalTranslation(lineSafeUnits, {
       localModel,
       modelStrategy,
+      targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
+      glossary: input.glossary,
+      prompt: customPrompt,
+      promptTemplateId: input.promptTemplateId,
       translationQualityMode,
+      onBatchPlan: captureLocalBatchPlan,
     });
     if (localBatches.length > 1) {
       addWarning('local_batch_translation_applied');
       const merged: string[] = [];
       for (let batchIndex = 0; batchIndex < localBatches.length; batchIndex += 1) {
         onProgress?.(`Translating local subtitle batch (${batchIndex + 1}/${localBatches.length})...`);
+        const batchStartedAt = Date.now();
         const chunk = await processLineSafeChunk(localBatches[batchIndex]);
+        recordLocalBatchDuration(batchIndex, Date.now() - batchStartedAt);
         merged.push(...chunk.split('\n'));
       }
       output = merged.join('\n');
     } else {
+      const batchStartedAt = Date.now();
       output = await processLineSafeChunk(lineSafeUnits);
+      recordLocalBatchDuration(0, Date.now() - batchStartedAt);
     }
   } else {
     output = await runLocalTranslation(sourceText, false, false);
@@ -833,6 +1012,14 @@ export async function runLocalTranslationOrchestrator(
   const errors = {
     request: null,
   };
+  const finalQualityIssues = localPlainProbeMode
+    ? []
+    : deps.getTranslationQualityIssues(sourceText, output, input.targetLang, {
+        expectedLineCount: sourceLineCount,
+      });
+  const finalQualityWarnings = finalQualityIssues
+    .map((issue) => qualityIssueToWarningCode(issue))
+    .filter(Boolean) as string[];
 
   return {
     translatedText: output,
@@ -875,16 +1062,24 @@ export async function runLocalTranslationOrchestrator(
         localPromptStyle: localTranslationProfile.effectivePromptStyle,
         localGenerationStyle: modelStrategy.generationStyle,
         localBypassChecks: localPlainProbeMode,
+        localPromptContract: effectiveLocalProfile?.intent.promptContract,
+        localAlignmentContract: effectiveLocalProfile?.intent.alignmentContract,
+        localRuntimeHintsApplied: effectiveLocalProfile?.runtimeHintsApplied,
         localBaselineConfidence: localProfile.baseline.baselineConfidence,
         localBaselineTaskFamily: localProfile.baseline.taskFamily,
         localFallbackBaseline: localProfile.usedFallbackBaseline,
+        localBatching: localBatchingDebug,
+        localBatchingMode: localBatchingDebug?.mode ?? null,
+        localBatchCount: localBatchingDebug?.batchCount ?? null,
+        localBatchLineCounts: localBatchingDebug?.lineCounts ?? [],
+        localBatchPromptTokens: localBatchingDebug?.promptTokens ?? [],
       },
       quality: {
         lineCountMatch: sourceLineCount <= 1 ? true : output.split('\n').length >= sourceLineCount,
-        targetLanguageMatch: !warnings.includes('quality_issue_target_lang_mismatch'),
-        passThroughRisk: getPassThroughRisk(warnings),
-        repetitionRisk: getRepetitionRisk(warnings),
-        markerPreservation: getMarkerPreservation(sourceHasStructuredPrefixes, warnings),
+        targetLanguageMatch: !finalQualityWarnings.includes('quality_issue_target_lang_mismatch'),
+        passThroughRisk: getPassThroughRisk(finalQualityWarnings),
+        repetitionRisk: getRepetitionRisk(finalQualityWarnings),
+        markerPreservation: getMarkerPreservation(sourceHasStructuredPrefixes, finalQualityWarnings),
         strictRetryTriggered: qualityRetryCount > 0,
       },
       stats: {

@@ -47,8 +47,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 - source repository 不包含本地 runtime 資料、已下載模型與個人 `.env`
 - 即使尚未安裝 OpenVINO，ArcSub 仍可啟動
 - 若沒有 OpenVINO，本地模型安裝功能不可用，但雲端路徑仍可使用
-- 本地 ASR 與本地翻譯模型會在之後從 **Settings** 安裝
-- pyannote 需要 Hugging Face access token
+- 本地 ASR 與本地翻譯模型會在之後從 **Settings** 透過 Hugging Face 模型 id 安裝
+- 大型本地模型的下載與轉換會以背景安裝任務繼續進行，並在 **Settings** 顯示狀態
+- `HF_TOKEN` 會用於 pyannote 與 gated/private Hugging Face 模型下載
 
 ## 從原始碼開發
 

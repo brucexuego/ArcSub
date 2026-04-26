@@ -58,7 +58,8 @@ After ArcSub opens:
 1. Go to **Settings**
 2. Prepare at least one speech-to-text source
 3. Prepare at least one translation source
-4. If you want pyannote diarization, enter your `HF_TOKEN` and install it there
+4. If you want pyannote diarization or gated/private Hugging Face local models, enter your `HF_TOKEN`
+5. Install any local ASR or local translation models you want to use from their Hugging Face model ids
 
 ## Normal Workflow
 

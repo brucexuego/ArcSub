@@ -54,6 +54,9 @@ def main() -> int:
     payload = json.loads(raw or "{}")
     model_dir = pathlib.Path(str(payload.get("modelDir") or "")).resolve()
     messages = payload.get("messages")
+    chat_template_kwargs = payload.get("chatTemplateKwargs")
+    if not isinstance(chat_template_kwargs, dict):
+        chat_template_kwargs = {}
     if not model_dir.is_dir():
         raise RuntimeError(f"Model directory not found: {model_dir}")
     if not isinstance(messages, list) or not messages:
@@ -69,7 +72,12 @@ def main() -> int:
         )
         if not hasattr(tokenizer, "apply_chat_template"):
             raise RuntimeError("Tokenizer does not expose apply_chat_template.")
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            **chat_template_kwargs,
+        )
     else:
         try:
             processor = AutoProcessor.from_pretrained(
@@ -78,7 +86,12 @@ def main() -> int:
                 trust_remote_code=True,
             )
             if hasattr(processor, "apply_chat_template"):
-                prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                prompt = processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **chat_template_kwargs,
+                )
         except Exception:
             prompt = None
 
@@ -90,7 +103,12 @@ def main() -> int:
             )
             if not hasattr(tokenizer, "apply_chat_template"):
                 raise RuntimeError("Tokenizer does not expose apply_chat_template.")
-            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                **chat_template_kwargs,
+            )
 
     sys.stdout.write(json.dumps({"prompt": prompt}, ensure_ascii=False))
     sys.stdout.flush()

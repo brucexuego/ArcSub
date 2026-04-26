@@ -12,6 +12,12 @@ No.
 
 Baseline tools and assets are prepared during deploy, but local ASR and local translation models are installed later from **Settings**.
 
+## Why can a local model install take a long time?
+
+ArcSub downloads and converts local Hugging Face models as background install tasks.
+
+The **Settings** page shows the current task status, so a large model should not fail just because the browser request would have taken too long.
+
 ## Why is pyannote unavailable?
 
 pyannote needs:
@@ -19,6 +25,8 @@ pyannote needs:
 - a valid `HF_TOKEN`
 - accepted Hugging Face gated-model access
 - a completed pyannote install in **Settings** or during deploy
+
+The same `HF_TOKEN` is also used when a gated or private Hugging Face local model requires authentication.
 
 ## Where are my files stored?
 

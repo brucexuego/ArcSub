@@ -7,6 +7,66 @@ import { sanitizeInput, isValidUrl, isValidApiKey, maskApiKey, isMaskedApiKey } 
 import { getJson, HttpRequestError, postJson } from '../utils/http_client';
 
 type LocalModelType = 'asr' | 'translate';
+type LocalModelErrorScope = 'install' | 'asr-list' | 'translate-list';
+type LocalModelInstallPhase =
+  | 'queued'
+  | 'downloading'
+  | 'converting'
+  | 'verifying'
+  | 'persisting'
+  | 'completed'
+  | 'failed';
+
+interface LocalModelRuntimeHints {
+  inspectedAt?: string;
+  hfSha?: string;
+  modelCard?: {
+    license?: string | null;
+    baseModel?: string | string[] | null;
+    pipelineTag?: string | null;
+    libraryName?: string | null;
+    summary?: string | null;
+  };
+  contextWindow?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  generation?: {
+    doSample?: boolean;
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    minP?: number;
+    repetitionPenalty?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+    noRepeatNgramSize?: number;
+  };
+  chatTemplate?: {
+    available?: boolean;
+    supportsThinking?: boolean;
+    defaultEnableThinking?: boolean;
+    templateSource?: string | null;
+    kwargs?: Record<string, unknown>;
+  };
+  batching?: {
+    mode?: 'token_aware' | 'fixed_lines';
+    inputTokenBudget?: number;
+    outputTokenBudget?: number;
+    safetyReserveTokens?: number;
+    maxLines?: number;
+    charBudget?: number;
+    confidence?: 'high' | 'medium' | 'low';
+  };
+  asr?: {
+    task?: 'transcribe' | 'translate';
+    returnTimestamps?: boolean;
+    wordTimestamps?: boolean;
+    chunkLengthSec?: number;
+    samplingRate?: number;
+    maxTargetPositions?: number;
+    confidence?: 'high' | 'medium' | 'low';
+  };
+}
 
 interface LocalModelEntry {
   id: string;
@@ -32,10 +92,42 @@ interface LocalModelEntry {
     | 'openvino-whisper-node'
     | 'openvino-ctc-asr'
     | 'openvino-qwen3-asr'
-    | 'openvino-seq2seq-translate'
-    | 'openvino-llm-node';
+      | 'openvino-seq2seq-translate'
+      | 'openvino-llm-node';
+  runtimeHints?: LocalModelRuntimeHints;
   selected: boolean;
   installError?: string | null;
+}
+
+interface LocalModelInspectResult {
+  repoId: string;
+  type: LocalModelType;
+  inferredModel?: Partial<LocalModelEntry>;
+  runtimeHints?: LocalModelRuntimeHints | null;
+}
+
+interface LocalModelInstallStatus {
+  modelId: string;
+  type: LocalModelType;
+  repoId: string;
+  name: string;
+  installing: boolean;
+  phase: LocalModelInstallPhase;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  message?: string | null;
+  error?: string | null;
+}
+
+interface LocalModelsResponse {
+  catalog?: LocalModelEntry[];
+  selection?: {
+    asrSelectedId?: string;
+    translateSelectedId?: string;
+  };
+  installs?: LocalModelInstallStatus[];
+  install?: LocalModelInstallStatus | null;
 }
 
 interface OpenvinoStatus {
@@ -81,9 +173,21 @@ function getLocalModelCopy(language: Language) {
       installTitle: '從 Hugging Face 安裝 OpenVINO 模型',
       installType: '模型類型',
       installRepo: 'HF 模型名稱',
-      installPlaceholder: '例如：OpenVINO/whisper-large-v3-int8-ov',
       installHint: '所有模型都會從 Hugging Face 下載，非 OV 來源會先轉成 OpenVINO INT8，再驗證可用 runtime。',
       installHintDetail: '只有轉換後能符合 ArcSub runtime 目錄結構的模型才會被安裝。',
+      runtimeTitle: '執行環境狀態',
+      runtimeSubtitle: '檢查本機 OpenVINO 元件是否可供 ASR 與翻譯模型使用。',
+      hfAccessTitle: 'Hugging Face 存取權限',
+      hfAccessSubtitle: 'HF Token 用於下載 gated/private 模型與 Pyannote 資產。公開模型通常不需要，但設定後可減少權限問題。',
+      pyannoteAssets: 'Pyannote 資產',
+      installTypeTitle: '選擇要安裝的模型類型',
+      installTypeAsrHint: '語音轉字幕 / Whisper / Qwen ASR',
+      installTypeAsrUsage: '用於語音辨識頁面',
+      installTypeTranslateHint: '字幕翻譯 / LLM / TranslateGemma',
+      installTypeTranslateUsage: '用於文字翻譯頁面',
+      installPlaceholderAsr: '例如：OpenVINO/whisper-large-v3-int8-ov',
+      installPlaceholderTranslate: '例如：OpenVINO/gemma-3-4b-it-int4-ov',
+      currentChoice: '目前選擇',
       openvinoGenai: 'OpenVINO GenAI',
       asrRuntime: 'ASR Runtime',
       version: '版本',
@@ -96,19 +200,53 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: '尚未安裝任何本地模型。',
       selected: '目前預設',
-      setDefault: '設為預設',
+      setDefaultAsr: '設為 ASR 預設',
+      setDefaultTranslate: '設為翻譯預設',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR 模型',
       installTypeTranslate: '翻譯模型',
       installInputRequired: '請輸入 Hugging Face 模型名稱。',
+      inspect: '檢查',
+      inspecting: '檢查中...',
+      inspectFailed: '檢查模型 metadata 失敗',
+      runtimeHints: '模型專屬預設值',
+      tokenBudget: 'Token 批次',
+      contextWindow: 'Context window',
+      maxOutputTokens: '輸出上限',
+      chatTemplate: 'Chat template',
+      thinkingOff: 'Thinking 預設關閉',
+      modelCard: '模型卡',
+      noRuntimeHints: '尚未偵測到模型專屬 runtime hints。',
+      showRuntimeHints: '展開詳細資訊',
+      hideRuntimeHints: '收合詳細資訊',
+      installStatusTitle: '安裝任務',
+      installQueued: '已排入安裝',
+      installDownloading: '下載模型檔案',
+      installConverting: '轉換 OpenVINO 模型',
+      installVerifying: '驗證 runtime 結構',
+      installPersisting: '儲存模型設定',
+      installCompleted: '安裝完成',
+      installFailed: '安裝失敗',
     },
     'zh-cn': {
       installTitle: '从 Hugging Face 安装 OpenVINO 模型',
       installType: '模型类型',
       installRepo: 'HF 模型名称',
-      installPlaceholder: '例如：OpenVINO/whisper-large-v3-int8-ov',
       installHint: '所有模型都会从 Hugging Face 下载，非 OV 来源会先转换成 OpenVINO INT8，再验证可用 runtime。',
       installHintDetail: '只有转换后能符合 ArcSub runtime 目录结构的模型才会被安装。',
+      runtimeTitle: '执行环境状态',
+      runtimeSubtitle: '检查本机 OpenVINO 组件是否可供 ASR 与翻译模型使用。',
+      hfAccessTitle: 'Hugging Face 访问权限',
+      hfAccessSubtitle: 'HF Token 用于下载 gated/private 模型与 Pyannote 资源。公开模型通常不需要，但设置后可减少权限问题。',
+      pyannoteAssets: 'Pyannote 资源',
+      installTypeTitle: '选择要安装的模型类型',
+      installTypeAsrHint: '语音转字幕 / Whisper / Qwen ASR',
+      installTypeAsrUsage: '用于语音识别页面',
+      installTypeTranslateHint: '字幕翻译 / LLM / TranslateGemma',
+      installTypeTranslateUsage: '用于文字翻译页面',
+      installPlaceholderAsr: '例如：OpenVINO/whisper-large-v3-int8-ov',
+      installPlaceholderTranslate: '例如：OpenVINO/gemma-3-4b-it-int4-ov',
+      currentChoice: '当前选择',
       openvinoGenai: 'OpenVINO GenAI',
       asrRuntime: 'ASR Runtime',
       version: '版本',
@@ -121,19 +259,53 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: '尚未安装任何本地模型。',
       selected: '当前默认',
-      setDefault: '设为默认',
+      setDefaultAsr: '设为 ASR 默认',
+      setDefaultTranslate: '设为翻译默认',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR 模型',
       installTypeTranslate: '翻译模型',
       installInputRequired: '请输入 Hugging Face 模型名称。',
+      inspect: '检查',
+      inspecting: '检查中...',
+      inspectFailed: '检查模型 metadata 失败',
+      runtimeHints: '模型专属默认值',
+      tokenBudget: 'Token 批次',
+      contextWindow: 'Context window',
+      maxOutputTokens: '输出上限',
+      chatTemplate: 'Chat template',
+      thinkingOff: 'Thinking 默认关闭',
+      modelCard: '模型卡',
+      noRuntimeHints: '尚未侦测到模型专属 runtime hints。',
+      showRuntimeHints: '展开详细信息',
+      hideRuntimeHints: '收合详细信息',
+      installStatusTitle: '安装任务',
+      installQueued: '已排入安装',
+      installDownloading: '下载模型文件',
+      installConverting: '转换 OpenVINO 模型',
+      installVerifying: '验证 runtime 结构',
+      installPersisting: '保存模型设置',
+      installCompleted: '安装完成',
+      installFailed: '安装失败',
     },
     en: {
       installTitle: 'Install OpenVINO Models From Hugging Face',
       installType: 'Model Type',
       installRepo: 'HF Model ID',
-      installPlaceholder: 'e.g. OpenVINO/whisper-large-v3-int8-ov',
       installHint: 'All models are fetched from Hugging Face. Non-OV sources are converted into OpenVINO INT8 first, then validated against ArcSub runtime layouts.',
       installHintDetail: 'A model is installed only if the converted output matches a supported ArcSub runtime layout.',
+      runtimeTitle: 'Runtime Status',
+      runtimeSubtitle: 'Check whether local OpenVINO components are ready for ASR and translation models.',
+      hfAccessTitle: 'Hugging Face Access',
+      hfAccessSubtitle: 'HF Token is used for gated/private model downloads and Pyannote assets. Public models usually do not need it, but configuring it reduces permission issues.',
+      pyannoteAssets: 'Pyannote Assets',
+      installTypeTitle: 'Choose model type to install',
+      installTypeAsrHint: 'Speech to subtitles / Whisper / Qwen ASR',
+      installTypeAsrUsage: 'Used on the Speech to Text page',
+      installTypeTranslateHint: 'Subtitle translation / LLM / TranslateGemma',
+      installTypeTranslateUsage: 'Used on the Text Translation page',
+      installPlaceholderAsr: 'e.g. OpenVINO/whisper-large-v3-int8-ov',
+      installPlaceholderTranslate: 'e.g. OpenVINO/gemma-3-4b-it-int4-ov',
+      currentChoice: 'Selected',
       openvinoGenai: 'OpenVINO GenAI',
       asrRuntime: 'ASR Runtime',
       version: 'Version',
@@ -146,19 +318,53 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'No local models installed yet.',
       selected: 'Default',
-      setDefault: 'Set Default',
+      setDefaultAsr: 'Set ASR Default',
+      setDefaultTranslate: 'Set Translation Default',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR Model',
       installTypeTranslate: 'Translation Model',
       installInputRequired: 'Enter a Hugging Face model id.',
+      inspect: 'Inspect',
+      inspecting: 'Inspecting...',
+      inspectFailed: 'Failed to inspect model metadata',
+      runtimeHints: 'Model Defaults',
+      tokenBudget: 'Token Batch',
+      contextWindow: 'Context window',
+      maxOutputTokens: 'Max output',
+      chatTemplate: 'Chat template',
+      thinkingOff: 'Thinking off by default',
+      modelCard: 'Model Card',
+      noRuntimeHints: 'No model-specific runtime hints detected yet.',
+      showRuntimeHints: 'Show details',
+      hideRuntimeHints: 'Hide details',
+      installStatusTitle: 'Install Task',
+      installQueued: 'Queued',
+      installDownloading: 'Downloading model files',
+      installConverting: 'Converting OpenVINO model',
+      installVerifying: 'Verifying runtime layout',
+      installPersisting: 'Saving model settings',
+      installCompleted: 'Installed',
+      installFailed: 'Install failed',
     },
     jp: {
       installTitle: 'Hugging Face から OpenVINO モデルをインストール',
       installType: 'モデル種別',
       installRepo: 'HF モデル名',
-      installPlaceholder: '例：OpenVINO/whisper-large-v3-int8-ov',
       installHint: 'すべてのモデルは Hugging Face から取得され、OV 以外はまず OpenVINO INT8 に変換してから runtime 適合性を検証します。',
       installHintDetail: '変換後の出力が ArcSub の runtime レイアウトに一致した場合のみインストールされます。',
+      runtimeTitle: '実行環境の状態',
+      runtimeSubtitle: 'ローカル OpenVINO コンポーネントが ASR と翻訳モデルで使えるか確認します。',
+      hfAccessTitle: 'Hugging Face アクセス',
+      hfAccessSubtitle: 'HF Token は gated/private モデルのダウンロードと Pyannote アセットに使われます。公開モデルでは通常不要ですが、設定すると権限問題を減らせます。',
+      pyannoteAssets: 'Pyannote アセット',
+      installTypeTitle: 'インストールするモデル種別を選択',
+      installTypeAsrHint: '音声から字幕 / Whisper / Qwen ASR',
+      installTypeAsrUsage: '音声認識ページで使用',
+      installTypeTranslateHint: '字幕翻訳 / LLM / TranslateGemma',
+      installTypeTranslateUsage: 'テキスト翻訳ページで使用',
+      installPlaceholderAsr: '例：OpenVINO/whisper-large-v3-int8-ov',
+      installPlaceholderTranslate: '例：OpenVINO/gemma-3-4b-it-int4-ov',
+      currentChoice: '選択中',
       openvinoGenai: 'OpenVINO GenAI',
       asrRuntime: 'ASR Runtime',
       version: 'バージョン',
@@ -171,19 +377,53 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'まだローカルモデルがありません。',
       selected: '既定値',
-      setDefault: '既定に設定',
+      setDefaultAsr: 'ASR 既定に設定',
+      setDefaultTranslate: '翻訳既定に設定',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR モデル',
       installTypeTranslate: '翻訳モデル',
       installInputRequired: 'Hugging Face のモデル名を入力してください。',
+      inspect: '検査',
+      inspecting: '検査中...',
+      inspectFailed: 'モデル metadata の検査に失敗しました',
+      runtimeHints: 'モデル別の既定値',
+      tokenBudget: 'Token バッチ',
+      contextWindow: 'Context window',
+      maxOutputTokens: '出力上限',
+      chatTemplate: 'Chat template',
+      thinkingOff: 'Thinking は既定で無効',
+      modelCard: 'モデルカード',
+      noRuntimeHints: 'モデル別 runtime hints はまだ検出されていません。',
+      showRuntimeHints: '詳細を表示',
+      hideRuntimeHints: '詳細を隠す',
+      installStatusTitle: 'インストールタスク',
+      installQueued: 'インストール待ち',
+      installDownloading: 'モデルファイルをダウンロード中',
+      installConverting: 'OpenVINO モデルへ変換中',
+      installVerifying: 'runtime レイアウトを検証中',
+      installPersisting: 'モデル設定を保存中',
+      installCompleted: 'インストール完了',
+      installFailed: 'インストール失敗',
     },
     de: {
       installTitle: 'OpenVINO-Modelle von Hugging Face installieren',
       installType: 'Modelltyp',
       installRepo: 'HF-Modellname',
-      installPlaceholder: 'z. B. OpenVINO/whisper-large-v3-int8-ov',
       installHint: 'Alle Modelle werden von Hugging Face geladen. Nicht-OV-Quellen werden zuerst nach OpenVINO INT8 konvertiert und dann gegen ArcSub-Runtime-Layouts validiert.',
       installHintDetail: 'Installiert wird nur, wenn die konvertierten Dateien zu einem unterstutzten ArcSub-Runtime-Layout passen.',
+      runtimeTitle: 'Runtime-Status',
+      runtimeSubtitle: 'Prueft, ob lokale OpenVINO-Komponenten fuer ASR- und Uebersetzungsmodelle bereit sind.',
+      hfAccessTitle: 'Hugging-Face-Zugriff',
+      hfAccessSubtitle: 'HF Token wird fuer gated/private Modelldownloads und Pyannote-Assets verwendet. Oeffentliche Modelle brauchen ihn meist nicht, aber er reduziert Rechteprobleme.',
+      pyannoteAssets: 'Pyannote-Assets',
+      installTypeTitle: 'Zu installierenden Modelltyp waehlen',
+      installTypeAsrHint: 'Sprache zu Untertiteln / Whisper / Qwen ASR',
+      installTypeAsrUsage: 'Wird auf der Speech-to-Text-Seite verwendet',
+      installTypeTranslateHint: 'Untertiteluebersetzung / LLM / TranslateGemma',
+      installTypeTranslateUsage: 'Wird auf der Textuebersetzungsseite verwendet',
+      installPlaceholderAsr: 'z. B. OpenVINO/whisper-large-v3-int8-ov',
+      installPlaceholderTranslate: 'z. B. OpenVINO/gemma-3-4b-it-int4-ov',
+      currentChoice: 'Ausgewaehlt',
       openvinoGenai: 'OpenVINO GenAI',
       asrRuntime: 'ASR Runtime',
       version: 'Version',
@@ -196,25 +436,57 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'Noch keine lokalen Modelle installiert.',
       selected: 'Standard',
-      setDefault: 'Als Standard setzen',
+      setDefaultAsr: 'Als ASR-Standard setzen',
+      setDefaultTranslate: 'Als Uebersetzungsstandard setzen',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR-Modell',
       installTypeTranslate: 'Ubersetzungsmodell',
       installInputRequired: 'Geben Sie eine Hugging-Face-Modellkennung ein.',
+      inspect: 'Prufen',
+      inspecting: 'Prufen...',
+      inspectFailed: 'Modell-Metadata konnte nicht gepruft werden',
+      runtimeHints: 'Modell-Defaults',
+      tokenBudget: 'Token-Batch',
+      contextWindow: 'Context window',
+      maxOutputTokens: 'Max. Ausgabe',
+      chatTemplate: 'Chat template',
+      thinkingOff: 'Thinking standardmassig aus',
+      modelCard: 'Modellkarte',
+      noRuntimeHints: 'Noch keine modellspezifischen Runtime-Hinweise erkannt.',
+      showRuntimeHints: 'Details anzeigen',
+      hideRuntimeHints: 'Details ausblenden',
+      installStatusTitle: 'Installationsaufgabe',
+      installQueued: 'Eingereiht',
+      installDownloading: 'Modelldateien werden geladen',
+      installConverting: 'OpenVINO-Modell wird konvertiert',
+      installVerifying: 'Runtime-Layout wird geprueft',
+      installPersisting: 'Modelleinstellungen werden gespeichert',
+      installCompleted: 'Installiert',
+      installFailed: 'Installation fehlgeschlagen',
     },
   } as const;
 
   return maps[language];
 }
 
+function formatLocalInstallPhase(copy: ReturnType<typeof getLocalModelCopy>, phase?: LocalModelInstallPhase) {
+  if (phase === 'downloading') return copy.installDownloading;
+  if (phase === 'converting') return copy.installConverting;
+  if (phase === 'verifying') return copy.installVerifying;
+  if (phase === 'persisting') return copy.installPersisting;
+  if (phase === 'completed') return copy.installCompleted;
+  if (phase === 'failed') return copy.installFailed;
+  return copy.installQueued;
+}
+
 function getPyannoteSettingsCopy(language: Language) {
   const maps = {
     'zh-tw': {
       title: 'Pyannote 語者分離',
-      subtitle: '管理 Hugging Face 金鑰與 pyannote 語者分離資產。',
+      subtitle: '管理 pyannote 語者分離資產，供說話者標記與分段使用。',
       tokenLabel: 'HF_TOKEN',
       tokenPlaceholder: '貼上 Hugging Face Access Token',
-      tokenHint: '先在 Hugging Face 接受 pyannote 模型授權，再輸入 HF_TOKEN。',
+      tokenHint: '同一組 HF_TOKEN 也會提供給需要授權的 Hugging Face 模型下載。',
       saveToken: '儲存金鑰',
       install: '安裝 Pyannote',
       installed: '已安裝',
@@ -231,10 +503,10 @@ function getPyannoteSettingsCopy(language: Language) {
     },
     'zh-cn': {
       title: 'Pyannote 语者分离',
-      subtitle: '管理 Hugging Face 金钥与 pyannote 语者分离资源。',
+      subtitle: '管理 pyannote 语者分离资源，供说话者标记与分段使用。',
       tokenLabel: 'HF_TOKEN',
       tokenPlaceholder: '粘贴 Hugging Face Access Token',
-      tokenHint: '请先在 Hugging Face 接受 pyannote 模型授权，再输入 HF_TOKEN。',
+      tokenHint: '同一组 HF_TOKEN 也会提供给需要授权的 Hugging Face 模型下载。',
       saveToken: '保存金钥',
       install: '安装 Pyannote',
       installed: '已安装',
@@ -251,10 +523,10 @@ function getPyannoteSettingsCopy(language: Language) {
     },
     en: {
       title: 'Pyannote Diarization',
-      subtitle: 'Manage the Hugging Face token and pyannote diarization assets.',
+      subtitle: 'Manage pyannote diarization assets for speaker labels and segmentation.',
       tokenLabel: 'HF_TOKEN',
       tokenPlaceholder: 'Paste your Hugging Face access token',
-      tokenHint: 'Accept the pyannote model access terms on Hugging Face before entering HF_TOKEN.',
+      tokenHint: 'The same HF_TOKEN is also used for Hugging Face model downloads that require authorization.',
       saveToken: 'Save Token',
       install: 'Install Pyannote',
       installed: 'Installed',
@@ -271,10 +543,10 @@ function getPyannoteSettingsCopy(language: Language) {
     },
     jp: {
       title: 'Pyannote 話者分離',
-      subtitle: 'Hugging Face トークンと pyannote 話者分離アセットを管理します。',
+      subtitle: '話者ラベルと分割に使う pyannote 話者分離アセットを管理します。',
       tokenLabel: 'HF_TOKEN',
       tokenPlaceholder: 'Hugging Face Access Token を貼り付け',
-      tokenHint: '先に Hugging Face 上で pyannote モデルの利用承認を済ませてください。',
+      tokenHint: '同じ HF_TOKEN は、認可が必要な Hugging Face モデルのダウンロードにも使われます。',
       saveToken: 'トークン保存',
       install: 'Pyannote をインストール',
       installed: 'インストール済み',
@@ -291,10 +563,10 @@ function getPyannoteSettingsCopy(language: Language) {
     },
     de: {
       title: 'Pyannote-Diarisierung',
-      subtitle: 'Verwalten Sie das Hugging-Face-Token und die pyannote-Diarisierungsassets.',
+      subtitle: 'Verwalten Sie pyannote-Diarisierungsassets fuer Sprecherlabels und Segmentierung.',
       tokenLabel: 'HF_TOKEN',
       tokenPlaceholder: 'Hugging Face Access Token einfuegen',
-      tokenHint: 'Akzeptieren Sie zuerst die pyannote-Modellbedingungen auf Hugging Face.',
+      tokenHint: 'Derselbe HF_TOKEN wird auch fuer Hugging-Face-Modelldownloads mit Autorisierung verwendet.',
       saveToken: 'Token speichern',
       install: 'Pyannote installieren',
       installed: 'Installiert',
@@ -312,6 +584,33 @@ function getPyannoteSettingsCopy(language: Language) {
   } as const;
 
   return maps[language];
+}
+
+function parseHttpErrorBody(bodyText: string) {
+  const raw = String(bodyText || '').trim();
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw);
+    const nested = parsed?.error;
+    const nestedMessage =
+      typeof nested === 'string'
+        ? nested
+        : nested?.message || parsed?.message || parsed?.detail || parsed?.error_description;
+    if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
+      return nestedMessage.trim();
+    }
+  } catch {
+    // Non-JSON body; use raw text.
+  }
+  return raw;
+}
+
+function formatRequestError(error: unknown, fallback: string) {
+  if (error instanceof HttpRequestError) {
+    return parseHttpErrorBody(error.bodyText) || String(error.message || '').trim() || fallback;
+  }
+  const rawMessage = String((error as any)?.message || '').trim();
+  return rawMessage || fallback;
 }
 
 function isHiddenSettingsLocalModel(_model: Pick<LocalModelEntry, 'repoId' | 'name'>) {
@@ -385,27 +684,107 @@ function formatLocalModelRuntimeEngine(value?: LocalModelEntry['runtime']) {
   return normalized ? normalized : 'Unknown';
 }
 
-function SummaryCard({
-  icon,
-  label,
-  value,
-  hint,
+function formatRuntimeHintNumber(value?: number) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value.toLocaleString() : 'Auto';
+}
+
+function formatRuntimeHintGeneration(hints?: LocalModelRuntimeHints | null) {
+  const generation = hints?.generation;
+  if (!generation) return '';
+  const parts = [
+    typeof generation.temperature === 'number' ? `T ${generation.temperature}` : '',
+    typeof generation.topP === 'number' ? `TopP ${generation.topP}` : '',
+    typeof generation.topK === 'number' ? `TopK ${generation.topK}` : '',
+    typeof generation.minP === 'number' ? `MinP ${generation.minP}` : '',
+    typeof generation.presencePenalty === 'number' ? `Presence ${generation.presencePenalty}` : '',
+  ].filter(Boolean);
+  return parts.join(' / ');
+}
+
+function formatRuntimeHintBaseModel(value?: string | string[] | null) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+  return String(value || '').trim();
+}
+
+function RuntimeHintsSummary({
+  hints,
+  copy,
+  expanded,
+  onToggle,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  hint: string;
+  hints?: LocalModelRuntimeHints | null;
+  copy: ReturnType<typeof getLocalModelCopy>;
+  expanded?: boolean;
+  onToggle?: () => void;
 }) {
+  if (!hints) {
+    return <div className="text-[11px] text-outline">{copy.noRuntimeHints}</div>;
+  }
+
+  const generation = formatRuntimeHintGeneration(hints);
+  const baseModel = formatRuntimeHintBaseModel(hints.modelCard?.baseModel);
+  const tokenBudget = formatRuntimeHintNumber(hints.batching?.inputTokenBudget || hints.maxInputTokens);
+  const isExpanded = onToggle ? Boolean(expanded) : true;
+  const asrSummary = hints.asr
+    ? [
+        hints.asr.task ? hints.asr.task : '',
+        hints.asr.samplingRate ? `${hints.asr.samplingRate.toLocaleString()} Hz` : '',
+        hints.asr.chunkLengthSec ? `${hints.asr.chunkLengthSec}s` : '',
+        hints.asr.returnTimestamps ? 'timestamps' : '',
+      ].filter(Boolean).join(' / ')
+    : '';
   return (
-    <div className="rounded-2xl border border-white/5 bg-surface-container p-5 shadow-[0_18px_50px_rgba(7,10,24,0.18)]">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-outline">{label}</div>
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-container/10 text-primary">
-          {icon}
+    <div className="mt-3 rounded-xl border border-white/5 bg-surface-container-high px-4 py-3 text-[11px] text-outline">
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={isExpanded}
+          className="flex w-full items-start justify-between gap-3 text-left"
+        >
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-secondary">{copy.runtimeHints}</div>
+          </div>
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[10px] font-bold text-secondary transition-colors hover:bg-white/5">
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+            {isExpanded ? copy.hideRuntimeHints : copy.showRuntimeHints}
+          </span>
+        </button>
+      ) : (
+        <div className="min-w-0">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-secondary">{copy.runtimeHints}</div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-outline">
+            <span>{copy.contextWindow}: {formatRuntimeHintNumber(hints.contextWindow)}</span>
+            <span>{copy.tokenBudget}: {tokenBudget}</span>
+            <span>{copy.chatTemplate}: {hints.chatTemplate?.available ? 'HF' : 'Auto'}</span>
+          </div>
         </div>
-      </div>
-      <div className="text-xl font-bold text-secondary">{value}</div>
-      <div className="mt-2 text-xs leading-relaxed text-outline">{hint}</div>
+      )}
+      {!isExpanded ? null : (
+        <div className="mt-3">
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+            <div>{copy.contextWindow}: {formatRuntimeHintNumber(hints.contextWindow)}</div>
+            <div>{copy.maxOutputTokens}: {formatRuntimeHintNumber(hints.maxOutputTokens)}</div>
+            <div>{copy.tokenBudget}: {tokenBudget}</div>
+            <div>{copy.chatTemplate}: {hints.chatTemplate?.available ? 'HF' : 'Auto'}</div>
+          </div>
+          {asrSummary && <div className="mt-2">{asrSummary}</div>}
+          {generation && <div className="mt-2">{generation}</div>}
+          {hints.chatTemplate?.defaultEnableThinking === false && (
+            <div className="mt-1 text-primary">{copy.thinkingOff}</div>
+          )}
+          {(hints.modelCard?.license || baseModel || hints.modelCard?.summary) && (
+            <div className="mt-3 border-t border-white/5 pt-3">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-outline">{copy.modelCard}</div>
+              {hints.modelCard?.license && <div className="mt-1">License: {hints.modelCard.license}</div>}
+              {baseModel && <div className="mt-1">Base: {baseModel}</div>}
+              {hints.modelCard?.summary && (
+                <div className="mt-2 line-clamp-3 leading-relaxed">{hints.modelCard.summary}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,18 +805,24 @@ export default function Settings({ project }: { project: Project | null }) {
   const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [localModels, setLocalModels] = React.useState<LocalModelEntry[]>([]);
   const [localSelection, setLocalSelection] = React.useState({ asrSelectedId: '', translateSelectedId: '' });
+  const [localInstallStatuses, setLocalInstallStatuses] = React.useState<LocalModelInstallStatus[]>([]);
   const [openvinoStatus, setOpenvinoStatus] = React.useState<OpenvinoStatus | null>(null);
   const [pyannoteStatus, setPyannoteStatus] = React.useState<PyannoteStatus | null>(null);
   const [pyannoteTokenInput, setPyannoteTokenInput] = React.useState('');
   const [pyannoteBusy, setPyannoteBusy] = React.useState(false);
   const [pyannoteMessage, setPyannoteMessage] = React.useState<string | null>(null);
+  const [pyannoteMessageScope, setPyannoteMessageScope] = React.useState<'token' | 'install' | null>(null);
   const [localStatusLoading, setLocalStatusLoading] = React.useState(false);
   const [localCatalogLoading, setLocalCatalogLoading] = React.useState(false);
   const [localInstallType, setLocalInstallType] = React.useState<LocalModelType>('asr');
   const [localRepoId, setLocalRepoId] = React.useState('');
   const [localInstallBusy, setLocalInstallBusy] = React.useState(false);
+  const [localInspectBusy, setLocalInspectBusy] = React.useState(false);
+  const [localInspectResult, setLocalInspectResult] = React.useState<LocalModelInspectResult | null>(null);
+  const [expandedRuntimeHintIds, setExpandedRuntimeHintIds] = React.useState<Record<string, boolean>>({});
   const [localRemovingModelId, setLocalRemovingModelId] = React.useState<string | null>(null);
   const [localError, setLocalError] = React.useState<string | null>(null);
+  const [localErrorScope, setLocalErrorScope] = React.useState<LocalModelErrorScope | null>(null);
   const [localPanelActive, setLocalPanelActive] = React.useState(false);
   const saveStatusTimeoutRef = React.useRef<number | null>(null);
   const initialBootstrapRef = React.useRef(false);
@@ -466,6 +851,25 @@ export default function Settings({ project }: { project: Project | null }) {
       saveStatusTimeoutRef.current = null;
     }, delay);
   }, [clearSaveStatusTimer]);
+
+  const toggleRuntimeHints = React.useCallback((modelId: string) => {
+    setExpandedRuntimeHintIds((prev) => ({
+      ...prev,
+      [modelId]: !prev[modelId],
+    }));
+  }, []);
+
+  const applyLocalModelsResponse = React.useCallback((data: LocalModelsResponse) => {
+    setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
+    setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+    if (Array.isArray(data.installs)) {
+      setLocalInstallStatuses(data.installs);
+    } else if (data.install) {
+      setLocalInstallStatuses([data.install]);
+    } else {
+      setLocalInstallStatuses([]);
+    }
+  }, []);
 
   const loadSettings = React.useCallback(async () => {
     if (settingsRequestRef.current) {
@@ -584,7 +988,7 @@ export default function Settings({ project }: { project: Project | null }) {
 
         const modelsTask = (async () => {
           try {
-            const data = await getJson<{ catalog?: LocalModelEntry[]; selection?: { asrSelectedId?: string; translateSelectedId?: string } }>(
+            const data = await getJson<LocalModelsResponse>(
               '/api/local-models',
               {
                 signal: catalogController.signal,
@@ -596,8 +1000,7 @@ export default function Settings({ project }: { project: Project | null }) {
               }
             );
             if (!mountedRef.current || catalogController.signal.aborted || localModelsLoadSeqRef.current !== loadSeq) return;
-            setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-            setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+            applyLocalModelsResponse(data);
           } catch (error) {
             if (catalogController.signal.aborted || localModelsLoadSeqRef.current !== loadSeq) return;
             console.error('Failed to load local models', error);
@@ -622,7 +1025,23 @@ export default function Settings({ project }: { project: Project | null }) {
 
     localModelsRequestRef.current = requestTask;
     return requestTask;
-  }, []);
+  }, [applyLocalModelsResponse]);
+
+  const pollLocalInstallStatus = React.useCallback(async () => {
+    try {
+      const data = await getJson<LocalModelsResponse>('/api/local-models', {
+        cache: 'no-store',
+        timeoutMs: 10_000,
+        retries: 1,
+        dedupe: false,
+        cancelPreviousKey: 'settings:local-models-install-poll',
+      });
+      if (!mountedRef.current) return;
+      applyLocalModelsResponse(data);
+    } catch (error) {
+      console.error('Failed to poll local model installation status', error);
+    }
+  }, [applyLocalModelsResponse]);
 
   React.useEffect(() => {
     if (initialBootstrapRef.current) return;
@@ -767,8 +1186,15 @@ export default function Settings({ project }: { project: Project | null }) {
   const visibleLocalModels = localModels.filter((model) => !isHiddenSettingsLocalModel(model));
   const localAsrModels = visibleLocalModels.filter((model) => model.type === 'asr');
   const localTranslateModels = visibleLocalModels.filter((model) => model.type === 'translate');
-  const selectedLocalInstallError = localError || visibleLocalModels.find((model) => model.installError)?.installError || null;
+  const visibleLocalInstallStatuses = localInstallStatuses.filter(
+    (status) => status.installing || status.phase === 'failed'
+  );
+  const hasActiveLocalInstall = localInstallStatuses.some((status) => status.installing);
+  const installPanelError = localErrorScope === 'install' ? localError : null;
+  const asrListError = localErrorScope === 'asr-list' ? localError : null;
+  const translateListError = localErrorScope === 'translate-list' ? localError : null;
   const isLocalSectionLoading = localStatusLoading || localCatalogLoading;
+  const localInstallControlsDisabled = localInstallBusy || hasActiveLocalInstall || isLocalSectionLoading;
   const localLoadingHint = localStatusLoading && localCatalogLoading
     ? t('settings.localLoadingAll')
     : localStatusLoading
@@ -776,7 +1202,6 @@ export default function Settings({ project }: { project: Project | null }) {
       : localCatalogLoading
         ? t('settings.localLoadingCatalog')
         : '';
-  const localRuntimeReady = Boolean(openvinoStatus?.node?.available && (openvinoStatus?.genai?.available || openvinoStatus?.asr?.ready));
   const localAsrInstallReady = Boolean(openvinoStatus?.asr?.ready);
   const localTranslateInstallReady = Boolean(
     openvinoStatus?.node?.available &&
@@ -787,12 +1212,9 @@ export default function Settings({ project }: { project: Project | null }) {
   const localInstallRuntimeBlockedHint = localInstallType === 'asr'
     ? `${localCopy.asrRuntime}: ${t('settings.localStatusUnavailable')}`
     : `${localCopy.openvinoGenai}: ${t('settings.localStatusUnavailable')}`;
-  const currentLanguageLabel =
-    language === 'zh-tw' ? t('lang.zh-tw') :
-    language === 'zh-cn' ? t('lang.zh-cn') :
-    language === 'jp' ? t('lang.jp') :
-    language === 'de' ? t('lang.de') :
-    t('lang.en');
+  const localInstallPlaceholder = localInstallType === 'asr'
+    ? localCopy.installPlaceholderAsr
+    : localCopy.installPlaceholderTranslate;
   const saveStatusLabel =
     saveStatus === 'saving'
       ? t('settings.autoSaving')
@@ -802,62 +1224,106 @@ export default function Settings({ project }: { project: Project | null }) {
           ? t('settings.saveRetry')
           : t('settings.autoSaveEnabled');
 
+  React.useEffect(() => {
+    if (!localPanelActive || !hasActiveLocalInstall) return;
+    const intervalId = window.setInterval(() => {
+      void pollLocalInstallStatus();
+    }, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [hasActiveLocalInstall, localPanelActive, pollLocalInstallStatus]);
+
   const handleSelectLocalModel = async (type: LocalModelType, modelId: string) => {
     setLocalError(null);
+    setLocalErrorScope(null);
     try {
-      const data = await postJson<{ catalog?: LocalModelEntry[]; selection?: { asrSelectedId?: string; translateSelectedId?: string } }>(
+      const data = await postJson<LocalModelsResponse>(
         '/api/local-models/select',
         { type, modelId },
         { timeoutMs: 20_000 }
       );
-      setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-      setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+      applyLocalModelsResponse(data);
     } catch (error: any) {
-      setLocalError(String(error?.message || t('settings.localSelectFailed')));
+      setLocalErrorScope(type === 'asr' ? 'asr-list' : 'translate-list');
+      setLocalError(formatRequestError(error, t('settings.localSelectFailed')));
+    }
+  };
+
+  const handleInspectLocalModel = async () => {
+    const repoId = localRepoId.trim();
+    if (!repoId) {
+      setLocalErrorScope('install');
+      setLocalError(localCopy.installInputRequired);
+      return;
+    }
+    setLocalInspectBusy(true);
+    setLocalErrorScope(null);
+    setLocalError(null);
+    setLocalInspectResult(null);
+    try {
+      const data = await postJson<LocalModelInspectResult>(
+        '/api/local-models/inspect',
+        { type: localInstallType, repoId },
+        { timeoutMs: 60_000, retries: 0 }
+      );
+      setLocalInspectResult(data);
+    } catch (error: any) {
+      setLocalErrorScope('install');
+      setLocalError(formatRequestError(error, localCopy.inspectFailed));
+    } finally {
+      setLocalInspectBusy(false);
     }
   };
 
   const handleInstallLocalModel = async () => {
     const repoId = localRepoId.trim();
     if (!repoId) {
+      setLocalErrorScope('install');
       setLocalError(localCopy.installInputRequired);
       return;
     }
     if (!localInstallRuntimeReady) {
+      setLocalErrorScope('install');
       setLocalError(localInstallRuntimeBlockedHint);
       return;
     }
+    if (hasActiveLocalInstall) {
+      return;
+    }
     setLocalInstallBusy(true);
+    setLocalErrorScope(null);
     setLocalError(null);
     try {
-      const data = await postJson<{ catalog?: LocalModelEntry[]; selection?: { asrSelectedId?: string; translateSelectedId?: string } }>(
+      const data = await postJson<LocalModelsResponse>(
         '/api/local-models/install',
         { type: localInstallType, repoId },
-        { timeoutMs: 300_000, retries: 0 }
+        { timeoutMs: 60_000, retries: 0 }
       );
-      setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-      setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+      applyLocalModelsResponse(data);
       setLocalRepoId('');
+      setLocalInspectResult(null);
     } catch (error: any) {
-      setLocalError(String(error?.message || t('settings.localInstallFailed')));
+      setLocalErrorScope('install');
+      setLocalError(formatRequestError(error, t('settings.localInstallFailed')));
     } finally {
       setLocalInstallBusy(false);
     }
   };
 
   const handleRemoveLocalModel = async (modelId: string) => {
+    const removingModel = visibleLocalModels.find((model) => model.id === modelId) || null;
     setLocalRemovingModelId(modelId);
+    setLocalErrorScope(null);
     setLocalError(null);
     try {
-      const data = await postJson<{ catalog?: LocalModelEntry[]; selection?: { asrSelectedId?: string; translateSelectedId?: string } }>(
+      const data = await postJson<LocalModelsResponse>(
         '/api/local-models/remove',
         { modelId },
         { timeoutMs: 60_000 }
       );
-      setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-      setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+      applyLocalModelsResponse(data);
     } catch (error: any) {
-      setLocalError(String(error?.message || t('settings.localRemoveFailed')));
+      setLocalErrorScope(removingModel?.type === 'translate' ? 'translate-list' : 'asr-list');
+      setLocalError(formatRequestError(error, t('settings.localRemoveFailed')));
     } finally {
       setLocalRemovingModelId(null);
     }
@@ -866,10 +1332,12 @@ export default function Settings({ project }: { project: Project | null }) {
   const handleSavePyannoteToken = async () => {
     const token = pyannoteTokenInput.trim();
     if (!token) {
+      setPyannoteMessageScope('token');
       setPyannoteMessage(pyannoteCopy.saveFailed);
       return;
     }
     setPyannoteBusy(true);
+    setPyannoteMessageScope('token');
     setPyannoteMessage(null);
     try {
       const data = await postJson<{ success?: boolean; status?: PyannoteStatus }>(
@@ -882,6 +1350,7 @@ export default function Settings({ project }: { project: Project | null }) {
       setPyannoteMessage(pyannoteCopy.saved);
       await loadLocalModels();
     } catch (error: any) {
+      setPyannoteMessageScope('token');
       setPyannoteMessage(String(error?.message || pyannoteCopy.saveFailed));
     } finally {
       setPyannoteBusy(false);
@@ -890,6 +1359,7 @@ export default function Settings({ project }: { project: Project | null }) {
 
   const handleInstallPyannote = async () => {
     setPyannoteBusy(true);
+    setPyannoteMessageScope('install');
     setPyannoteMessage(null);
     try {
       const data = await postJson<{ success?: boolean; status?: PyannoteStatus }>(
@@ -900,6 +1370,7 @@ export default function Settings({ project }: { project: Project | null }) {
       setPyannoteStatus(data.status || null);
       await loadLocalModels();
     } catch (error: any) {
+      setPyannoteMessageScope('install');
       setPyannoteMessage(String(error?.message || pyannoteCopy.installFailed));
     } finally {
       setPyannoteBusy(false);
@@ -946,32 +1417,6 @@ export default function Settings({ project }: { project: Project | null }) {
            <Save className="w-5 h-5" />}
           {saveStatusLabel}
         </button>
-        </div>
-        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard
-            icon={<Plus className="h-4 w-4" />}
-            label={t('settings.asrModels')}
-            value={String(asrModels.length)}
-            hint={t('settings.addAsr')}
-          />
-          <SummaryCard
-            icon={<Globe className="h-4 w-4" />}
-            label={t('settings.transModels')}
-            value={String(translateModels.length)}
-            hint={t('settings.addTrans')}
-          />
-          <SummaryCard
-            icon={<Zap className="h-4 w-4" />}
-            label={t('settings.localModelsTitle')}
-            value={localRuntimeReady ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}
-            hint={t('settings.localModelsSubtitle')}
-          />
-          <SummaryCard
-            icon={<Globe className="h-4 w-4" />}
-            label={t('settings.interfaceLang')}
-            value={currentLanguageLabel}
-            hint={t('settings.langNote')}
-          />
         </div>
       </div>
 
@@ -1092,126 +1537,105 @@ export default function Settings({ project }: { project: Project | null }) {
             </div>
           )}
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5">
-              <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{t('settings.openvinoNode')}</div>
-              <div className={`text-sm font-bold ${
-                localStatusLoading ? 'text-outline' : openvinoStatus?.node?.available ? 'text-tertiary' : 'text-error'
-              }`}>
-                {localStatusLoading
-                  ? t('settings.localStatusChecking')
-                  : openvinoStatus?.node?.available
-                    ? t('settings.localStatusReady')
-                    : t('settings.localStatusUnavailable')}
-              </div>
-              {!localStatusLoading && !openvinoStatus?.node?.available && openvinoStatus?.node?.error && (
-                <div className="text-[11px] text-error/80 mt-2 break-all">{openvinoStatus.node.error}</div>
-              )}
-              {!localStatusLoading && openvinoStatus?.node?.version && (
-                <div className="text-[11px] text-outline mt-2">
-                  {localCopy.version}: {openvinoStatus.node.version}
-                </div>
-              )}
+          <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
+            <div>
+              <div className="text-sm font-bold text-secondary">{localCopy.runtimeTitle}</div>
+              <div className="mt-1 text-[11px] text-outline">{localCopy.runtimeSubtitle}</div>
             </div>
-            <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5">
-              <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{localCopy.openvinoGenai}</div>
-              <div className={`text-sm font-bold ${
-                localStatusLoading ? 'text-outline' : openvinoStatus?.genai?.available ? 'text-tertiary' : 'text-error'
-              }`}>
-                {localStatusLoading
-                  ? t('settings.localStatusChecking')
-                  : openvinoStatus?.genai?.available
-                    ? t('settings.localStatusReady')
-                    : t('settings.localStatusUnavailable')}
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+              <div className="rounded-xl border border-white/5 bg-surface-container-high p-3">
+                <div className="text-[10px] font-bold text-outline uppercase tracking-widest">{t('settings.openvinoNode')}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className={`text-sm font-bold ${
+                    localStatusLoading ? 'text-outline' : openvinoStatus?.node?.available ? 'text-tertiary' : 'text-error'
+                  }`}>
+                    {localStatusLoading
+                      ? t('settings.localStatusChecking')
+                      : openvinoStatus?.node?.available
+                        ? t('settings.localStatusReady')
+                        : t('settings.localStatusUnavailable')}
+                  </span>
+                  {!localStatusLoading && openvinoStatus?.node?.version && (
+                    <span className="text-[11px] text-outline">{localCopy.version}: {openvinoStatus.node.version}</span>
+                  )}
+                </div>
+                {!localStatusLoading && !openvinoStatus?.node?.available && openvinoStatus?.node?.error && (
+                  <div className="mt-2 break-all text-[11px] text-error/80">{openvinoStatus.node.error}</div>
+                )}
               </div>
-              {!localStatusLoading && openvinoStatus?.genai?.version && (
-                <div className="text-[11px] text-outline mt-2">
-                  {localCopy.version}: {openvinoStatus.genai.version}
+
+              <div className="rounded-xl border border-white/5 bg-surface-container-high p-3">
+                <div className="text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.openvinoGenai}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className={`text-sm font-bold ${
+                    localStatusLoading ? 'text-outline' : openvinoStatus?.genai?.available ? 'text-tertiary' : 'text-error'
+                  }`}>
+                    {localStatusLoading
+                      ? t('settings.localStatusChecking')
+                      : openvinoStatus?.genai?.available
+                        ? t('settings.localStatusReady')
+                        : t('settings.localStatusUnavailable')}
+                  </span>
+                  {!localStatusLoading && openvinoStatus?.genai?.version && (
+                    <span className="text-[11px] text-outline">{localCopy.version}: {openvinoStatus.genai.version}</span>
+                  )}
                 </div>
-              )}
-              {!localStatusLoading && (
-                <div className="text-[11px] text-outline mt-2 space-y-1">
-                  <div>{localCopy.whisperSupport}: {openvinoStatus?.genai?.whisperPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</div>
-                  <div>{localCopy.llmSupport}: {openvinoStatus?.genai?.llmPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</div>
-                  <div>{localCopy.vlmSupport}: {openvinoStatus?.genai?.vlmPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</div>
-                </div>
-              )}
-              {!localStatusLoading && openvinoStatus?.genai?.error && (
-                <div className="text-[11px] text-error/80 mt-2 break-all">{openvinoStatus.genai.error}</div>
-              )}
-            </div>
-            <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5">
-              <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{localCopy.asrRuntime}</div>
-              <div className={`text-sm font-bold ${
-                localStatusLoading
-                  ? 'text-outline'
-                  : openvinoStatus?.asr?.ready
-                    ? 'text-tertiary'
-                    : 'text-error'
-              }`}>
-                {localStatusLoading
-                  ? t('settings.localStatusChecking')
-                  : openvinoStatus?.asr?.ready
-                    ? t('settings.localStatusReady')
-                    : t('settings.localStatusUnavailable')}
+                {!localStatusLoading && (
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-outline">
+                    <span>{localCopy.whisperSupport}: {openvinoStatus?.genai?.whisperPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</span>
+                    <span>{localCopy.llmSupport}: {openvinoStatus?.genai?.llmPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</span>
+                    <span>{localCopy.vlmSupport}: {openvinoStatus?.genai?.vlmPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</span>
+                  </div>
+                )}
+                {!localStatusLoading && openvinoStatus?.genai?.error && (
+                  <div className="mt-2 break-all text-[11px] text-error/80">{openvinoStatus.genai.error}</div>
+                )}
               </div>
-              {!localStatusLoading && (
-                <div className="text-[11px] text-outline mt-2 space-y-1">
-                  <div>{localCopy.whisperSupport}: {openvinoStatus?.asr?.whisperPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</div>
+
+              <div className="rounded-xl border border-white/5 bg-surface-container-high p-3">
+                <div className="text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.asrRuntime}</div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className={`text-sm font-bold ${
+                    localStatusLoading ? 'text-outline' : openvinoStatus?.asr?.ready ? 'text-tertiary' : 'text-error'
+                  }`}>
+                    {localStatusLoading
+                      ? t('settings.localStatusChecking')
+                      : openvinoStatus?.asr?.ready
+                        ? t('settings.localStatusReady')
+                        : t('settings.localStatusUnavailable')}
+                  </span>
                 </div>
-              )}
-              {!localStatusLoading && openvinoStatus?.asr?.error && (
-                <div className="text-[11px] text-error/80 mt-2 break-all">{openvinoStatus.asr.error}</div>
-              )}
+                {!localStatusLoading && (
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-outline">
+                    <span>{localCopy.whisperSupport}: {openvinoStatus?.asr?.whisperPipelineAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</span>
+                    <span>Qwen ASR: {openvinoStatus?.asr?.qwenOfficialAvailable || openvinoStatus?.asr?.qwenExplicitKvAvailable ? t('settings.localStatusReady') : t('settings.localStatusUnavailable')}</span>
+                  </div>
+                )}
+                {!localStatusLoading && openvinoStatus?.asr?.error && (
+                  <div className="mt-2 break-all text-[11px] text-error/80">{openvinoStatus.asr.error}</div>
+                )}
+              </div>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-6 space-y-4">
-            <div className="flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <div className="text-sm font-bold text-secondary">{pyannoteCopy.title}</div>
-                <div className="mt-1 text-[11px] text-outline">{pyannoteCopy.subtitle}</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => void loadLocalModels()}
-                disabled={pyannoteBusy || isLocalSectionLoading}
-                className="px-4 py-2 rounded-lg border border-white/10 text-xs font-bold text-outline hover:text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {pyannoteCopy.refresh}
-              </button>
+          <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
+            <div>
+              <div className="text-sm font-bold text-secondary">{localCopy.hfAccessTitle}</div>
+              <div className="mt-1 text-[11px] text-outline">{localCopy.hfAccessSubtitle}</div>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-white/5 bg-surface-container-high p-4">
-                <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{pyannoteCopy.title}</div>
-                <div className={`text-sm font-bold ${pyannoteStatus?.ready ? 'text-tertiary' : pyannoteStatus?.state === 'partial' ? 'text-yellow-300' : 'text-error'}`}>
-                  {localizedPyannoteState}
-                </div>
-                {pyannoteStatus?.lastError && !pyannoteStatus.ready && (
-                  <div className="text-[11px] text-error/80 mt-2 break-all">{pyannoteStatus.lastError}</div>
-                )}
-              </div>
-              <div className="rounded-2xl border border-white/5 bg-surface-container-high p-4">
-                <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{pyannoteCopy.tokenLabel}</div>
-                <div className={`text-sm font-bold ${pyannoteStatus?.tokenConfigured ? 'text-tertiary' : 'text-error'}`}>
+            <div className="flex flex-col gap-2 rounded-xl border border-white/5 bg-surface-container-high px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{pyannoteCopy.tokenLabel}</span>
+                <span className={`text-sm font-bold ${pyannoteStatus?.tokenConfigured ? 'text-tertiary' : 'text-error'}`}>
                   {pyannoteStatus?.tokenConfigured ? pyannoteCopy.tokenReady : pyannoteCopy.tokenMissing}
-                </div>
-                <div className="text-[11px] text-outline mt-2">{pyannoteCopy.tokenHint}</div>
+                </span>
               </div>
-              <div className="rounded-2xl border border-white/5 bg-surface-container-high p-4">
-                <div className="text-[10px] font-bold text-outline uppercase tracking-widest mb-1">{localCopy.openvinoGenai}</div>
-                <div className={`text-sm font-bold ${pyannoteStatus?.ready ? 'text-tertiary' : 'text-outline'}`}>
-                  {pyannoteStatus?.ready
-                    ? pyannoteCopy.installed
-                    : pyannoteStatus?.installing || pyannoteBusy
-                      ? pyannoteCopy.installing
-                      : pyannoteCopy.install}
-                </div>
-              </div>
+              <div className="text-[11px] text-outline lg:text-right">{pyannoteCopy.tokenHint}</div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_180px_180px] gap-3">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_180px]">
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold text-outline uppercase tracking-widest">{pyannoteCopy.tokenLabel}</label>
                 <input
@@ -1236,27 +1660,59 @@ export default function Settings({ project }: { project: Project | null }) {
                   {pyannoteCopy.saveToken}
                 </button>
               </div>
-              <div className="space-y-2">
-                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
-                  {pyannoteCopy.install}
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void handleInstallPyannote()}
-                  disabled={pyannoteBusy || pyannoteStatus?.ready || !pyannoteStatus?.tokenConfigured}
-                  className="w-full px-4 py-3 rounded-xl border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {pyannoteBusy && !pyannoteStatus?.ready ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  {pyannoteStatus?.ready
-                    ? pyannoteCopy.installed
-                    : pyannoteBusy
-                      ? pyannoteCopy.installing
-                      : pyannoteCopy.install}
-                </button>
-              </div>
             </div>
 
-            {pyannoteMessage && (
+            {pyannoteMessageScope === 'token' && pyannoteMessage && (
+              <div className={`text-[11px] ${pyannoteMessage === pyannoteCopy.saved ? 'text-tertiary' : 'text-error/80'}`}>
+                {pyannoteMessage}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <div className="text-sm font-bold text-secondary">{pyannoteCopy.title}</div>
+                <div className="mt-1 text-[11px] text-outline">{pyannoteCopy.subtitle}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadLocalModels()}
+                disabled={pyannoteBusy || isLocalSectionLoading}
+                className="px-4 py-2 rounded-lg border border-white/10 text-xs font-bold text-outline hover:text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {pyannoteCopy.refresh}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_160px]">
+              <div className="rounded-xl border border-white/5 bg-surface-container-high px-4 py-3">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.pyannoteAssets}</span>
+                  <span className={`text-sm font-bold ${pyannoteStatus?.ready ? 'text-tertiary' : pyannoteStatus?.state === 'partial' ? 'text-yellow-300' : 'text-error'}`}>
+                    {localizedPyannoteState}
+                  </span>
+                </div>
+                {pyannoteStatus?.lastError && !pyannoteStatus.ready && (
+                  <div className="mt-2 break-all text-[11px] text-error/80">{pyannoteStatus.lastError}</div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleInstallPyannote()}
+                disabled={pyannoteBusy || pyannoteStatus?.ready || !pyannoteStatus?.tokenConfigured}
+                className="flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {pyannoteBusy && !pyannoteStatus?.ready ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {pyannoteStatus?.ready
+                  ? pyannoteCopy.installed
+                  : pyannoteBusy
+                    ? pyannoteCopy.installing
+                    : pyannoteCopy.install}
+              </button>
+            </div>
+
+            {pyannoteMessageScope === 'install' && pyannoteMessage && (
               <div className={`text-[11px] ${pyannoteMessage === pyannoteCopy.saved ? 'text-tertiary' : 'text-error/80'}`}>
                 {pyannoteMessage}
               </div>
@@ -1266,32 +1722,89 @@ export default function Settings({ project }: { project: Project | null }) {
           <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-6 space-y-4">
             <div>
               <div className="text-sm font-bold text-secondary">{localCopy.installTitle}</div>
-              <div className="mt-1 text-[11px] text-outline">{localCopy.installHint}</div>
-              <div className="mt-1 text-[11px] text-outline/80">{localCopy.installHintDetail}</div>
+              <div className="mt-1 text-[11px] text-outline">{localCopy.installHint} {localCopy.installHintDetail}</div>
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-[180px_minmax(0,1fr)_160px] gap-3">
-              <div className="space-y-2">
-                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.installType}</label>
-                <select
-                  value={localInstallType}
-                  onChange={(e) => setLocalInstallType(e.target.value as LocalModelType)}
-                  disabled={localInstallBusy || isLocalSectionLoading}
-                  className="w-full bg-surface-container-high border border-white/10 rounded-xl py-3 px-4 text-white appearance-none focus:ring-2 focus:ring-primary-container outline-none"
-                >
-                  <option value="asr">{localCopy.installTypeAsr}</option>
-                  <option value="translate">{localCopy.installTypeTranslate}</option>
-                </select>
+
+            <div className="space-y-2">
+              <div className="text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.installTypeTitle}</div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {(['asr', 'translate'] as LocalModelType[]).map((type) => {
+                  const active = localInstallType === type;
+                  const disabled = localInstallControlsDisabled;
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        if (disabled || active) return;
+                        setLocalInstallType(type);
+                        setLocalInspectResult(null);
+                        setLocalErrorScope(null);
+                        setLocalError(null);
+                      }}
+                      disabled={disabled}
+                      aria-pressed={active}
+                      className={`rounded-2xl border p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                        active
+                          ? 'border-primary/50 bg-primary-container/10 shadow-[0_12px_36px_rgba(var(--primary),0.12)]'
+                          : 'border-white/10 bg-surface-container-high hover:border-primary/30 hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-bold text-secondary">
+                            {type === 'asr' ? localCopy.installTypeAsr : localCopy.installTypeTranslate}
+                          </div>
+                          <div className="mt-1 text-[11px] text-outline">
+                            {type === 'asr' ? localCopy.installTypeAsrHint : localCopy.installTypeTranslateHint}
+                            <span className="text-outline/70"> · {type === 'asr' ? localCopy.installTypeAsrUsage : localCopy.installTypeTranslateUsage}</span>
+                          </div>
+                        </div>
+                        {active && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-tertiary/10 px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-tertiary">
+                            <Check className="h-3 w-3" />
+                            {localCopy.currentChoice}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_120px_160px]">
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold text-outline uppercase tracking-widest">{localCopy.installRepo}</label>
                 <input
                   type="text"
                   value={localRepoId}
-                  onChange={(e) => setLocalRepoId(e.target.value)}
-                  disabled={localInstallBusy || isLocalSectionLoading || !localInstallRuntimeReady}
-                  placeholder={localCopy.installPlaceholder}
+                  onChange={(e) => {
+                    setLocalRepoId(e.target.value);
+                    setLocalInspectResult(null);
+                    if (localErrorScope === 'install') {
+                      setLocalErrorScope(null);
+                      setLocalError(null);
+                    }
+                  }}
+                  disabled={localInstallControlsDisabled || !localInstallRuntimeReady}
+                  placeholder={localInstallPlaceholder}
                   className="w-full bg-surface-container-high border border-white/10 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-primary-container outline-none placeholder:text-outline/40"
                 />
+              </div>
+              <div className="space-y-2">
+                <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
+                  {localCopy.inspect}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void handleInspectLocalModel()}
+                  disabled={localInspectBusy || localInstallControlsDisabled || !localRepoId.trim()}
+                  className="w-full px-4 py-3 rounded-xl border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {localInspectBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Info className="w-4 h-4" />}
+                  {localInspectBusy ? localCopy.inspecting : localCopy.inspect}
+                </button>
               </div>
               <div className="space-y-2">
                 <label className="block text-[10px] font-bold text-outline uppercase tracking-widest opacity-0">
@@ -1300,16 +1813,67 @@ export default function Settings({ project }: { project: Project | null }) {
                 <button
                   type="button"
                   onClick={() => void handleInstallLocalModel()}
-                  disabled={localInstallBusy || isLocalSectionLoading || !localInstallRuntimeReady}
+                  disabled={localInstallControlsDisabled || !localInstallRuntimeReady}
                   className="w-full px-4 py-3 rounded-xl border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {localInstallBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  {localInstallBusy ? t('settings.localInstalling') : t('settings.localInstall')}
+                  {localInstallBusy || hasActiveLocalInstall ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {localInstallBusy || hasActiveLocalInstall ? t('settings.localInstalling') : t('settings.localInstall')}
                 </button>
               </div>
             </div>
             {!isLocalSectionLoading && !localInstallRuntimeReady && (
               <div className="text-[11px] text-error/80">{localInstallRuntimeBlockedHint}</div>
+            )}
+            {installPanelError && (
+              <div className="rounded-xl border border-error/20 bg-error/10 px-4 py-3 text-xs text-error">
+                {installPanelError}
+              </div>
+            )}
+            {visibleLocalInstallStatuses.length > 0 && (
+              <div className="space-y-2">
+                {visibleLocalInstallStatuses.map((status) => {
+                  const failed = status.phase === 'failed';
+                  return (
+                    <div
+                      key={status.modelId}
+                      className={`rounded-2xl border px-4 py-3 text-[11px] ${
+                        failed
+                          ? 'border-error/20 bg-error/10 text-error'
+                          : 'border-primary/20 bg-primary-container/10 text-outline'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-secondary">
+                            {localCopy.installStatusTitle}
+                          </div>
+                          <div className="mt-1 break-all font-bold text-secondary">
+                            {status.name || status.repoId}
+                          </div>
+                          <div className="mt-1 break-all text-outline">{status.repoId}</div>
+                        </div>
+                        <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                          failed ? 'bg-error/10 text-error' : 'bg-primary-container/10 text-primary'
+                        }`}>
+                          {status.installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : failed ? <AlertCircle className="h-3.5 w-3.5" /> : null}
+                          {formatLocalInstallPhase(localCopy, status.phase)}
+                        </div>
+                      </div>
+                      {status.error && (
+                        <div className="mt-2 break-all text-error/80">{status.error}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {localInspectResult && (
+              <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-4">
+                <div className="text-[11px] text-outline break-all">
+                  {localCopy.repoId}: {localInspectResult.repoId}
+                </div>
+                <RuntimeHintsSummary hints={localInspectResult.runtimeHints} copy={localCopy} />
+              </div>
             )}
           </div>
 
@@ -1323,23 +1887,10 @@ export default function Settings({ project }: { project: Project | null }) {
                   <div className="text-[11px] text-outline">{localCopy.noInstalledModels}</div>
                 )}
                 {localAsrModels.map((model) => (
-                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      onClick={() => void handleSelectLocalModel('asr', model.id)}
-                      disabled={localCatalogLoading}
-                      className="flex-1 rounded-xl -m-2 p-2 text-left transition-colors hover:bg-white/5 hover:text-white disabled:opacity-60 disabled:hover:bg-transparent"
-                    >
+                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <div className="text-sm font-bold text-secondary">{model.name}</div>
-                        {model.selected && (
-                          <span className="px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary text-[10px] font-bold uppercase tracking-widest">
-                            {localCopy.selected}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-outline mt-2 break-all">
-                        {localCopy.repoId}: {model.repoId}
                       </div>
                       <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-outline sm:grid-cols-2">
                         <div>{localCopy.sourceFormat}: {formatLocalModelSourceFormat(language, model.sourceFormat)}</div>
@@ -1347,21 +1898,51 @@ export default function Settings({ project }: { project: Project | null }) {
                         <div>{localCopy.runtimeLayout}: {formatLocalModelRuntimeLayout(language, model.runtimeLayout)}</div>
                         <div>{localCopy.runtimeEngine}: {formatLocalModelRuntimeEngine(model.runtime)}</div>
                       </div>
-                      {!model.selected && (
-                        <div className="text-[11px] text-primary mt-2">{localCopy.setDefault}</div>
+                      {model.runtimeHints && (
+                        <RuntimeHintsSummary
+                          hints={model.runtimeHints}
+                          copy={localCopy}
+                          expanded={Boolean(expandedRuntimeHintIds[model.id])}
+                          onToggle={() => toggleRuntimeHints(model.id)}
+                        />
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleRemoveLocalModel(model.id)}
-                      disabled={localRemovingModelId === model.id}
-                      className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                      {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
-                    </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleSelectLocalModel('asr', model.id)}
+                        disabled={model.selected || localCatalogLoading}
+                        className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-bold transition-all disabled:cursor-not-allowed ${
+                          model.selected
+                            ? 'border-tertiary/20 bg-tertiary/10 text-tertiary disabled:opacity-100'
+                            : 'border-primary/20 text-primary hover:bg-primary/10 disabled:opacity-60'
+                        }`}
+                      >
+                        {model.selected ? <CheckCircle2 className="w-4 h-4" /> : null}
+                        {model.selected ? localCopy.selected : localCopy.setDefaultAsr}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRemoveLocalModel(model.id)}
+                        disabled={localRemovingModelId === model.id}
+                        className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
+                      </button>
+                    </div>
+                    {model.installError && (
+                      <div className="rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
+                        {model.installError}
+                      </div>
+                    )}
                   </div>
                 ))}
+                {asrListError && (
+                  <div className="rounded-xl border border-error/20 bg-error/10 px-4 py-3 text-xs text-error">
+                    {asrListError}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1374,23 +1955,10 @@ export default function Settings({ project }: { project: Project | null }) {
                   <div className="text-[11px] text-outline">{localCopy.noInstalledModels}</div>
                 )}
                 {localTranslateModels.map((model) => (
-                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex items-start justify-between gap-3">
-                    <button
-                      type="button"
-                      onClick={() => void handleSelectLocalModel('translate', model.id)}
-                      disabled={localCatalogLoading}
-                      className="flex-1 rounded-xl -m-2 p-2 text-left transition-colors hover:bg-white/5 hover:text-white disabled:opacity-60 disabled:hover:bg-transparent"
-                    >
+                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <div className="text-sm font-bold text-secondary">{model.name}</div>
-                        {model.selected && (
-                          <span className="px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary text-[10px] font-bold uppercase tracking-widest">
-                            {localCopy.selected}
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] text-outline mt-2 break-all">
-                        {localCopy.repoId}: {model.repoId}
                       </div>
                       <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-outline sm:grid-cols-2">
                         <div>{localCopy.sourceFormat}: {formatLocalModelSourceFormat(language, model.sourceFormat)}</div>
@@ -1398,30 +1966,54 @@ export default function Settings({ project }: { project: Project | null }) {
                         <div>{localCopy.runtimeLayout}: {formatLocalModelRuntimeLayout(language, model.runtimeLayout)}</div>
                         <div>{localCopy.runtimeEngine}: {formatLocalModelRuntimeEngine(model.runtime)}</div>
                       </div>
-                      {!model.selected && (
-                        <div className="text-[11px] text-primary mt-2">{localCopy.setDefault}</div>
+                      {model.runtimeHints && (
+                        <RuntimeHintsSummary
+                          hints={model.runtimeHints}
+                          copy={localCopy}
+                          expanded={Boolean(expandedRuntimeHintIds[model.id])}
+                          onToggle={() => toggleRuntimeHints(model.id)}
+                        />
                       )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleRemoveLocalModel(model.id)}
-                      disabled={localRemovingModelId === model.id}
-                      className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                      {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                      {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
-                    </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleSelectLocalModel('translate', model.id)}
+                        disabled={model.selected || localCatalogLoading}
+                        className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-bold transition-all disabled:cursor-not-allowed ${
+                          model.selected
+                            ? 'border-tertiary/20 bg-tertiary/10 text-tertiary disabled:opacity-100'
+                            : 'border-primary/20 text-primary hover:bg-primary/10 disabled:opacity-60'
+                        }`}
+                      >
+                        {model.selected ? <CheckCircle2 className="w-4 h-4" /> : null}
+                        {model.selected ? localCopy.selected : localCopy.setDefaultTranslate}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRemoveLocalModel(model.id)}
+                        disabled={localRemovingModelId === model.id}
+                        className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                        {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
+                      </button>
+                    </div>
+                    {model.installError && (
+                      <div className="rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
+                        {model.installError}
+                      </div>
+                    )}
                   </div>
                 ))}
+                {translateListError && (
+                  <div className="rounded-xl border border-error/20 bg-error/10 px-4 py-3 text-xs text-error">
+                    {translateListError}
+                  </div>
+                )}
               </div>
             </div>
           </div>
-
-          {selectedLocalInstallError && (
-            <div className="text-xs text-error bg-error/10 border border-error/20 rounded-lg p-3">
-              {selectedLocalInstallError}
-            </div>
-          )}
         </section>
         ) : (
           <section className="rounded-3xl border border-white/5 bg-surface-container p-7 shadow-[0_18px_50px_rgba(7,10,24,0.18)] space-y-4">
@@ -1591,25 +2183,6 @@ const ModelItem: React.FC<{
           ? 120_000
           : 20_000;
 
-    const parseHttpErrorBody = (bodyText: string) => {
-      const raw = String(bodyText || '').trim();
-      if (!raw) return '';
-      try {
-        const parsed = JSON.parse(raw);
-        const nested = parsed?.error;
-        const nestedMessage =
-          typeof nested === 'string'
-            ? nested
-            : nested?.message || parsed?.message || parsed?.detail || parsed?.error_description;
-        if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
-          return nestedMessage.trim();
-        }
-      } catch {
-        // Non-JSON body; use raw text.
-      }
-      return raw;
-    };
-    
     setTestStatus('testing');
     setTestError(null);
     try {

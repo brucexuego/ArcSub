@@ -25,5 +25,11 @@
 如果你要使用本地 ASR 或本地翻譯模型：
 
 1. 先進入 **Settings**
-2. 在那裡安裝模型
-3. 回到工作流程頁面後再選用
+2. 選擇 **ASR 模型** 或 **翻譯模型**
+3. 輸入 Hugging Face 模型 id 並先檢查
+4. 安裝模型；大型模型下載或轉換會以背景任務繼續進行
+5. 回到工作流程頁面後再選用
+
+ArcSub 會在可用時讀取可信的 Hugging Face metadata，產生模型專屬的本地預設值，例如 runtime hints、chat template 支援與 token-aware 翻譯批次。
+
+`HF_TOKEN` 會同時提供給 pyannote 與需要授權的 gated/private Hugging Face 模型下載。公開模型通常不需要設定。

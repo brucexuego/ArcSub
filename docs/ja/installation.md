@@ -47,8 +47,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 - source repository にはローカル runtime データ、ダウンロード済みモデル、個人用 `.env` は含まれません
 - OpenVINO が未導入でも ArcSub は起動できます
 - OpenVINO がない場合、ローカルモデル導入は使えませんが、クラウド経路は利用できます
-- ローカル ASR とローカル翻訳モデルは後から **Settings** で導入します
-- pyannote には Hugging Face access token が必要です
+- ローカル ASR とローカル翻訳モデルは後から **Settings** で Hugging Face モデル id から導入します
+- 大きなローカルモデルのダウンロードや変換はバックグラウンドインストールタスクとして継続され、**Settings** に状態が表示されます
+- `HF_TOKEN` は pyannote と gated/private Hugging Face モデルのダウンロードで使われます
 
 ## ソースから開発する場合
 

@@ -20,4 +20,14 @@
 
 ## ローカルモデル
 
-ローカル ASR やローカル翻訳を使いたい場合は、先に **Settings** でインストールしてから選択してください。
+ローカル ASR やローカル翻訳を使いたい場合：
+
+1. **Settings** を開く
+2. **ASR モデル** または **翻訳モデル** を選ぶ
+3. Hugging Face モデル id を入力して確認する
+4. モデルをインストールする。大きなダウンロードや変換はバックグラウンドタスクとして継続されます
+5. ワークフロー画面に戻って選択する
+
+ArcSub は利用可能な信頼できる Hugging Face metadata を読み取り、runtime hints、chat template 対応、token-aware 翻訳バッチなどのモデル別ローカル既定値を導出します。
+
+`HF_TOKEN` は pyannote と gated/private Hugging Face モデルのダウンロードで共有されます。公開モデルでは通常不要です。

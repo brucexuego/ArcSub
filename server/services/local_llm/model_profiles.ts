@@ -161,6 +161,10 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
       json_strict: 'phi4_chat',
     },
     lineSafeBatching: {
+      plain_probe: {
+        maxLines: 30,
+        charBudget: 2400,
+      },
       template_validated: {
         maxLines: 12,
         charBudget: 720,
@@ -170,7 +174,7 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
         charBudget: 480,
       },
     },
-    notes: ['Phi-4 mini exact-model profile keeps the currently stable mini variant independently tunable.'],
+    notes: ['Phi-4 mini plain_probe can use larger line-safe batches after local benchmark validation; validated/json modes stay conservative.'],
   },
   {
     id: 'local-qwen3-1-7b-int8',
@@ -254,6 +258,10 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
       },
     },
     lineSafeBatching: {
+      plain_probe: {
+        maxLines: 30,
+        charBudget: 3000,
+      },
       template_validated: {
         maxLines: 2,
         charBudget: 160,
@@ -263,7 +271,7 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
         charBudget: 120,
       },
     },
-    notes: ['Qwen3 4B needs aggressive micro-batching and no-repeat control for subtitle translation to avoid line collapse and pass-through.'],
+    notes: ['Qwen3 4B plain_probe can use larger line-safe batches after local benchmark validation; validated/json modes stay aggressively micro-batched to avoid line collapse.'],
   },
   {
     id: 'local-translategemma-4b-it',
@@ -275,8 +283,8 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
     },
     lineSafeBatching: {
       plain_probe: {
-        maxLines: 4,
-        charBudget: 320,
+        maxLines: 30,
+        charBudget: 3000,
         tokenBudget: 960,
       },
       template_validated: {
@@ -290,7 +298,7 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
         tokenBudget: 640,
       },
     },
-    notes: ['TranslateGemma uses structured translation messages instead of ArcSub generic system-prompt wrappers.', 'Subtitle translation should stay in small contiguous batches so line coverage can be validated externally.'],
+    notes: ['TranslateGemma plain_probe uses shared line-safe markers and can run larger batches after local benchmark validation.', 'Validated/json modes stay in small contiguous batches so line coverage can be validated externally.'],
   },
   {
     id: 'local-vllm-translategemma-4b-it',
@@ -302,8 +310,8 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
     },
     lineSafeBatching: {
       plain_probe: {
-        maxLines: 4,
-        charBudget: 320,
+        maxLines: 30,
+        charBudget: 3000,
         tokenBudget: 960,
       },
       template_validated: {
@@ -317,7 +325,7 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
         tokenBudget: 640,
       },
     },
-    notes: ['The vLLM-optimized TranslateGemma recipe uses the delimiter-style chat payload documented by vLLM recipes.', 'Subtitle translation should stay in small contiguous batches so line coverage can be validated externally.'],
+    notes: ['The vLLM-optimized TranslateGemma recipe uses the delimiter-style chat payload documented by vLLM recipes.', 'TranslateGemma plain_probe uses shared line-safe markers and can run larger batches after local benchmark validation.', 'Validated/json modes stay in small contiguous batches so line coverage can be validated externally.'],
   },
   {
     id: 'local-gemma-3-4b-it',
@@ -334,16 +342,20 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
       },
     },
     lineSafeBatching: {
+      plain_probe: {
+        maxLines: 10,
+        charBudget: 1600,
+      },
       template_validated: {
         maxLines: 6,
         charBudget: 360,
       },
       json_strict: {
-        maxLines: 5,
-        charBudget: 340,
+        maxLines: 3,
+        charBudget: 220,
       },
     },
-    notes: ['Gemma 3 4B responds best to its dedicated chat template plus tighter subtitle batches and mild repetition suppression.'],
+    notes: ['Gemma 3 4B plain_probe is tuned for larger line-safe batches after local benchmark validation; validated/json modes stay conservative.'],
   },
   {
     id: 'local-deepseek-r1-distill-qwen-7b-int4',
@@ -363,6 +375,10 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
       },
     },
     lineSafeBatching: {
+      plain_probe: {
+        maxLines: 10,
+        charBudget: 1000,
+      },
       template_validated: {
         maxLines: 2,
         charBudget: 180,
@@ -372,7 +388,7 @@ const LOCAL_TRANSLATION_MODEL_PROFILES: LocalTranslationModelProfile[] = [
         charBudget: 150,
       },
     },
-    notes: ['DeepSeek 7B int4 keeps validated/json modes on native non-thinking prompt wrappers plus per-model micro-batching.'],
+    notes: ['DeepSeek 7B int4 plain_probe is fastest around medium line-safe batches; larger batches slow down sharply, while validated/json modes stay micro-batched.'],
   },
 ];
 

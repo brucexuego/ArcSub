@@ -83,6 +83,18 @@ async function disposePipeline() {
   }
 }
 
+async function resetVlmChatState() {
+  if (!pipeline || runtimeKind !== 'vlm') return false;
+  const finisher = pipeline.finishChat;
+  if (typeof finisher !== 'function') return false;
+  try {
+    await Promise.resolve(finisher.call(pipeline));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadModel(params) {
   const nextModelPath = String(params.modelPath || '').trim();
   const nextDevice = String(params.device || 'AUTO').trim() || 'AUTO';
@@ -133,6 +145,7 @@ async function generate(params) {
     params.generationConfig && typeof params.generationConfig === 'object'
       ? { ...params.generationConfig }
       : {};
+  const resetChat = params.resetChat !== false;
 
   let inputs = prompt;
   if (messages && messages.length > 0) {
@@ -147,10 +160,20 @@ async function generate(params) {
     inputs = new chatHistoryFactory(messages);
   }
 
-  const result =
-    runtimeKind === 'vlm'
-      ? await pipeline.generate(inputs, { generationConfig })
-      : await pipeline.generate(inputs, generationConfig);
+  let result;
+  if (runtimeKind === 'vlm' && resetChat) {
+    await resetVlmChatState();
+  }
+  try {
+    result =
+      runtimeKind === 'vlm'
+        ? await pipeline.generate(inputs, { generationConfig })
+        : await pipeline.generate(inputs, generationConfig);
+  } finally {
+    if (runtimeKind === 'vlm' && resetChat) {
+      await resetVlmChatState();
+    }
+  }
 
   const asTexts = Array.isArray(result?.texts) ? result.texts : [];
   const text =

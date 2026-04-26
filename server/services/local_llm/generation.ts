@@ -1,7 +1,7 @@
 import type { LocalModelDefinition } from '../../local_model_catalog.js';
 import type { TranslationQualityMode } from '../llm/orchestrators/translation_quality_policy.js';
 import { getLocalOpenvinoOfficialBaselineForRepoId } from './openvino_official_baselines.js';
-import { resolveLocalTranslationProfile } from './model_profiles.js';
+import { resolveEffectiveLocalTranslationProfile } from './effective_profile.js';
 import type { LocalTranslateGenerationOptions, LocalTranslateModelStrategy } from './types.js';
 
 interface EnvReaders {
@@ -22,6 +22,7 @@ interface EstimateLocalMaxNewTokensInput {
   text: string;
   lineCount: number;
   lineSafeMode: boolean;
+  localModel?: LocalModelDefinition | null;
   jsonMode?: boolean;
   strictMode?: boolean;
   getNumber: (name: string, fallback: number, min?: number, max?: number) => number;
@@ -49,8 +50,18 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
   const promptLookupOptions = getPromptLookupOptions(input);
   const officialDefaults = getOfficialGenerationDefaults(input.localModel);
   const qualityMode = input.translationQualityMode || (input.jsonMode ? 'json_strict' : 'plain_probe');
-  const resolvedProfile = resolveLocalTranslationProfile(input.localModel, input.modelStrategy, qualityMode);
-  const familyDefaults = resolvedProfile.qualityModeDefaults;
+  const resolvedProfile = resolveEffectiveLocalTranslationProfile({
+    localModel: input.localModel,
+    modelStrategy: input.modelStrategy,
+    qualityMode,
+  }).translationProfile;
+  const runtimeHintDefaults = input.localModel?.runtimeHints?.generation || {};
+  const familyDefaults = {
+    ...resolvedProfile.qualityModeDefaults,
+    ...runtimeHintDefaults,
+  };
+  const chatTemplateKwargs = input.localModel?.runtimeHints?.chatTemplate?.kwargs;
+  const templateOptions = chatTemplateKwargs ? { chatTemplateKwargs } : {};
 
   if (input.modelStrategy.family === 'translategemma') {
     return {
@@ -63,6 +74,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       frequencyPenalty: familyDefaults.frequencyPenalty,
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: true,
+      ...templateOptions,
     };
   }
 
@@ -99,6 +111,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: false,
       ...(promptLookupOptions || {}),
+      ...templateOptions,
     };
   }
 
@@ -122,6 +135,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: false,
       ...(promptLookupOptions || {}),
+      ...templateOptions,
     };
   }
 
@@ -137,6 +151,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: false,
       ...(promptLookupOptions || {}),
+      ...templateOptions,
     };
   }
 
@@ -152,6 +167,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: false,
       ...(promptLookupOptions || {}),
+      ...templateOptions,
     };
   }
 
@@ -179,6 +195,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
       noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
       applyChatTemplate: false,
       ...(promptLookupOptions || {}),
+      ...templateOptions,
     };
   }
 
@@ -193,6 +210,7 @@ export function buildLocalGenerationOptions(input: BuildLocalGenerationOptionsIn
     noRepeatNgramSize: familyDefaults.noRepeatNgramSize,
     applyChatTemplate: false,
     ...(promptLookupOptions || {}),
+    ...templateOptions,
   };
 }
 
@@ -214,12 +232,18 @@ export function estimateLocalMaxNewTokens(input: EstimateLocalMaxNewTokensInput)
     ? Math.ceil(estimatedUnits * 1.35) + input.lineCount * 10
     : Math.ceil(estimatedUnits * 1.15) + input.lineCount * (input.lineSafeMode ? 6 : 2) + (input.strictMode ? 24 : 0);
   const minTokens = input.jsonMode ? 128 : input.lineSafeMode ? 96 : 64;
+  const hintMaxOutputTokens = input.localModel?.runtimeHints?.maxOutputTokens;
+  const contextWindow = input.localModel?.runtimeHints?.contextWindow;
+  const contextMaxTokens =
+    typeof contextWindow === 'number' && Number.isFinite(contextWindow)
+      ? Math.max(64, Math.min(8192, Math.floor(contextWindow * 0.7)))
+      : 8192;
   const maxTokens = Math.round(
     input.getNumber(
       input.jsonMode ? 'OPENVINO_LOCAL_TRANSLATE_JSON_MAX_NEW_TOKENS' : 'OPENVINO_LOCAL_TRANSLATE_MAX_NEW_TOKENS',
-      input.jsonMode ? 3072 : 2048,
+      hintMaxOutputTokens || (input.jsonMode ? 3072 : 2048),
       64,
-      8192
+      contextMaxTokens
     )
   );
   return Math.max(minTokens, Math.min(maxTokens, baseBudget));
