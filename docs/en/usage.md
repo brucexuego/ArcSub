@@ -25,5 +25,11 @@
 If you want local ASR or local translation:
 
 1. Open **Settings**
-2. Install the model there
-3. Return to the workflow page and select it
+2. Choose **ASR Model** or **Translation Model**
+3. Enter the Hugging Face model id and inspect it
+4. Install the model; long downloads or conversions continue as a background task
+5. Return to the workflow page and select it
+
+ArcSub reads trusted Hugging Face metadata when available and derives model-specific local defaults such as runtime hints, chat-template support, and token-aware translation batching.
+
+`HF_TOKEN` is shared by pyannote and gated/private Hugging Face model downloads. Public models usually do not need it.

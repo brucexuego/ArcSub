@@ -66,6 +66,26 @@ interface DiarizationDiagnostics {
   };
 }
 
+interface LocalTranslationBatchDebugInfo {
+  source?: 'local' | 'translategemma';
+  mode?: 'fixed_lines' | 'token_aware';
+  batchCount?: number;
+  lineCounts?: number[];
+  charCounts?: number[];
+  promptTokens?: number[];
+  estimatedOutputTokens?: number[];
+  durationsMs?: number[];
+  inputTokenBudget?: number | null;
+  outputTokenBudget?: number | null;
+  contextWindow?: number | null;
+  safetyReserveTokens?: number | null;
+  maxLines?: number | null;
+  charBudget?: number | null;
+  fallbackReason?: string | null;
+  totalDurationMs?: number | null;
+  maxDurationMs?: number | null;
+}
+
 interface TranslationPipelineDebug {
   requested?: {
     targetLanguageDescriptor?: string;
@@ -96,6 +116,11 @@ interface TranslationPipelineDebug {
     localBaselineConfidence?: string | null;
     localBaselineTaskFamily?: string | null;
     localFallbackBaseline?: boolean;
+    localBatching?: LocalTranslationBatchDebugInfo | null;
+    localBatchingMode?: string | null;
+    localBatchCount?: number | null;
+    localBatchLineCounts?: number[];
+    localBatchPromptTokens?: number[];
   };
   quality?: {
     lineCountMatch?: boolean;
@@ -109,6 +134,7 @@ interface TranslationPipelineDebug {
     modelId?: string;
     modelPath?: string;
     pipelineKind?: string;
+    vlmRuntimeMode?: string | null;
     requestedDevice?: string;
     pipelineDevice?: string | null;
     schedulerConfig?: {
@@ -528,6 +554,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     () => translateModels.find((model) => model.id === selectedModelId) || null,
     [translateModels, selectedModelId]
   );
+  const translateGemmaPromptControlsDisabled = isTranslateGemmaModel(selectedTranslateModel);
   const transcriptionSourceLanguage = React.useMemo(
     () => normalizeTranscriptionSourceLanguage(project?.transcriptionSourceLanguage),
     [project?.transcriptionSourceLanguage]
@@ -1197,6 +1224,40 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(1).padStart(4, '0')}${suffix}`;
   }, []);
 
+  const formatNumberList = React.useCallback((values: unknown, options?: { suffix?: string }) => {
+    if (!Array.isArray(values) || values.length === 0) return '-';
+    const normalized = values
+      .map((value) => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null))
+      .filter((value): value is number => value !== null);
+    if (normalized.length === 0) return '-';
+    const formatValue = (value: number) => `${value.toLocaleString()}${options?.suffix || ''}`;
+    if (normalized.length <= 8) {
+      return normalized.map(formatValue).join(' / ');
+    }
+    const head = normalized.slice(0, 6).map(formatValue).join(' / ');
+    return `${head} / ... / ${formatValue(normalized[normalized.length - 1])} (${normalized.length})`;
+  }, []);
+
+  const formatDurationList = React.useCallback((values: unknown) => {
+    if (!Array.isArray(values) || values.length === 0) return '-';
+    const normalized = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+    if (normalized.length === 0) return '-';
+    if (normalized.length <= 8) return normalized.map((value) => formatElapsedTime(value)).join(' / ');
+    const head = normalized.slice(0, 6).map((value) => formatElapsedTime(value)).join(' / ');
+    return `${head} / ... / ${formatElapsedTime(normalized[normalized.length - 1])} (${normalized.length})`;
+  }, [formatElapsedTime]);
+
+  const localizeLocalBatchMode = React.useCallback((mode: string | null | undefined) => {
+    switch (String(mode || '').trim()) {
+      case 'token_aware':
+        return t('translation.localBatchModeTokenAware');
+      case 'fixed_lines':
+        return t('translation.localBatchModeFixedLines');
+      default:
+        return mode ? String(mode) : '-';
+    }
+  }, [t]);
+
   const promptTemplateLabel = React.useCallback((templateId: string | null | undefined) => {
     switch (String(templateId || '')) {
       case 'subtitle_general':
@@ -1261,6 +1322,16 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
     if (typeof applied.localFallbackBaseline === 'boolean') {
       parts.push(`${t('translation.monitorLocalFallbackBaseline')}: ${applied.localFallbackBaseline ? t('translation.monitorYes') : t('translation.monitorNo')}`);
+    }
+    const localBatching = applied.localBatching || null;
+    const localBatchCount =
+      typeof localBatching?.batchCount === 'number'
+        ? localBatching.batchCount
+        : typeof applied.localBatchCount === 'number'
+          ? applied.localBatchCount
+          : null;
+    if (localBatchCount != null) {
+      parts.push(`${t('translation.monitorLocalBatchCount')}: ${localBatchCount}`);
     }
     if (typeof applied.cloudContextChunkCount === 'number' && applied.cloudContextChunkCount > 0) {
       parts.push(`${t('translation.monitorCloudContextChunks')}: ${applied.cloudContextChunkCount}`);
@@ -1449,12 +1520,16 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (isTranslateGemmaModel(selectedTranslateModel) && effectiveSourceLanguage) {
       params.set('sourceLang', effectiveSourceLanguage);
     }
-    if (selectedPromptTemplateId) params.set('promptTemplateId', selectedPromptTemplateId);
+    if (!translateGemmaPromptControlsDisabled && selectedPromptTemplateId) {
+      params.set('promptTemplateId', selectedPromptTemplateId);
+    }
     if (sourceType === 'project' && selectedSourceAssetName) {
       params.set('assetName', selectedSourceAssetName);
     }
-    const safePrompt = sanitizeInput(promptText);
-    const safeGlossary = String(glossaryText || '').replace(/\u0000/g, '').trim().slice(0, 4000);
+    const safePrompt = translateGemmaPromptControlsDisabled ? '' : sanitizeInput(promptText);
+    const safeGlossary = translateGemmaPromptControlsDisabled
+      ? ''
+      : String(glossaryText || '').replace(/\u0000/g, '').trim().slice(0, 4000);
     if (safePrompt) params.set('prompt', safePrompt);
     if (safeGlossary) params.set('glossary', safeGlossary);
     params.set('strictJsonLineRepair', strictJsonLineRepairEnabled ? '1' : '0');
@@ -1586,6 +1661,33 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   );
   const translationSummary = React.useMemo(() => {
     if (!translationDebug?.requested) return null;
+    const localBatching = translationDebug.applied?.localBatching || null;
+    const localBatchCount =
+      typeof localBatching?.batchCount === 'number'
+        ? localBatching.batchCount
+        : typeof translationDebug.applied?.localBatchCount === 'number'
+          ? translationDebug.applied.localBatchCount
+          : null;
+    const localBatchLineCounts = localBatching?.lineCounts || translationDebug.applied?.localBatchLineCounts || [];
+    const localBatchPromptTokens = localBatching?.promptTokens || translationDebug.applied?.localBatchPromptTokens || [];
+    const localBatchBudgetParts = [
+      typeof localBatching?.inputTokenBudget === 'number'
+        ? `${t('translation.monitorLocalBatchInputBudget')}: ${localBatching.inputTokenBudget.toLocaleString()}`
+        : null,
+      typeof localBatching?.outputTokenBudget === 'number'
+        ? `${t('translation.monitorLocalBatchOutputBudget')}: ${localBatching.outputTokenBudget.toLocaleString()}`
+        : null,
+      typeof localBatching?.contextWindow === 'number'
+        ? `${t('translation.monitorLocalBatchContext')}: ${localBatching.contextWindow.toLocaleString()}`
+        : null,
+      typeof localBatching?.maxLines === 'number'
+        ? `${t('translation.monitorLocalBatchMaxLines')}: ${localBatching.maxLines.toLocaleString()}`
+        : null,
+      typeof localBatching?.charBudget === 'number'
+        ? `${t('translation.monitorLocalBatchCharBudget')}: ${localBatching.charBudget.toLocaleString()}`
+        : null,
+      localBatching?.fallbackReason ? `${t('translation.monitorLocalBatchFallback')}: ${formatTechnicalValue(localBatching.fallbackReason)}` : null,
+    ].filter(Boolean);
     return {
       targetLanguage: String(translationDebug.requested.targetLanguageDescriptor || langLabel || '').trim() || '-',
       promptTemplate: promptTemplateLabel(translationDebug.requested.promptTemplateId),
@@ -1612,6 +1714,16 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         typeof translationDebug.applied?.localFallbackBaseline === 'boolean'
           ? (translationDebug.applied.localFallbackBaseline ? t('translation.monitorYes') : t('translation.monitorNo'))
           : '-',
+      localBatchingMode: localizeLocalBatchMode(localBatching?.mode || translationDebug.applied?.localBatchingMode),
+      localBatchCount: localBatchCount != null ? String(localBatchCount) : '-',
+      localBatchLineCounts: formatNumberList(localBatchLineCounts),
+      localBatchCharCounts: formatNumberList(localBatching?.charCounts),
+      localBatchPromptTokens: formatNumberList(localBatchPromptTokens),
+      localBatchEstimatedOutputTokens: formatNumberList(localBatching?.estimatedOutputTokens),
+      localBatchDurations: formatDurationList(localBatching?.durationsMs),
+      localBatchTotalDuration: formatElapsedTime(localBatching?.totalDurationMs),
+      localBatchMaxDuration: formatElapsedTime(localBatching?.maxDurationMs),
+      localBatchBudget: localBatchBudgetParts.length > 0 ? localBatchBudgetParts.join(' · ') : '-',
       strictJsonRepair:
         typeof translationDebug.requested.jsonLineRepairEnabled === 'boolean'
           ? (translationDebug.requested.jsonLineRepairEnabled ? t('translation.monitorYes') : t('translation.monitorNo'))
@@ -1625,7 +1737,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           ? String(translationDebug.applied.cloudContextFallbackCount)
           : '-',
     };
-  }, [formatTechnicalValue, langLabel, localizeCloudStrategy, localizeLocalGenerationStyle, localizeLocalModelFamily, localizeLocalPromptStyle, localizeTranslationQualityMode, promptTemplateLabel, t, translationDebug]);
+  }, [formatDurationList, formatElapsedTime, formatNumberList, formatTechnicalValue, langLabel, localizeCloudStrategy, localizeLocalBatchMode, localizeLocalGenerationStyle, localizeLocalModelFamily, localizeLocalPromptStyle, localizeTranslationQualityMode, promptTemplateLabel, t, translationDebug]);
   const translationRuntimeSummary = React.useMemo(() => {
     const runtime = translationDebug?.runtime;
     if (!runtime) return null;
@@ -1640,6 +1752,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       requestedDevice: String(runtime.requestedDevice || '-'),
       pipelineDevice: String(runtime.pipelineDevice || '-'),
       pipelineKind: String(runtime.pipelineKind || '-'),
+      vlmRuntimeMode: String(runtime.vlmRuntimeMode || '-'),
       modelPath: String(runtime.modelPath || '-'),
       cacheDir: String(runtime.cacheDir || '-'),
       promptLookupEnabled: Boolean(runtime.promptLookupEnabled),
@@ -1756,10 +1869,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (translationSummary?.qualityMode && translationSummary.qualityMode !== '-') {
       parts.push(`${t('translation.monitorQualityMode')}: ${translationSummary.qualityMode}`);
     }
+    if (translationSummary?.localBatchCount && translationSummary.localBatchCount !== '-') {
+      parts.push(`${t('translation.monitorLocalBatchCount')}: ${translationSummary.localBatchCount}`);
+    }
     if (pipelineWarnings.length > 0) parts.push(`${t('translation.pipelineWarnings')} ${pipelineWarnings.length}`);
     if (pipelineErrors.length > 0) parts.push(`${t('translation.pipelineErrors')} ${pipelineErrors.length}`);
     return parts.join(' · ');
-  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.qualityMode]);
+  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.localBatchCount, translationSummary?.qualityMode]);
   const translationMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
     const badges: RunMonitorBadge[] = [];
     if (pipelineMode) {
@@ -1803,6 +1919,20 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           { label: t('translation.monitorLocalBaselineConfidence'), value: translationSummary.localBaselineConfidence },
           { label: t('translation.monitorLocalBaselineTaskFamily'), value: translationSummary.localBaselineTaskFamily },
           { label: t('translation.monitorLocalFallbackBaseline'), value: translationSummary.localFallbackBaseline },
+          ...(translationSummary.localBatchCount !== '-'
+            ? [
+                { label: t('translation.monitorLocalBatchingMode'), value: translationSummary.localBatchingMode },
+                { label: t('translation.monitorLocalBatchCount'), value: translationSummary.localBatchCount },
+                { label: t('translation.monitorLocalBatchLines'), value: translationSummary.localBatchLineCounts },
+                { label: t('translation.monitorLocalBatchChars'), value: translationSummary.localBatchCharCounts },
+                { label: t('translation.monitorLocalBatchPromptTokens'), value: translationSummary.localBatchPromptTokens },
+                { label: t('translation.monitorLocalBatchEstimatedOutput'), value: translationSummary.localBatchEstimatedOutputTokens },
+                { label: t('translation.monitorLocalBatchDurations'), value: translationSummary.localBatchDurations },
+                { label: t('translation.monitorLocalBatchTotalDuration'), value: translationSummary.localBatchTotalDuration },
+                { label: t('translation.monitorLocalBatchMaxDuration'), value: translationSummary.localBatchMaxDuration },
+                { label: t('translation.monitorLocalBatchBudget'), value: translationSummary.localBatchBudget },
+              ]
+            : []),
           { label: t('translation.strictJsonRepairToggle'), value: translationSummary.strictJsonRepair },
           { label: t('translation.monitorCloudContextChunks'), value: translationSummary.cloudContextChunkCount },
           { label: t('translation.monitorCloudContextFallbacks'), value: translationSummary.cloudContextFallbackCount },
@@ -1840,6 +1970,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           { label: t('translation.runtimeRequestedDevice'), value: translationRuntimeSummary.requestedDevice },
           { label: t('translation.runtimePipelineDevice'), value: translationRuntimeSummary.pipelineDevice },
           { label: t('translation.runtimePipelineKind'), value: translationRuntimeSummary.pipelineKind },
+          { label: t('translation.runtimeVlmMode'), value: translationRuntimeSummary.vlmRuntimeMode },
           { label: t('translation.runtimeAccelerator'), value: translationRuntimeSummary.acceleratorModel },
           { label: t('translation.runtimeMemorySource'), value: translationRuntimeSummary.memorySource },
           { label: t('translation.runtimeObservedVram'), value: translationRuntimeSummary.vram },
@@ -2229,32 +2360,45 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                 </button>
               </div>
               <select
-                value={selectedPromptTemplateId}
+                value={translateGemmaPromptControlsDisabled ? '__translategemma_official__' : selectedPromptTemplateId}
                 onChange={(e) => handleSelectPromptTemplate(e.target.value as PromptTemplateId)}
-                className="w-full bg-surface-container-high border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-primary-container outline-none appearance-none"
+                disabled={translateGemmaPromptControlsDisabled}
+                className="w-full bg-surface-container-high border border-white/10 rounded-xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-primary-container outline-none appearance-none disabled:opacity-55 disabled:cursor-not-allowed"
               >
-                {promptTemplateOptions.map((option) => (
-                  <option key={option.id || 'none'} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
+                {translateGemmaPromptControlsDisabled ? (
+                  <option value="__translategemma_official__">{t('translation.promptTemplateTranslateGemmaOfficial')}</option>
+                ) : (
+                  promptTemplateOptions.map((option) => (
+                    <option key={option.id || 'none'} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))
+                )}
               </select>
               <textarea
-                value={promptText}
+                value={translateGemmaPromptControlsDisabled ? '' : promptText}
                 onChange={(e) => setPromptText(e.target.value)}
-                className="w-full h-32 bg-surface-container-lowest border border-white/10 rounded-xl px-5 py-4 text-sm text-secondary placeholder:text-outline/20 focus:ring-2 focus:ring-primary-container outline-none resize-none"
+                disabled={translateGemmaPromptControlsDisabled}
+                className="w-full h-32 bg-surface-container-lowest border border-white/10 rounded-xl px-5 py-4 text-sm text-secondary placeholder:text-outline/20 focus:ring-2 focus:ring-primary-container outline-none resize-none disabled:opacity-55 disabled:cursor-not-allowed"
                 placeholder={
-                  targetLang === 'other'
+                  translateGemmaPromptControlsDisabled
+                    ? t('translation.translateGemmaPromptDisabledPlaceholder')
+                    : targetLang === 'other'
                     ? t('translation.promptPlaceholderOther')
                     : t('translation.promptPlaceholder')
                 }
               />
               <div className="text-[11px] font-bold text-secondary">{t('translation.glossary')}</div>
               <textarea
-                value={glossaryText}
+                value={translateGemmaPromptControlsDisabled ? '' : glossaryText}
                 onChange={(e) => setGlossaryText(e.target.value)}
-                className="w-full h-28 bg-surface-container-lowest border border-white/10 rounded-xl px-5 py-4 text-sm text-secondary placeholder:text-outline/20 focus:ring-2 focus:ring-primary-container outline-none resize-none"
-                placeholder={t('translation.glossaryPlaceholder')}
+                disabled={translateGemmaPromptControlsDisabled}
+                className="w-full h-28 bg-surface-container-lowest border border-white/10 rounded-xl px-5 py-4 text-sm text-secondary placeholder:text-outline/20 focus:ring-2 focus:ring-primary-container outline-none resize-none disabled:opacity-55 disabled:cursor-not-allowed"
+                placeholder={
+                  translateGemmaPromptControlsDisabled
+                    ? t('translation.translateGemmaGlossaryDisabledPlaceholder')
+                    : t('translation.glossaryPlaceholder')
+                }
               />
             </div>
 

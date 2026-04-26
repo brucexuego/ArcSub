@@ -12,6 +12,12 @@
 
 部署階段會先準備 baseline 工具與資產，本地 ASR 與本地翻譯模型之後再到 **Settings** 安裝即可。
 
+## 為什麼本地模型安裝可能會很久？
+
+ArcSub 會把 Hugging Face 模型下載與轉換放在背景安裝任務中執行。
+
+**Settings** 會顯示目前任務狀態，所以大型模型不應該因為單次瀏覽器請求太久而被誤判失敗。
+
 ## 為什麼 pyannote 不能用？
 
 pyannote 需要：
@@ -19,6 +25,8 @@ pyannote 需要：
 - 有效的 `HF_TOKEN`
 - 你已經在 Hugging Face 同意 gated model 存取
 - 在 **Settings** 或部署階段完成安裝
+
+同一組 `HF_TOKEN` 也會用於需要授權的 gated 或 private Hugging Face 本地模型下載。
 
 ## 我的資料放在哪裡？
 

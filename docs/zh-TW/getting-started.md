@@ -58,7 +58,8 @@ ArcSub 開啟後：
 1. 先進入 **Settings**
 2. 準備至少一個語音轉文字來源
 3. 準備至少一個翻譯來源
-4. 如果你要用 pyannote 語者分離，再輸入 `HF_TOKEN` 並安裝
+4. 如果你要用 pyannote 語者分離或 gated/private Hugging Face 本地模型，再輸入 `HF_TOKEN`
+5. 透過 Hugging Face 模型 id 安裝需要使用的本地 ASR 或本地翻譯模型
 
 ## 標準流程
 

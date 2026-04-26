@@ -50,7 +50,8 @@ npm install
 1. **Settings** を開く
 2. 音声文字起こしの利用先を 1 つ用意する
 3. 翻訳の利用先を 1 つ用意する
-4. pyannote を使う場合は `HF_TOKEN` を入力してインストールする
+4. pyannote または gated/private Hugging Face ローカルモデルを使う場合は `HF_TOKEN` を入力する
+5. 使いたいローカル ASR またはローカル翻訳モデルを Hugging Face モデル id からインストールする
 
 ## 通常の流れ
 

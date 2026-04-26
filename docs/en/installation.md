@@ -47,8 +47,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
 - The source repository does not ship local runtime data, downloaded models, or personal `.env` values
 - ArcSub can start even if OpenVINO is not installed
 - without OpenVINO, local-model install is unavailable, but cloud usage can still work
-- local ASR and local translation models are installed later from **Settings**
-- pyannote requires a Hugging Face access token
+- local ASR and local translation models are installed later from **Settings** by Hugging Face model id
+- long local-model downloads/conversions continue as background install tasks and show status in **Settings**
+- `HF_TOKEN` is used for pyannote and gated/private Hugging Face model downloads
 
 ## Source Development
 

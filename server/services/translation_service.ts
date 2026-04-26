@@ -38,7 +38,10 @@ import {
   buildLocalGenerationOptions as buildLocalGenerationOptionsModule,
   estimateLocalMaxNewTokens as estimateLocalMaxNewTokensModule,
 } from './local_llm/generation.js';
-import { resolveLocalTranslationProfile } from './local_llm/model_profiles.js';
+import {
+  resolveEffectiveLocalTranslationProfile,
+  resolveLocalTranslationIntent,
+} from './local_llm/effective_profile.js';
 import {
   buildLocalJsonRepairPrompt as buildLocalJsonRepairPromptModule,
   buildLocalTranslationPrompt as buildLocalTranslationPromptModule,
@@ -101,6 +104,26 @@ interface TranslateProviderResult {
   };
 }
 
+export interface LocalTranslationBatchDebugInfo {
+  source: 'local' | 'translategemma';
+  mode: 'fixed_lines' | 'token_aware';
+  batchCount: number;
+  lineCounts: number[];
+  charCounts: number[];
+  promptTokens?: number[];
+  estimatedOutputTokens?: number[];
+  durationsMs?: number[];
+  inputTokenBudget?: number | null;
+  outputTokenBudget?: number | null;
+  contextWindow?: number | null;
+  safetyReserveTokens?: number | null;
+  maxLines?: number | null;
+  charBudget?: number | null;
+  fallbackReason?: string | null;
+  totalDurationMs?: number | null;
+  maxDurationMs?: number | null;
+}
+
 export interface TranslationDebugInfo {
   requested: {
     sourceLang?: string;
@@ -145,9 +168,17 @@ export interface TranslationDebugInfo {
     localPromptStyle?: string;
     localGenerationStyle?: string;
     localBypassChecks?: boolean;
+    localPromptContract?: string;
+    localAlignmentContract?: string;
+    localRuntimeHintsApplied?: boolean;
     localBaselineConfidence?: string | null;
     localBaselineTaskFamily?: string | null;
     localFallbackBaseline?: boolean;
+    localBatching?: LocalTranslationBatchDebugInfo | null;
+    localBatchingMode?: string | null;
+    localBatchCount?: number | null;
+    localBatchLineCounts?: number[];
+    localBatchPromptTokens?: number[];
   };
   quality?: {
     lineCountMatch: boolean;
@@ -1165,11 +1196,13 @@ export class TranslationService {
     enableJsonLineRepair?: boolean;
     modelStrategy?: LocalTranslateModelStrategy | null;
   }): TranslationQualityMode {
-    if (input.modelStrategy?.family === 'translategemma') {
-      if (this.normalizePromptTemplateId(input.promptTemplateId) || String(input.prompt || '').trim()) {
-        return 'template_validated';
-      }
-      return input.enableJsonLineRepair === false ? 'plain_probe' : 'template_validated';
+    if (input.modelStrategy) {
+      return resolveLocalTranslationIntent({
+        promptTemplateId: this.normalizePromptTemplateId(input.promptTemplateId),
+        prompt: input.prompt,
+        enableJsonLineRepair: input.enableJsonLineRepair,
+        modelStrategy: input.modelStrategy,
+      }).qualityMode;
     }
     return resolveTranslationQualityMode({
       promptTemplateId: this.normalizePromptTemplateId(input.promptTemplateId),
@@ -1648,6 +1681,7 @@ export class TranslationService {
     text: string;
     lineCount: number;
     lineSafeMode: boolean;
+    localModel?: LocalModelDefinition;
     jsonMode?: boolean;
     strictMode?: boolean;
   }) {
@@ -1657,27 +1691,58 @@ export class TranslationService {
     });
   }
 
-  private static splitLineSafeUnitsForLocalTranslation(
+  private static isFixedLineBatchingMode(rawMode: string) {
+    const mode = String(rawMode || '').trim().toLowerCase();
+    return mode === 'fixed_lines' || mode === 'fixed-line' || mode === 'line_char' || mode === 'line-char';
+  }
+
+  private static getLocalBatchingMode() {
+    return String(process.env.TRANSLATE_LOCAL_BATCHING_MODE || '').trim().toLowerCase();
+  }
+
+  private static getLocalBatchCaps(input?: {
+    localModel?: LocalModelDefinition;
+    modelStrategy?: LocalTranslateModelStrategy;
+    translationQualityMode?: TranslationQualityMode;
+  }) {
+    const qualityMode = input?.translationQualityMode || 'plain_probe';
+    const batchingProfile =
+      input?.modelStrategy
+        ? resolveEffectiveLocalTranslationProfile({
+            localModel: input.localModel,
+            modelStrategy: input.modelStrategy,
+            qualityMode,
+          }).translationProfile.lineSafeBatching
+        : null;
+    const configuredMaxLines = Math.round(
+      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_SIZE', batchingProfile?.maxLines ?? 60, 4, 200)
+    );
+    const configuredCharBudget = Math.round(
+      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_CHAR_BUDGET', batchingProfile?.charBudget ?? 2800, 160, 40000)
+    );
+    const allowProfileCapOverride = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.TRANSLATE_LOCAL_ALLOW_PROFILE_CAP_OVERRIDE || '').trim().toLowerCase()
+    );
+    const maxLines =
+      batchingProfile?.maxLines && !allowProfileCapOverride
+        ? Math.min(configuredMaxLines, batchingProfile.maxLines)
+        : configuredMaxLines;
+    const charBudget =
+      batchingProfile?.charBudget && !allowProfileCapOverride
+        ? Math.min(configuredCharBudget, batchingProfile.charBudget)
+        : configuredCharBudget;
+    return { qualityMode, batchingProfile, maxLines, charBudget };
+  }
+
+  private static splitLineSafeUnitsByLineAndChar(
     units: LineSafeUnit[],
-    input?: {
-      localModel?: LocalModelDefinition;
-      modelStrategy?: LocalTranslateModelStrategy;
-      translationQualityMode?: TranslationQualityMode;
+    caps: {
+      maxLines: number;
+      charBudget: number;
     }
   ) {
     if (units.length <= 1) return units.length > 0 ? [units] : [];
 
-    const qualityMode = input?.translationQualityMode || 'plain_probe';
-    const batchingProfile =
-      input?.modelStrategy
-        ? resolveLocalTranslationProfile(input.localModel, input.modelStrategy, qualityMode).lineSafeBatching
-        : null;
-    const maxLines = Math.round(
-      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_SIZE', batchingProfile?.maxLines ?? 60, 4, 200)
-    );
-    const charBudget = Math.round(
-      this.getEnvNumber('TRANSLATE_LOCAL_BATCH_CHAR_BUDGET', batchingProfile?.charBudget ?? 2800, 160, 40000)
-    );
     const batches: LineSafeUnit[][] = [];
     let current: LineSafeUnit[] = [];
     let currentChars = 0;
@@ -1685,7 +1750,7 @@ export class TranslationService {
     for (const unit of units) {
       const estimatedChars = this.buildLineSafeInput([unit]).length + 1;
       const exceedsCurrent =
-        current.length > 0 && (current.length >= maxLines || currentChars + estimatedChars > charBudget);
+        current.length > 0 && (current.length >= caps.maxLines || currentChars + estimatedChars > caps.charBudget);
       if (exceedsCurrent) {
         batches.push(current);
         current = [];
@@ -1702,39 +1767,65 @@ export class TranslationService {
     return batches;
   }
 
-  private static async countTranslateGemmaInputTokens(input: {
-    localModel: LocalModelDefinition;
-    modelStrategy: LocalTranslateModelStrategy;
-    sourceText: string;
-    targetLang: string;
-    sourceLang?: string;
-    translationQualityMode?: TranslationQualityMode;
-  }) {
-    const counts = await this.countTranslateGemmaInputTokensBatch({
-      localModel: input.localModel,
-      modelStrategy: input.modelStrategy,
-      sourceTexts: [input.sourceText],
-      targetLang: input.targetLang,
-      sourceLang: input.sourceLang,
-      translationQualityMode: input.translationQualityMode,
-    });
-    return Math.max(0, Math.floor(Number(counts[0]) || 0));
+  private static buildLocalBatchDebugInfo(input: {
+    source: LocalTranslationBatchDebugInfo['source'];
+    mode: LocalTranslationBatchDebugInfo['mode'];
+    batches: LineSafeUnit[][];
+    maxLines?: number | null;
+    charBudget?: number | null;
+    promptTokens?: number[];
+    estimatedOutputTokens?: number[];
+    inputTokenBudget?: number | null;
+    outputTokenBudget?: number | null;
+    contextWindow?: number | null;
+    safetyReserveTokens?: number | null;
+    fallbackReason?: string | null;
+  }): LocalTranslationBatchDebugInfo {
+    return {
+      source: input.source,
+      mode: input.mode,
+      batchCount: input.batches.length,
+      lineCounts: input.batches.map((batch) => batch.length),
+      charCounts: input.batches.map((batch) => this.buildLineSafeInput(batch).length),
+      promptTokens: input.promptTokens && input.promptTokens.length > 0 ? input.promptTokens : undefined,
+      estimatedOutputTokens:
+        input.estimatedOutputTokens && input.estimatedOutputTokens.length > 0 ? input.estimatedOutputTokens : undefined,
+      inputTokenBudget: typeof input.inputTokenBudget === 'number' ? input.inputTokenBudget : null,
+      outputTokenBudget: typeof input.outputTokenBudget === 'number' ? input.outputTokenBudget : null,
+      contextWindow: typeof input.contextWindow === 'number' ? input.contextWindow : null,
+      safetyReserveTokens: typeof input.safetyReserveTokens === 'number' ? input.safetyReserveTokens : null,
+      maxLines: typeof input.maxLines === 'number' ? input.maxLines : null,
+      charBudget: typeof input.charBudget === 'number' ? input.charBudget : null,
+      fallbackReason: input.fallbackReason || null,
+    };
   }
 
-  private static async countTranslateGemmaInputTokensBatch(input: {
+  private static async countLocalTranslationInputTokensBatch(input: {
     localModel: LocalModelDefinition;
     modelStrategy: LocalTranslateModelStrategy;
     sourceTexts: string[];
     targetLang: string;
     sourceLang?: string;
+    glossary?: string;
+    prompt?: string;
+    promptTemplateId?: string;
+    lineSafeMode: boolean;
     translationQualityMode?: TranslationQualityMode;
   }) {
     const modelPath = getLocalModelInstallDir(input.localModel);
-    const profile = resolveLocalTranslationProfile(
-      input.localModel,
-      input.modelStrategy,
-      input.translationQualityMode || 'plain_probe'
-    );
+    const profile = resolveEffectiveLocalTranslationProfile({
+      localModel: input.localModel,
+      modelStrategy: input.modelStrategy,
+      qualityMode: input.translationQualityMode || 'plain_probe',
+    }).translationProfile;
+    const generation = this.buildLocalGenerationOptions({
+      localModel: input.localModel,
+      modelStrategy: input.modelStrategy,
+      jsonMode: false,
+      targetLang: input.targetLang,
+      strictMode: false,
+      translationQualityMode: input.translationQualityMode,
+    });
 
     const entries = input.sourceTexts
       .map((rawText) => String(rawText || '').trim())
@@ -1748,7 +1839,10 @@ export class TranslationService {
           promptStyle: profile.effectivePromptStyle,
         });
         if (messages && messages.length > 0) {
-          return { messages: messages as unknown as Array<Record<string, unknown>> };
+          return {
+            messages: messages as unknown as Array<Record<string, unknown>>,
+            chatTemplateKwargs: generation.chatTemplateKwargs,
+          };
         }
 
         const prompt = this.buildLocalTranslationPrompt({
@@ -1756,14 +1850,14 @@ export class TranslationService {
           sourceText,
           targetLang: input.targetLang,
           sourceLang: input.sourceLang,
-          glossary: '',
-          promptTemplateId: '',
-          lineSafeMode: false,
+          glossary: input.glossary,
+          promptTemplateId: input.promptTemplateId,
+          lineSafeMode: input.lineSafeMode,
           modelStrategy: input.modelStrategy,
           promptStyle: profile.effectivePromptStyle,
           strictMode: false,
           translationQualityMode: input.translationQualityMode,
-          promptOverride: '',
+          promptOverride: input.prompt,
           disableSystemPrompt: false,
         });
         return { prompt };
@@ -1777,6 +1871,213 @@ export class TranslationService {
     return counts.map((value) => Math.max(0, Math.floor(Number(value) || 0)));
   }
 
+  private static estimateLocalBatchOutputTokens(input: {
+    text: string;
+    lineCount: number;
+    localModel?: LocalModelDefinition;
+  }) {
+    const estimatedUnits = String(input.text || '').trim()
+      ? Math.ceil(
+          (String(input.text || '').match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || [])
+            .length +
+            Math.max(
+              0,
+              String(input.text || '').replace(/\s+/g, ' ').length -
+                (String(input.text || '').match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || [])
+                  .length
+            ) /
+              4
+        )
+      : 0;
+    const base = Math.ceil(estimatedUnits * 1.25) + input.lineCount * 8;
+    const cap = input.localModel?.runtimeHints?.maxOutputTokens;
+    return Math.max(64, Math.min(cap || 8192, base));
+  }
+
+  private static async splitLineSafeUnitsForLocalTranslation(
+    units: LineSafeUnit[],
+    input?: {
+      localModel?: LocalModelDefinition;
+      modelStrategy?: LocalTranslateModelStrategy;
+      targetLang?: string;
+      sourceLang?: string;
+      glossary?: string;
+      prompt?: string;
+      promptTemplateId?: string;
+      translationQualityMode?: TranslationQualityMode;
+      batchDebugSource?: LocalTranslationBatchDebugInfo['source'];
+      onBatchPlan?: (plan: LocalTranslationBatchDebugInfo) => void;
+    }
+  ) {
+    const caps = this.getLocalBatchCaps(input);
+    const debugSource = input?.batchDebugSource || 'local';
+    const emitBatchPlan = (plan: LocalTranslationBatchDebugInfo) => {
+      input?.onBatchPlan?.(plan);
+    };
+    const fixedBatches = (fallbackReason?: string | null) => {
+      const batches = this.splitLineSafeUnitsByLineAndChar(units, caps);
+      emitBatchPlan(
+        this.buildLocalBatchDebugInfo({
+          source: debugSource,
+          mode: 'fixed_lines',
+          batches,
+          maxLines: caps.maxLines,
+          charBudget: caps.charBudget,
+          fallbackReason,
+        })
+      );
+      return batches;
+    };
+
+    if (units.length <= 1) return fixedBatches();
+
+    const globalBatchingMode = this.getLocalBatchingMode();
+    if (this.isFixedLineBatchingMode(globalBatchingMode)) {
+      return fixedBatches();
+    }
+
+    const modelHints = input?.localModel?.runtimeHints;
+    const hintBatching = modelHints?.batching;
+    const envTokenBudget = Math.round(
+      this.getEnvNumber(
+        'TRANSLATE_LOCAL_INPUT_TOKEN_BUDGET',
+        hintBatching?.inputTokenBudget || caps.batchingProfile?.tokenBudget || 0,
+        0,
+        1_000_000
+      )
+    );
+    const contextWindow =
+      typeof modelHints?.contextWindow === 'number' && Number.isFinite(modelHints.contextWindow)
+        ? Math.floor(modelHints.contextWindow)
+        : 0;
+    const outputBudget =
+      typeof hintBatching?.outputTokenBudget === 'number'
+        ? Math.floor(hintBatching.outputTokenBudget)
+        : typeof modelHints?.maxOutputTokens === 'number'
+          ? Math.floor(modelHints.maxOutputTokens)
+          : 0;
+    const safetyReserve =
+      typeof hintBatching?.safetyReserveTokens === 'number'
+        ? Math.floor(hintBatching.safetyReserveTokens)
+        : contextWindow > 0
+          ? Math.max(128, Math.min(1024, Math.ceil(contextWindow * 0.08)))
+          : 0;
+    const derivedTokenBudget =
+      envTokenBudget > 0
+        ? envTokenBudget
+        : contextWindow > 0 && outputBudget > 0
+          ? Math.max(128, contextWindow - outputBudget - safetyReserve)
+          : 0;
+    const shouldUseTokenAware =
+      globalBatchingMode === 'token_aware' ||
+      globalBatchingMode === 'token-aware' ||
+      (globalBatchingMode === '' || globalBatchingMode === 'auto'
+        ? Boolean(input?.localModel && input?.modelStrategy && input?.targetLang && derivedTokenBudget > 0)
+        : false);
+
+    if (!shouldUseTokenAware || !input?.localModel || !input.modelStrategy || !input.targetLang || derivedTokenBudget <= 0) {
+      return fixedBatches();
+    }
+
+    const batches: LineSafeUnit[][] = [];
+    const selectedPromptTokens: number[] = [];
+    const selectedEstimatedOutputTokens: number[] = [];
+    let currentStart = 0;
+    try {
+      while (currentStart < units.length) {
+        const candidateSourceTexts: string[] = [];
+        const candidateLineCounts: number[] = [];
+        const candidateCharCounts: number[] = [];
+        const candidateOutputBudgets: number[] = [];
+
+        let mergedText = '';
+        let mergedChars = 0;
+        for (let end = currentStart; end < units.length; end += 1) {
+          const lineCount = end - currentStart + 1;
+          if (lineCount > caps.maxLines) {
+            break;
+          }
+          const candidateUnits = units.slice(currentStart, end + 1);
+          mergedText = this.buildLineSafeInput(candidateUnits);
+          mergedChars = mergedText.length + 1;
+          if (lineCount > 1 && mergedChars > caps.charBudget) {
+            break;
+          }
+          candidateSourceTexts.push(mergedText);
+          candidateLineCounts.push(lineCount);
+          candidateCharCounts.push(mergedChars);
+          candidateOutputBudgets.push(
+            this.estimateLocalBatchOutputTokens({
+              text: this.buildSourceChunkText(candidateUnits),
+              lineCount: candidateUnits.length,
+              localModel: input.localModel,
+            })
+          );
+          if (mergedChars > caps.charBudget) {
+            break;
+          }
+        }
+
+        const candidateTokenCounts = await this.countLocalTranslationInputTokensBatch({
+          localModel: input.localModel,
+          modelStrategy: input.modelStrategy,
+          sourceTexts: candidateSourceTexts,
+          targetLang: input.targetLang,
+          sourceLang: input.sourceLang,
+          glossary: input.glossary,
+          prompt: input.prompt,
+          promptTemplateId: input.promptTemplateId,
+          lineSafeMode: true,
+          translationQualityMode: input.translationQualityMode,
+        });
+
+        let bestRelativeEnd = -1;
+        for (let index = 0; index < candidateSourceTexts.length; index += 1) {
+          const lineCount = candidateLineCounts[index];
+          const charCount = candidateCharCounts[index];
+          const promptTokens = candidateTokenCounts[index] ?? Number.POSITIVE_INFINITY;
+          const estimatedOutputTokens = candidateOutputBudgets[index] || outputBudget || 0;
+          const totalTokens = promptTokens + estimatedOutputTokens + safetyReserve;
+          const exceedsTokenBudget =
+            promptTokens > derivedTokenBudget ||
+            (contextWindow > 0 && totalTokens > contextWindow);
+          if (lineCount > caps.maxLines || charCount > caps.charBudget || exceedsTokenBudget) {
+            break;
+          }
+          bestRelativeEnd = index;
+        }
+
+        if (bestRelativeEnd < 0) {
+          bestRelativeEnd = 0;
+        }
+
+        const absoluteEnd = currentStart + bestRelativeEnd;
+        batches.push(units.slice(currentStart, absoluteEnd + 1));
+        selectedPromptTokens.push(Math.max(0, Math.floor(Number(candidateTokenCounts[bestRelativeEnd]) || 0)));
+        selectedEstimatedOutputTokens.push(Math.max(0, Math.floor(Number(candidateOutputBudgets[bestRelativeEnd]) || 0)));
+        currentStart = absoluteEnd + 1;
+      }
+      emitBatchPlan(
+        this.buildLocalBatchDebugInfo({
+          source: debugSource,
+          mode: 'token_aware',
+          batches,
+          promptTokens: selectedPromptTokens,
+          estimatedOutputTokens: selectedEstimatedOutputTokens,
+          inputTokenBudget: derivedTokenBudget,
+          outputTokenBudget: outputBudget || null,
+          contextWindow: contextWindow || null,
+          safetyReserveTokens: safetyReserve || null,
+          maxLines: caps.maxLines,
+          charBudget: caps.charBudget,
+        })
+      );
+      return batches;
+    } catch {
+      return fixedBatches('token_aware_count_failed');
+    }
+  }
+
   private static async splitLineSafeUnitsForTranslateGemma(
     units: LineSafeUnit[],
     input: {
@@ -1784,24 +2085,76 @@ export class TranslationService {
       modelStrategy: LocalTranslateModelStrategy;
       targetLang: string;
       sourceLang?: string;
+      glossary?: string;
+      prompt?: string;
+      promptTemplateId?: string;
       translationQualityMode?: TranslationQualityMode;
+      onBatchPlan?: (plan: LocalTranslationBatchDebugInfo) => void;
     }
   ) {
-    if (units.length <= 1) return units.length > 0 ? [units] : [];
+    if (units.length <= 1) {
+      const batches = units.length > 0 ? [units] : [];
+      input.onBatchPlan?.(
+        this.buildLocalBatchDebugInfo({
+          source: 'translategemma',
+          mode: 'fixed_lines',
+          batches,
+        })
+      );
+      return batches;
+    }
+
+    const batchingMode = String(process.env.TRANSLATEGEMMA_BATCHING_MODE || '')
+      .trim()
+      .toLowerCase();
+    const useFixedLineBatching =
+      batchingMode === 'fixed_lines' ||
+      batchingMode === 'fixed-line' ||
+      batchingMode === 'line_char' ||
+      batchingMode === 'line-char';
+    if (useFixedLineBatching || this.isFixedLineBatchingMode(this.getLocalBatchingMode())) {
+      return await this.splitLineSafeUnitsForLocalTranslation(units, {
+        localModel: input.localModel,
+        modelStrategy: input.modelStrategy,
+        targetLang: input.targetLang,
+        sourceLang: input.sourceLang,
+        glossary: input.glossary,
+        prompt: input.prompt,
+        promptTemplateId: input.promptTemplateId,
+        translationQualityMode: input.translationQualityMode,
+        batchDebugSource: 'translategemma',
+        onBatchPlan: input.onBatchPlan,
+      });
+    }
 
     const qualityMode = input.translationQualityMode || 'plain_probe';
-    const batchingProfile = resolveLocalTranslationProfile(input.localModel, input.modelStrategy, qualityMode).lineSafeBatching;
-    const maxLines = Math.round(
+    const countLineSafePrompt = isPlainTranslationProbeMode(qualityMode);
+    const batchingProfile = resolveEffectiveLocalTranslationProfile({
+      localModel: input.localModel,
+      modelStrategy: input.modelStrategy,
+      qualityMode,
+    }).translationProfile.lineSafeBatching;
+    const configuredMaxLines = Math.round(
       this.getEnvNumber('TRANSLATE_LOCAL_BATCH_SIZE', batchingProfile?.maxLines ?? 24, 2, 200)
     );
-    const charBudget = Math.round(
+    const configuredCharBudget = Math.round(
       this.getEnvNumber('TRANSLATE_LOCAL_BATCH_CHAR_BUDGET', batchingProfile?.charBudget ?? 1400, 120, 40000)
     );
     const tokenBudget = Math.round(
       this.getEnvNumber('TRANSLATEGEMMA_INPUT_TOKEN_BUDGET', batchingProfile?.tokenBudget ?? 960, 128, 4096)
     );
+    const allowProfileCapOverride = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.TRANSLATE_LOCAL_ALLOW_PROFILE_CAP_OVERRIDE || '').trim().toLowerCase()
+    );
+    const maxLines = batchingProfile?.maxLines && !allowProfileCapOverride
+      ? Math.min(configuredMaxLines, batchingProfile.maxLines)
+      : configuredMaxLines;
+    const charBudget = batchingProfile?.charBudget && !allowProfileCapOverride
+      ? Math.min(configuredCharBudget, batchingProfile.charBudget)
+      : configuredCharBudget;
 
     const batches: LineSafeUnit[][] = [];
+    const selectedPromptTokens: number[] = [];
     let currentStart = 0;
     while (currentStart < units.length) {
       const candidateSourceTexts: string[] = [];
@@ -1811,20 +2164,36 @@ export class TranslationService {
       let mergedText = '';
       let mergedChars = 0;
       for (let end = currentStart; end < units.length; end += 1) {
-        const normalized = this.stripStructuredPrefix(units[end].content).trim();
-        mergedText = mergedText ? `${mergedText}\n${normalized}` : normalized;
-        mergedChars += Math.max(1, normalized.length) + 1;
+        const lineCount = end - currentStart + 1;
+        if (lineCount > maxLines) {
+          break;
+        }
+        const candidateUnits = units.slice(currentStart, end + 1);
+        mergedText = countLineSafePrompt
+          ? this.buildLineSafeInput(candidateUnits)
+          : candidateUnits.map((unit) => this.stripStructuredPrefix(unit.content).trim()).join('\n');
+        mergedChars = mergedText.length + 1;
+        if (lineCount > 1 && mergedChars > charBudget) {
+          break;
+        }
         candidateSourceTexts.push(mergedText);
-        candidateLineCounts.push(end - currentStart + 1);
+        candidateLineCounts.push(lineCount);
         candidateCharCounts.push(mergedChars);
+        if (mergedChars > charBudget) {
+          break;
+        }
       }
 
-      const candidateTokenCounts = await this.countTranslateGemmaInputTokensBatch({
+      const candidateTokenCounts = await this.countLocalTranslationInputTokensBatch({
         localModel: input.localModel,
         modelStrategy: input.modelStrategy,
         sourceTexts: candidateSourceTexts,
         targetLang: input.targetLang,
         sourceLang: input.sourceLang,
+        glossary: input.glossary,
+        prompt: countLineSafePrompt ? input.prompt : '',
+        promptTemplateId: input.promptTemplateId,
+        lineSafeMode: countLineSafePrompt,
         translationQualityMode: qualityMode,
       });
 
@@ -1845,8 +2214,21 @@ export class TranslationService {
 
       const absoluteEnd = currentStart + bestRelativeEnd;
       batches.push(units.slice(currentStart, absoluteEnd + 1));
+      selectedPromptTokens.push(Math.max(0, Math.floor(Number(candidateTokenCounts[bestRelativeEnd]) || 0)));
       currentStart = absoluteEnd + 1;
     }
+
+    input.onBatchPlan?.(
+      this.buildLocalBatchDebugInfo({
+        source: 'translategemma',
+        mode: 'token_aware',
+        batches,
+        promptTokens: selectedPromptTokens,
+        inputTokenBudget: tokenBudget,
+        maxLines,
+        charBudget,
+      })
+    );
 
     return batches;
   }
@@ -2051,6 +2433,20 @@ export class TranslationService {
     if (sourceLines.length === 0 || translatedLines.length === 0) return false;
     if (sourceLines.length >= 2 && translatedLines.length < sourceLines.length) return true;
 
+    const sourceProfile = this.analyzeSourceTextProfile(sourceText);
+    const normalizedTarget = normalizeLanguageKey(targetLang);
+    const sourceIsEastAsianNonChinese =
+      sourceProfile.likelyJapanese ||
+      sourceProfile.likelyKorean;
+    const targetIsChinese =
+      normalizedTarget === 'zh' ||
+      normalizedTarget === 'zh-tw' ||
+      normalizedTarget === 'zh-hant' ||
+      normalizedTarget === 'zh-hk' ||
+      normalizedTarget === 'zh-mo' ||
+      normalizedTarget === 'zh-cn' ||
+      normalizedTarget === 'zh-hans';
+
     const total = Math.min(sourceLines.length, translatedLines.length);
     let identicalCount = 0;
     let highOverlapCount = 0;
@@ -2060,7 +2456,14 @@ export class TranslationService {
     const looseTranslatedLines = this.normalizeLooseComparisonText(translatedText);
     for (let i = 0; i < total; i += 1) {
       const identical = sourceLines[i] === translatedLines[i];
-      const highOverlap = this.calculateLineTokenOverlap(looseSourceLines[i] || '', looseTranslatedLines[i] || '') >= 0.92;
+      let highOverlap = this.calculateLineTokenOverlap(looseSourceLines[i] || '', looseTranslatedLines[i] || '') >= 0.92;
+      if (sourceIsEastAsianNonChinese && targetIsChinese && highOverlap && !identical) {
+        const translatedLine = translatedLines[i] || '';
+        const sourceScriptLeaked =
+          (sourceProfile.likelyJapanese && /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(translatedLine)) ||
+          (sourceProfile.likelyKorean && /[\p{Script=Hangul}]/u.test(translatedLine));
+        highOverlap = sourceScriptLeaked;
+      }
       if (identical) identicalCount += 1;
       if (highOverlap) {
         highOverlapCount += 1;
@@ -2470,13 +2873,15 @@ export class TranslationService {
     const enableJsonLineRepair = input.enableJsonLineRepair !== false;
     const normalizedPromptTemplateId = this.normalizePromptTemplateId(input.promptTemplateId);
     const effectiveGlossary = this.buildEffectiveGlossary(input.targetLang, input.glossary, normalizedPromptTemplateId) || null;
-    const translationQualityMode = this.resolveTranslationQualityModeForRequest({
+    const effectiveLocalProfile = resolveEffectiveLocalTranslationProfile({
+      localModel,
+      modelStrategy,
       promptTemplateId: normalizedPromptTemplateId,
       prompt: input.prompt,
       enableJsonLineRepair,
-      modelStrategy,
     });
-    const localTranslationProfile = resolveLocalTranslationProfile(localModel, modelStrategy, translationQualityMode);
+    const translationQualityMode = effectiveLocalProfile.intent.qualityMode;
+    const localTranslationProfile = effectiveLocalProfile.translationProfile;
     const residualRetryLimit = Math.round(this.getEnvNumber('TRANSLATE_LOCAL_RESIDUAL_RETRY_LIMIT', 8, 0, 200));
     const jsonRepairMaxLinesBeforeSplit = Math.round(
       this.getEnvNumber('TRANSLATE_LOCAL_JSON_REPAIR_MAX_LINES_BEFORE_SPLIT', 32, 0, 400)
@@ -2496,6 +2901,7 @@ export class TranslationService {
         modelStrategy,
         localProfile,
         localTranslationProfile,
+        effectiveLocalProfile,
         translationQualityMode,
         residualRetryLimit,
         jsonRepairMaxLinesBeforeSplit,
@@ -3134,7 +3540,11 @@ export class TranslationService {
     signal?: AbortSignal
   ): Promise<JsonLineRepairResult | null> {
     if (units.length === 0) return null;
-    const resolvedProfile = resolveLocalTranslationProfile(localModel, options.modelStrategy, 'json_strict');
+    const resolvedProfile = resolveEffectiveLocalTranslationProfile({
+      localModel,
+      modelStrategy: options.modelStrategy,
+      qualityMode: 'json_strict',
+    }).translationProfile;
 
     const batchSize = Math.round(this.getEnvNumber('TRANSLATE_JSON_REPAIR_BATCH_SIZE', 80, 10, 200));
     const totalBatches = Math.max(1, Math.ceil(units.length / batchSize));
@@ -3173,6 +3583,7 @@ export class TranslationService {
           text: payload,
           lineCount: batchUnits.length,
           lineSafeMode: false,
+          localModel,
           jsonMode: true,
           strictMode: true,
         }),

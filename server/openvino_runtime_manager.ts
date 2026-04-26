@@ -119,6 +119,9 @@ class OpenVinoAsrHelperClient {
     };
     const envKey = keyMap[method];
     if (!envKey) return fallbackMs;
+    if (method === 'transcribe' && /^(auto|dynamic)$/i.test(String(process.env.OPENVINO_ASR_TIMEOUT_MODE || '').trim())) {
+      return Math.max(1000, Math.floor(fallbackMs));
+    }
     const raw = process.env[envKey];
     const parsed = Number(raw);
     if (!Number.isFinite(parsed) || parsed < 1000) return fallbackMs;
@@ -318,8 +321,8 @@ class OpenVinoAsrHelperClient {
     return new Promise<any>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
-        this.terminateHelper(`ASR helper request timed out (${method}).`);
-        reject(new Error(`ASR helper request timed out (${method}).`));
+        this.terminateHelper(`ASR helper request timed out after ${effectiveTimeoutMs} ms (${method}).`);
+        reject(new Error(`ASR helper request timed out after ${effectiveTimeoutMs} ms (${method}).`));
       }, effectiveTimeoutMs);
 
       this.pending.set(requestId, { resolve, reject, timeout });
@@ -857,6 +860,7 @@ class OpenVinoGenaiTranslateHelperClient {
         prompt: input.prompt || '',
         messages: Array.isArray(input.messages) ? input.messages : undefined,
         generationConfig,
+        resetChat: true,
       },
       300000
     );
@@ -899,6 +903,7 @@ export interface OpenvinoTranslateRuntimeDebug {
   modelId: string;
   modelPath: string;
   pipelineKind: TranslatePipelineKind;
+  vlmRuntimeMode: 'cached' | 'cached_fallback' | 'isolated' | 'fallback_isolated' | null;
   requestedDevice: string;
   pipelineDevice: string | null;
   cacheDir: string | null;
@@ -937,6 +942,28 @@ interface CachedAsrPipeline {
   wordTimestampsEnabled: boolean;
 }
 
+interface LocalAsrTimeoutContext {
+  sampleCount?: number | null;
+  audioDurationSec?: number | null;
+  requestedDevice?: string | null;
+  effectiveDevice?: string | null;
+  wordAlignment?: boolean;
+  segmentation?: boolean;
+}
+
+interface LocalAsrTimeoutDecision {
+  mode: 'fixed' | 'auto';
+  timeoutMs: number;
+  audioDurationSec: number | null;
+  realtimeFactor: number | null;
+  wordAlignmentMultiplier: number;
+  baseMs: number;
+  minMs: number;
+  maxMs: number;
+  requestedDevice: string | null;
+  effectiveDevice: string | null;
+}
+
 interface LocalAsrWordTiming {
   text: string;
   start_ts: number;
@@ -966,6 +993,7 @@ export class OpenvinoRuntimeManager {
   private static readonly utf8Decoder = new TextDecoder('utf-8');
   private static translatePipelineCache = new Map<string, CachedTranslatePipeline>();
   private static activeTranslateModelId: string | null = null;
+  private static vlmIsolatedFallbackModelIds = new Set<string>();
   private static llmTranslatePipelineFactory: OpenvinoPipelineFactory | null = null;
   private static vlmTranslatePipelineFactory: OpenvinoPipelineFactory | null = null;
   private static whisperMultilingualCache = new Map<string, boolean>();
@@ -1019,16 +1047,131 @@ export class OpenvinoRuntimeManager {
     return fallback;
   }
 
-  private static getAsrTimeoutMs(kind: 'load' | 'generate') {
+  private static getAsrTimeoutMode() {
+    const raw = String(process.env.OPENVINO_ASR_TIMEOUT_MODE || '').trim().toLowerCase();
+    return raw === 'auto' || raw === 'dynamic' ? 'auto' : 'fixed';
+  }
+
+  private static getAsrGenerateTimeoutDecision(context: LocalAsrTimeoutContext = {}): LocalAsrTimeoutDecision {
+    const fixedTimeoutMs = this.getEnvNumber('OPENVINO_ASR_TIMEOUT_MS', 0, 0, 86400000);
+    const helperTimeoutMs = this.getEnvNumber('OPENVINO_HELPER_TRANSCRIBE_TIMEOUT_MS', 1800000, 1000, 86400000);
+    const fallbackFixedMs = fixedTimeoutMs > 0 ? fixedTimeoutMs : helperTimeoutMs;
+    const requestedDevice = this.normalizeRequestedDevice(context.requestedDevice || '', '');
+    const effectiveDevice = this.normalizeRequestedDevice(context.effectiveDevice || requestedDevice || '', '');
+    const mode = this.getAsrTimeoutMode();
+    const minMs = this.getEnvNumber('OPENVINO_ASR_TIMEOUT_MIN_MS', fallbackFixedMs, 60000, 86400000);
+    const configuredMaxMs = this.getEnvNumber('OPENVINO_ASR_TIMEOUT_MAX_MS', 7200000, 60000, 86400000);
+    const maxMs = Math.max(minMs, configuredMaxMs);
+
+    if (mode === 'fixed') {
+      return {
+        mode,
+        timeoutMs: fallbackFixedMs,
+        audioDurationSec: null,
+        realtimeFactor: null,
+        wordAlignmentMultiplier: 1,
+        baseMs: 0,
+        minMs,
+        maxMs,
+        requestedDevice: requestedDevice || null,
+        effectiveDevice: effectiveDevice || null,
+      };
+    }
+
+    const sampleCount = Number(context.sampleCount);
+    const durationFromSamples =
+      Number.isFinite(sampleCount) && sampleCount > 0 ? sampleCount / 16000 : Number.NaN;
+    const durationFromContext = Number(context.audioDurationSec);
+    const audioDurationSec =
+      Number.isFinite(durationFromContext) && durationFromContext > 0
+        ? durationFromContext
+        : Number.isFinite(durationFromSamples) && durationFromSamples > 0
+          ? durationFromSamples
+          : null;
+    const deviceForFactor = effectiveDevice || requestedDevice;
+    const isCpu = /^CPU$/i.test(deviceForFactor || '');
+    const realtimeFactor = isCpu
+      ? this.getEnvNumber('OPENVINO_ASR_CPU_REALTIME_FACTOR', 25, 1, 240)
+      : this.getEnvNumber('OPENVINO_ASR_GPU_REALTIME_FACTOR', 8, 1, 240);
+    const wordAlignmentEnabled = context.segmentation !== false && context.wordAlignment !== false;
+    const wordAlignmentMultiplier = wordAlignmentEnabled
+      ? this.getEnvNumber('OPENVINO_ASR_WORD_ALIGNMENT_TIMEOUT_MULTIPLIER', 1.4, 1, 5)
+      : 1;
+    const baseMs = this.getEnvNumber('OPENVINO_ASR_TIMEOUT_BASE_MS', 300000, 0, 3600000);
+    const estimatedMs =
+      audioDurationSec == null
+        ? minMs
+        : Math.ceil(audioDurationSec * 1000 * realtimeFactor * wordAlignmentMultiplier + baseMs);
+    const timeoutMs = Math.max(minMs, Math.min(maxMs, estimatedMs));
+
+    return {
+      mode,
+      timeoutMs,
+      audioDurationSec,
+      realtimeFactor,
+      wordAlignmentMultiplier,
+      baseMs,
+      minMs,
+      maxMs,
+      requestedDevice: requestedDevice || null,
+      effectiveDevice: effectiveDevice || null,
+    };
+  }
+
+  private static getAsrTimeoutMs(kind: 'load' | 'generate', context?: LocalAsrTimeoutContext) {
     if (kind === 'load') {
       const direct = this.getEnvNumber('OPENVINO_ASR_LOAD_TIMEOUT_MS', 0, 0, 300000);
       if (direct > 0) return direct;
       return this.getEnvNumber('OPENVINO_HELPER_LOAD_TIMEOUT_MS', 60000, 1000, 300000);
     }
 
-    const direct = this.getEnvNumber('OPENVINO_ASR_TIMEOUT_MS', 0, 0, 7200000);
-    if (direct > 0) return direct;
-    return this.getEnvNumber('OPENVINO_HELPER_TRANSCRIBE_TIMEOUT_MS', 1800000, 1000, 7200000);
+    return this.getAsrGenerateTimeoutDecision(context).timeoutMs;
+  }
+
+  private static parseAudioDurationSeconds(raw: string): number | null {
+    const matched = String(raw || '').match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/i);
+    if (!matched) return null;
+    const hours = Number(matched[1]);
+    const minutes = Number(matched[2]);
+    const seconds = Number(matched[3]);
+    if (![hours, minutes, seconds].every(Number.isFinite)) return null;
+    const total = hours * 3600 + minutes * 60 + seconds;
+    return total > 0 ? total : null;
+  }
+
+  private static async probeAudioDurationSeconds(filePath: string): Promise<number | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let output = '';
+      const finish = (value: number | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      const child = spawn(resolveToolCommand('ffmpeg'), ['-i', filePath], {
+        windowsHide: true,
+      });
+      const timer = setTimeout(() => {
+        child.kill();
+        finish(this.parseAudioDurationSeconds(output));
+      }, 15000);
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      child.on('close', () => {
+        clearTimeout(timer);
+        finish(this.parseAudioDurationSeconds(output));
+      });
+      child.on('error', () => {
+        clearTimeout(timer);
+        finish(null);
+      });
+    });
   }
 
   private static getTranslateLoadTimeoutMs(kind: TranslatePipelineKind) {
@@ -1086,6 +1229,26 @@ export class OpenvinoRuntimeManager {
     const normalized = this.normalizeRequestedDevice(requestedDevice, 'AUTO');
     if (normalized === 'CPU') return false;
     return this.isOpenvinoGpuAllocationLimitError(error);
+  }
+
+  private static isVlmTranslateStateError(error: unknown) {
+    const message = String((error as any)?.message || error || '');
+    return /another generation is already in progress|translation pipeline is not loaded|translate helper request timed out|tokenized_history|prompt_ids\.get_size|visual_language[\\/]+pipeline/i.test(
+      message
+    );
+  }
+
+  private static getLocalTranslateVlmRuntimeMode(): 'auto' | 'cached' | 'isolated' {
+    const raw = String(
+      process.env.OPENVINO_LOCAL_TRANSLATE_VLM_RUNTIME_MODE ||
+        process.env.OPENVINO_LOCAL_TRANSLATE_VLM_CACHE_MODE ||
+        ''
+    )
+      .trim()
+      .toLowerCase();
+    if (raw === 'isolated' || raw === 'fresh' || raw === 'per_request' || raw === 'per-request') return 'isolated';
+    if (raw === 'cached' || raw === 'cache' || raw === 'reuse') return 'cached';
+    return 'auto';
   }
 
   private static async loadAsrHelperModelWithFallback(input: {
@@ -1247,17 +1410,21 @@ export class OpenvinoRuntimeManager {
 
   private static async runGenaiTranslateHelperOnce(input: {
     modelPath: string;
-    prompt: string;
+    prompt?: string;
+    messages?: Array<Record<string, unknown>>;
     generationConfig: Record<string, unknown>;
     runtimeKind: 'llm' | 'vlm';
     modelId?: string;
+    requestedDevice?: string;
   }) {
     const helperPath = PathManager.resolveToolsSourcePath('openvino_genai_translate_helper.mjs');
     if (!(await fs.pathExists(helperPath))) {
       throw new Error(`OpenVINO GenAI translate helper not found: ${helperPath}`);
     }
 
-    const requestedDevice = await this.getLocalTranslateDevice();
+    const requestedDevice = input.requestedDevice
+      ? this.normalizeRequestedDevice(input.requestedDevice, 'AUTO')
+      : await this.getLocalTranslateDevice();
     const isTranslateGemma =
       /translategemma/i.test(String(input.modelId || '')) || /translategemma/i.test(String(input.modelPath || ''));
     // Dedicated translation models are run as isolated helper jobs without the
@@ -1363,8 +1530,10 @@ export class OpenvinoRuntimeManager {
       const generateResult = await request(
         'generate',
         {
-          prompt: input.prompt,
+          prompt: input.prompt || '',
+          messages: Array.isArray(input.messages) ? input.messages : undefined,
           generationConfig: input.generationConfig,
+          resetChat: input.runtimeKind === 'vlm',
         },
         this.getEnvNumber('OPENVINO_TRANSLATE_HELPER_GENERATE_TIMEOUT_MS', 300000, 1000, 1800000)
       );
@@ -1811,6 +1980,7 @@ export class OpenvinoRuntimeManager {
       });
       const previousPipelines = Array.from(this.translatePipelineCache.values()).map((item) => item.pipeline);
       this.translatePipelineCache.clear();
+      this.vlmIsolatedFallbackModelIds.clear();
       const settled = await Promise.allSettled(
         previousPipelines.map((pipeline) => this.disposeTranslatePipeline(pipeline))
       );
@@ -1881,6 +2051,7 @@ export class OpenvinoRuntimeManager {
           modelId,
           modelPath,
           pipelineKind: 'vlm',
+          vlmRuntimeMode: null,
           requestedDevice,
           pipelineDevice: typeof pipeline?.device === 'string' ? pipeline.device : null,
           cacheDir,
@@ -1934,6 +2105,7 @@ export class OpenvinoRuntimeManager {
           modelId,
           modelPath,
           pipelineKind: 'seq2seq',
+          vlmRuntimeMode: null,
           requestedDevice,
           pipelineDevice: pipeline.device,
           cacheDir,
@@ -1988,6 +2160,7 @@ export class OpenvinoRuntimeManager {
         modelId,
         modelPath,
         pipelineKind: 'llm',
+        vlmRuntimeMode: null,
         requestedDevice,
         pipelineDevice: typeof pipeline?.device === 'string' ? pipeline.device : null,
         cacheDir,
@@ -2776,6 +2949,14 @@ export class OpenvinoRuntimeManager {
       wordTimestamps: input.segmentation !== false && input.wordAlignment !== false,
       task: 'transcribe',
     };
+    const audioDurationSec = await this.probeAudioDurationSeconds(input.audioPath).catch(() => null);
+    let timeoutDecision = this.getAsrGenerateTimeoutDecision({
+      audioDurationSec,
+      requestedDevice,
+      effectiveDevice,
+      segmentation: input.segmentation,
+      wordAlignment: input.wordAlignment,
+    });
     let result: any = null;
 
     const buildHelperResponse = (resultPayload: any, fallbackLanguage?: string) => {
@@ -2831,6 +3012,14 @@ export class OpenvinoRuntimeManager {
             forcedAlignment: resultPayload?.forcedAlignment || null,
             timing: {
               providerMs: Math.max(0, Date.now() - startedAt),
+              audioDurationSec: timeoutDecision.audioDurationSec,
+              asrTimeoutMode: timeoutDecision.mode,
+              asrTimeoutMs: timeoutDecision.timeoutMs,
+              asrTimeoutRealtimeFactor: timeoutDecision.realtimeFactor,
+              asrTimeoutWordAlignmentMultiplier: timeoutDecision.wordAlignmentMultiplier,
+              asrTimeoutBaseMs: timeoutDecision.baseMs,
+              asrTimeoutMinMs: timeoutDecision.minMs,
+              asrTimeoutMaxMs: timeoutDecision.maxMs,
             },
             promptIgnored:
               runtimeKind === 'qwen3_asr_official' || runtimeKind === 'ctc_asr'
@@ -2893,6 +3082,14 @@ export class OpenvinoRuntimeManager {
           forcedAlignment: resultPayload?.forcedAlignment || null,
           timing: {
             providerMs: Math.max(0, Date.now() - startedAt),
+            audioDurationSec: timeoutDecision.audioDurationSec,
+            asrTimeoutMode: timeoutDecision.mode,
+            asrTimeoutMs: timeoutDecision.timeoutMs,
+            asrTimeoutRealtimeFactor: timeoutDecision.realtimeFactor,
+            asrTimeoutWordAlignmentMultiplier: timeoutDecision.wordAlignmentMultiplier,
+            asrTimeoutBaseMs: timeoutDecision.baseMs,
+            asrTimeoutMinMs: timeoutDecision.minMs,
+            asrTimeoutMaxMs: timeoutDecision.maxMs,
           },
           promptIgnored:
             runtimeKind === 'qwen3_asr_official' || runtimeKind === 'ctc_asr'
@@ -2903,7 +3100,7 @@ export class OpenvinoRuntimeManager {
     };
 
     try {
-      result = await OpenVinoAsrHelperClient.transcribe(transcribePayload);
+      result = await OpenVinoAsrHelperClient.transcribe(transcribePayload, timeoutDecision.timeoutMs);
     } catch (error: any) {
       const message = String(error?.message || error || 'ASR helper transcription failed.');
       const canFallbackToCpuOnInference =
@@ -2925,7 +3122,14 @@ export class OpenvinoRuntimeManager {
       await OpenVinoAsrHelperClient.loadModel(input.modelPath, 'CPU', cacheDir);
       effectiveDevice = 'CPU';
       fallbackToCpu = true;
-      result = await OpenVinoAsrHelperClient.transcribe(transcribePayload);
+      timeoutDecision = this.getAsrGenerateTimeoutDecision({
+        audioDurationSec,
+        requestedDevice,
+        effectiveDevice,
+        segmentation: input.segmentation,
+        wordAlignment: input.wordAlignment,
+      });
+      result = await OpenVinoAsrHelperClient.transcribe(transcribePayload, timeoutDecision.timeoutMs);
     }
 
     const directResponse = buildHelperResponse(result);
@@ -2950,7 +3154,7 @@ export class OpenvinoRuntimeManager {
           const retryResult = await OpenVinoAsrHelperClient.transcribe({
             ...transcribePayload,
             language: fallbackLanguage,
-          });
+          }, timeoutDecision.timeoutMs);
           const retryResponse = buildHelperResponse(retryResult, fallbackLanguage);
           if (retryResponse) {
             return retryResponse;
@@ -3275,6 +3479,7 @@ export class OpenvinoRuntimeManager {
         prompt: await this.renderHfChatTemplate({
           modelPath: input.modelPath,
           messages: generationInput.messages,
+          chatTemplateKwargs: generation.chatTemplateKwargs,
         }),
       };
       this.traceLocalTranslate('translateWithLocalModel:render-chat-template', {
@@ -3283,6 +3488,169 @@ export class OpenvinoRuntimeManager {
         promptLength: generationInput.prompt.length,
       });
       primaryConfig.apply_chat_template = false;
+    }
+
+    const isVlmPipeline = await this.isVlmModelPath(input.modelPath);
+    if (isVlmPipeline) {
+      const vlmPrimaryConfig: Record<string, unknown> = { ...primaryConfig };
+      if (
+        typeof vlmPrimaryConfig.temperature !== 'number' ||
+        !Number.isFinite(vlmPrimaryConfig.temperature) ||
+        vlmPrimaryConfig.temperature <= 0
+      ) {
+        vlmPrimaryConfig.temperature = 0.01;
+      }
+      const requestedDevice = await this.getLocalTranslateDevice();
+      const configuredVlmRuntimeMode = this.getLocalTranslateVlmRuntimeMode();
+      const vlmRuntimeMode =
+        configuredVlmRuntimeMode === 'auto' && this.vlmIsolatedFallbackModelIds.has(input.modelId)
+          ? 'isolated'
+          : configuredVlmRuntimeMode;
+      const updateCachedVlmDebug = (
+        cachedPipeline: CachedTranslatePipeline,
+        generateResult: any,
+        mode: OpenvinoTranslateRuntimeDebug['vlmRuntimeMode']
+      ) => {
+        cachedPipeline.runtimeDebug = {
+          ...cachedPipeline.runtimeDebug,
+          vlmRuntimeMode: mode,
+          pipelineDevice:
+            typeof generateResult?.device === 'string' && generateResult.device.trim()
+              ? generateResult.device
+              : cachedPipeline.runtimeDebug.pipelineDevice,
+          lastPerfMetrics: this.summarizePerfMetrics(generateResult?.perfMetrics),
+        };
+      };
+      const runCachedVlmGenerate = async (
+        generationConfig: Record<string, unknown>,
+        mode: OpenvinoTranslateRuntimeDebug['vlmRuntimeMode']
+      ) => {
+        const cachedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
+        const generateStartedAt = Date.now();
+        const generateResult = await cachedPipeline.pipeline.generate(generationInput, { generationConfig });
+        updateCachedVlmDebug(cachedPipeline, generateResult, mode);
+        this.traceLocalTranslate(
+          mode === 'cached_fallback'
+            ? 'translateWithLocalModel:vlm-generate-fallback-cached'
+            : 'translateWithLocalModel:vlm-generate-primary-cached',
+          {
+            modelId: input.modelId,
+            elapsedMs: Date.now() - generateStartedAt,
+            vlmRuntimeMode: mode,
+          }
+        );
+        return generateResult;
+      };
+      const runFreshVlmGenerate = async (
+        generationConfig: Record<string, unknown>,
+        requestedDeviceOverride?: string,
+        mode: OpenvinoTranslateRuntimeDebug['vlmRuntimeMode'] = 'isolated'
+      ) => {
+        const helperResult = await this.runGenaiTranslateHelperOnce({
+          modelPath: input.modelPath,
+          modelId: input.modelId,
+          runtimeKind: 'vlm',
+          prompt: generationInput.prompt,
+          messages: generationInput.messages,
+          generationConfig,
+          requestedDevice: requestedDeviceOverride,
+        });
+        this.traceLocalTranslate('translateWithLocalModel:vlm-generate-isolated', {
+          modelId: input.modelId,
+          vlmRuntimeMode: mode,
+          helperDevice: helperResult?.generateResult?.device || helperResult?.loadResult?.device || null,
+        });
+        return helperResult.generateResult;
+      };
+      const runFreshVlmGenerateWithDeviceFallback = async (
+        generationConfig: Record<string, unknown>,
+        mode: OpenvinoTranslateRuntimeDebug['vlmRuntimeMode'] = 'isolated'
+      ) => {
+        try {
+          return await runFreshVlmGenerate(generationConfig, requestedDevice, mode);
+        } catch (error) {
+          if (!this.shouldFallbackTranslateToCpu(requestedDevice, error)) {
+            throw error;
+          }
+          this.log('vlm generate gpu allocation failed, retrying isolated helper on cpu', {
+            requestedDevice,
+            modelId: input.modelId,
+            modelPath: input.modelPath,
+            message: String((error as any)?.message || error || 'OpenVINO GPU allocation failure'),
+          });
+          return await runFreshVlmGenerate(generationConfig, 'CPU', mode);
+        }
+      };
+      const fallbackConfig: Record<string, unknown> = {
+        max_new_tokens: maxNewTokens,
+        do_sample: false,
+        temperature: 0.2,
+        top_p: 0.95,
+      };
+      if (primaryConfig.apply_chat_template === false) {
+        fallbackConfig.apply_chat_template = false;
+      }
+
+      try {
+        if (vlmRuntimeMode === 'isolated') {
+          result = await runFreshVlmGenerateWithDeviceFallback(vlmPrimaryConfig, 'isolated');
+        } else {
+          result = await runCachedVlmGenerate(vlmPrimaryConfig, 'cached');
+        }
+      } catch (primaryError) {
+        const primaryMessage = String(primaryError instanceof Error ? primaryError.message : primaryError || '');
+        const shouldUseIsolatedFallback =
+          vlmRuntimeMode === 'isolated' ||
+          this.isVlmTranslateStateError(primaryError) ||
+          this.shouldFallbackTranslateToCpu(requestedDevice, primaryError);
+
+        if (shouldUseIsolatedFallback) {
+          if (configuredVlmRuntimeMode === 'auto' && this.isVlmTranslateStateError(primaryError)) {
+            this.vlmIsolatedFallbackModelIds.add(input.modelId);
+          }
+          this.log('vlm cached generate failed, retrying isolated helper', {
+            modelId: input.modelId,
+            modelPath: input.modelPath,
+            vlmRuntimeMode,
+            message: primaryMessage,
+          });
+          await this.releaseTranslateRuntime().catch(() => {});
+          result = await runFreshVlmGenerateWithDeviceFallback(fallbackConfig, 'fallback_isolated');
+        } else {
+          try {
+            result = await runCachedVlmGenerate(fallbackConfig, 'cached_fallback');
+          } catch (fallbackError) {
+            if (
+              this.isVlmTranslateStateError(fallbackError) ||
+              this.shouldFallbackTranslateToCpu(requestedDevice, fallbackError)
+            ) {
+              if (configuredVlmRuntimeMode === 'auto' && this.isVlmTranslateStateError(fallbackError)) {
+                this.vlmIsolatedFallbackModelIds.add(input.modelId);
+              }
+              this.log('vlm cached fallback failed, retrying isolated helper', {
+                modelId: input.modelId,
+                modelPath: input.modelPath,
+                vlmRuntimeMode,
+                primaryMessage,
+                fallbackMessage: String((fallbackError as any)?.message || fallbackError || ''),
+              });
+              await this.releaseTranslateRuntime().catch(() => {});
+              result = await runFreshVlmGenerateWithDeviceFallback(fallbackConfig, 'fallback_isolated');
+            } else {
+              throw fallbackError;
+            }
+          }
+        }
+      }
+
+      const asTexts = Array.isArray(result?.texts) ? result.texts : [];
+      const translated = this.normalizeTranslatedText(
+        asTexts.length > 0 ? asTexts[0] : result?.text ?? result?.translatedText ?? result?.toString?.()
+      );
+      if (!translated) {
+        throw new Error('Local translation model returned empty output.');
+      }
+      return translated;
     }
 
     const cachedPipeline = await this.getOrCreateTranslatePipeline(input.modelId, input.modelPath);
@@ -3317,7 +3685,7 @@ export class OpenvinoRuntimeManager {
       }
       const primaryMessage = String(primaryError instanceof Error ? primaryError.message : primaryError || '');
       const helperStateError =
-        /another generation is already in progress|translation pipeline is not loaded|translate helper request timed out/i.test(
+        /another generation is already in progress|translation pipeline is not loaded|translate helper request timed out|tokenized_history|prompt_ids\.get_size|visual_language[\\/]+pipeline/i.test(
           primaryMessage
         );
       const templateParseError =
@@ -3330,6 +3698,7 @@ export class OpenvinoRuntimeManager {
           prompt: await this.renderHfChatTemplate({
             modelPath: input.modelPath,
             messages: generationInput.messages,
+            chatTemplateKwargs: generation.chatTemplateKwargs,
           }),
         };
         fallbackConfig.apply_chat_template = false;
@@ -3422,9 +3791,18 @@ export class OpenvinoRuntimeManager {
         prompt: input.prompt,
         decodePolicy: input.decodePolicy,
       });
+      const originallyRequestedDevice = await this.getLocalAsrDevice();
+      const configuredAsrDevice = this.getConfiguredLocalAsrDevice();
       const runNativeWhisper = async (cachedPipeline: CachedAsrPipeline) => {
         const pipeline = cachedPipeline.pipeline;
-        const timeoutMs = this.getAsrTimeoutMs('generate');
+        const timeoutDecision = this.getAsrGenerateTimeoutDecision({
+          sampleCount: decodedAudio.sampleCount,
+          requestedDevice: originallyRequestedDevice,
+          effectiveDevice: cachedPipeline.requestedDevice,
+          segmentation: input.segmentation,
+          wordAlignment: input.wordAlignment,
+        });
+        const timeoutMs = timeoutDecision.timeoutMs;
         const generateStartedAt = Date.now();
         const result = await this.withTimeout(
           Promise.resolve(this.generateWithWhisperPipeline(pipeline, audio, generationConfig)),
@@ -3432,13 +3810,16 @@ export class OpenvinoRuntimeManager {
           `Local ASR transcription timed out (${timeoutMs} ms).`
         );
         const generateMs = Math.max(0, Date.now() - generateStartedAt);
-        return { cachedPipeline, result, generateMs };
+        return { cachedPipeline, result, generateMs, timeoutDecision };
       };
 
-      let nativeRun: { cachedPipeline: CachedAsrPipeline; result: any; generateMs: number };
+      let nativeRun: {
+        cachedPipeline: CachedAsrPipeline;
+        result: any;
+        generateMs: number;
+        timeoutDecision: LocalAsrTimeoutDecision;
+      };
       let whisperFallbackToCpu = false;
-      const originallyRequestedDevice = await this.getLocalAsrDevice();
-      const configuredAsrDevice = this.getConfiguredLocalAsrDevice();
       try {
         const cachedPipeline = await this.getOrCreateAsrPipeline(
           input.modelId,
@@ -3483,7 +3864,7 @@ export class OpenvinoRuntimeManager {
         }
       }
 
-      const { cachedPipeline, result, generateMs } = nativeRun;
+      const { cachedPipeline, result, generateMs, timeoutDecision } = nativeRun;
 
       const rawChunks = Array.isArray(result?.chunks) ? result.chunks : [];
       const normalizedWords = this.normalizeWhisperWordTimings(Array.isArray(result?.words) ? result.words : []);
@@ -3528,7 +3909,15 @@ export class OpenvinoRuntimeManager {
               audioDecodeMs: decodedAudio.decodeMs,
               audioDecodeCacheHit: decodedAudio.cacheHit,
               audioSampleCount: decodedAudio.sampleCount,
+              audioDurationSec: timeoutDecision.audioDurationSec,
               asrGenerateMs: generateMs,
+              asrTimeoutMode: timeoutDecision.mode,
+              asrTimeoutMs: timeoutDecision.timeoutMs,
+              asrTimeoutRealtimeFactor: timeoutDecision.realtimeFactor,
+              asrTimeoutWordAlignmentMultiplier: timeoutDecision.wordAlignmentMultiplier,
+              asrTimeoutBaseMs: timeoutDecision.baseMs,
+              asrTimeoutMinMs: timeoutDecision.minMs,
+              asrTimeoutMaxMs: timeoutDecision.maxMs,
               providerMs: decodedAudio.decodeMs + generateMs,
             },
           },
@@ -3575,7 +3964,15 @@ export class OpenvinoRuntimeManager {
             audioDecodeMs: decodedAudio.decodeMs,
             audioDecodeCacheHit: decodedAudio.cacheHit,
             audioSampleCount: decodedAudio.sampleCount,
+            audioDurationSec: timeoutDecision.audioDurationSec,
             asrGenerateMs: generateMs,
+            asrTimeoutMode: timeoutDecision.mode,
+            asrTimeoutMs: timeoutDecision.timeoutMs,
+            asrTimeoutRealtimeFactor: timeoutDecision.realtimeFactor,
+            asrTimeoutWordAlignmentMultiplier: timeoutDecision.wordAlignmentMultiplier,
+            asrTimeoutBaseMs: timeoutDecision.baseMs,
+            asrTimeoutMinMs: timeoutDecision.minMs,
+            asrTimeoutMaxMs: timeoutDecision.maxMs,
             providerMs: decodedAudio.decodeMs + generateMs,
           },
         },
@@ -3693,7 +4090,11 @@ export class OpenvinoRuntimeManager {
     }
   }
 
-  private static async renderHfChatTemplate(input: { modelPath: string; messages: Array<Record<string, unknown>> }) {
+  private static async renderHfChatTemplate(input: {
+    modelPath: string;
+    messages: Array<Record<string, unknown>>;
+    chatTemplateKwargs?: Record<string, unknown>;
+  }) {
     const scriptPath = this.getChatTemplateRenderScriptPath();
     if (!(await fs.pathExists(scriptPath))) {
       throw new Error(`Hugging Face chat template renderer not found: ${scriptPath}`);
@@ -3759,6 +4160,7 @@ export class OpenvinoRuntimeManager {
         JSON.stringify({
           modelDir: input.modelPath,
           messages: input.messages,
+          chatTemplateKwargs: input.chatTemplateKwargs || {},
         })
       );
     });
@@ -3769,6 +4171,7 @@ export class OpenvinoRuntimeManager {
     entries: Array<{
       prompt?: string;
       messages?: Array<Record<string, unknown>>;
+      chatTemplateKwargs?: Record<string, unknown>;
     }>;
   }) {
     const scriptPath = this.getInputTokenCountScriptPath();
@@ -4096,6 +4499,7 @@ export class OpenvinoRuntimeManager {
     const pipelines = Array.from(this.translatePipelineCache.values()).map((item) => item.pipeline);
     this.translatePipelineCache.clear();
     this.activeTranslateModelId = null;
+    this.vlmIsolatedFallbackModelIds.clear();
     const settled = await Promise.allSettled(pipelines.map((pipeline) => this.disposeTranslatePipeline(pipeline)));
     const failed = settled.filter((item) => item.status === 'rejected').length;
     OpenVinoTranslateHelperClient.forceShutdownNow();

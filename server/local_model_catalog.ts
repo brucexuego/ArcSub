@@ -36,6 +36,66 @@ export type LocalModelRuntimeLayout =
   | 'translate-seq2seq'
   | 'translate-vlm';
 
+export interface LocalModelRuntimeHintEvidence {
+  source: string;
+  key?: string;
+  value?: string | number | boolean | null;
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface LocalModelRuntimeHints {
+  inspectedAt?: string;
+  hfSha?: string;
+  modelCard?: {
+    license?: string | null;
+    baseModel?: string | string[] | null;
+    pipelineTag?: string | null;
+    libraryName?: string | null;
+    summary?: string | null;
+  };
+  contextWindow?: number;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  generation?: {
+    doSample?: boolean;
+    temperature?: number;
+    topP?: number;
+    topK?: number;
+    minP?: number;
+    repetitionPenalty?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+    noRepeatNgramSize?: number;
+  };
+  chatTemplate?: {
+    available?: boolean;
+    supportsThinking?: boolean;
+    defaultEnableThinking?: boolean;
+    templateSource?: string | null;
+    templateHash?: string | null;
+    kwargs?: Record<string, unknown>;
+  };
+  batching?: {
+    mode?: 'token_aware' | 'fixed_lines';
+    inputTokenBudget?: number;
+    outputTokenBudget?: number;
+    safetyReserveTokens?: number;
+    maxLines?: number;
+    charBudget?: number;
+    confidence?: 'high' | 'medium' | 'low';
+  };
+  asr?: {
+    task?: 'transcribe' | 'translate';
+    returnTimestamps?: boolean;
+    wordTimestamps?: boolean;
+    chunkLengthSec?: number;
+    samplingRate?: number;
+    maxTargetPositions?: number;
+    confidence?: 'high' | 'medium' | 'low';
+  };
+  evidence?: LocalModelRuntimeHintEvidence[];
+}
+
 export interface LocalModelDefinition {
   id: string;
   type: LocalModelType;
@@ -51,6 +111,7 @@ export interface LocalModelDefinition {
   conversionMethod: LocalModelConversionMethod;
   device: 'AUTO';
   source: 'builtin' | 'custom';
+  runtimeHints?: LocalModelRuntimeHints;
 }
 
 export interface LocalModelSelection {
@@ -269,8 +330,67 @@ function inferWhisperBaseModelRepoId(repoId: string, metadata: HuggingFaceModelM
   return '';
 }
 
+function formatRepoDisplayToken(token: string) {
+  const raw = String(token || '').trim();
+  if (!raw) return '';
+  const normalized = raw.toLowerCase();
+  const exact: Record<string, string> = {
+    ai: 'AI',
+    api: 'API',
+    asr: 'ASR',
+    ctc: 'CTC',
+    fp16: 'FP16',
+    fp32: 'FP32',
+    gguf: 'GGUF',
+    hf: 'HF',
+    int4: 'INT4',
+    int8: 'INT8',
+    it: 'IT',
+    llm: 'LLM',
+    ov: 'OV',
+    vlm: 'VLM',
+    vllm: 'vLLM',
+    openvino: 'OpenVINO',
+    qwen: 'Qwen',
+    qwen2: 'Qwen2',
+    qwen3: 'Qwen3',
+    gemma: 'Gemma',
+    translategemma: 'TranslateGemma',
+    deepseek: 'DeepSeek',
+    distil: 'Distil',
+    whisper: 'Whisper',
+    phi: 'Phi',
+  };
+  if (exact[normalized]) return exact[normalized];
+  if (/^\d+b$/i.test(raw)) return raw.toUpperCase();
+  if (/^v\d+(?:\.\d+)?$/i.test(raw)) return `v${raw.slice(1)}`;
+  if (/^r\d+$/i.test(raw)) return raw.toUpperCase();
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return raw;
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function formatRepoDisplaySegment(segment: string, options: { dropTrailingOv?: boolean } = {}) {
+  const tokens = String(segment || '')
+    .replace(/[_]+/g, '-')
+    .split(/[-\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (options.dropTrailingOv && tokens[tokens.length - 1]?.toLowerCase() === 'ov') {
+    tokens.pop();
+  }
+  return tokens.map(formatRepoDisplayToken).filter(Boolean).join(' ');
+}
+
 function buildDefaultDisplayName(repoId: string) {
-  return repoId;
+  const normalized = String(repoId || '').trim().replace(/^\/+|\/+$/g, '');
+  if (!normalized) return '';
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length < 2) {
+    return formatRepoDisplaySegment(normalized, { dropTrailingOv: true }) || normalized;
+  }
+  const owner = formatRepoDisplaySegment(parts[0]);
+  const name = formatRepoDisplaySegment(parts.slice(1).join(' '), { dropTrailingOv: true });
+  return [owner, name].filter(Boolean).join(' ') || normalized;
 }
 
 function isOfficialQwen3AsrRepo(repoId: string) {
@@ -711,7 +831,15 @@ function buildDefinitionFromArtifactFiles(
   overrides?: Partial<
     Pick<
       LocalModelDefinition,
-      'id' | 'displayName' | 'localSubdir' | 'downloadRepoId' | 'installMode' | 'sourceFormat' | 'conversionMethod' | 'source'
+      | 'id'
+      | 'displayName'
+      | 'localSubdir'
+      | 'downloadRepoId'
+      | 'installMode'
+      | 'sourceFormat'
+      | 'conversionMethod'
+      | 'source'
+      | 'runtimeHints'
     >
   >
 ): LocalModelDefinition | null {
@@ -737,6 +865,7 @@ function buildDefinitionFromArtifactFiles(
     conversionMethod: overrides?.conversionMethod || 'direct-download',
     device: 'AUTO',
     source: overrides?.source || 'custom',
+    ...(overrides?.runtimeHints ? { runtimeHints: overrides.runtimeHints } : {}),
   };
 }
 
@@ -962,13 +1091,172 @@ export const BUILTIN_LOCAL_MODELS: LocalModelDefinition[] = [
   }),
 ];
 
+function toFiniteNumber(input: unknown, min?: number, max?: number) {
+  const value = Number(input);
+  if (!Number.isFinite(value)) return undefined;
+  const rounded = Number.isInteger(value) ? value : Number(value.toFixed(4));
+  if (typeof min === 'number' && rounded < min) return undefined;
+  if (typeof max === 'number' && rounded > max) return undefined;
+  return rounded;
+}
+
+function sanitizeRuntimeHintEvidence(input: unknown): LocalModelRuntimeHintEvidence | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = input as Record<string, unknown>;
+  const source = typeof raw.source === 'string' ? raw.source.trim() : '';
+  if (!source) return null;
+  const confidence =
+    raw.confidence === 'high' || raw.confidence === 'medium' || raw.confidence === 'low'
+      ? raw.confidence
+      : undefined;
+  const value: LocalModelRuntimeHintEvidence['value'] | undefined =
+    typeof raw.value === 'string' ||
+    typeof raw.value === 'number' ||
+    typeof raw.value === 'boolean' ||
+    raw.value === null
+      ? (raw.value as LocalModelRuntimeHintEvidence['value'])
+      : undefined;
+  return {
+    source,
+    ...(typeof raw.key === 'string' && raw.key.trim() ? { key: raw.key.trim() } : {}),
+    ...(value !== undefined ? { value } : {}),
+    ...(confidence ? { confidence } : {}),
+  };
+}
+
+function sanitizeRuntimeHints(input: unknown): LocalModelRuntimeHints | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, any>;
+  const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : null;
+  const chatTemplate = raw.chatTemplate && typeof raw.chatTemplate === 'object' ? raw.chatTemplate : null;
+  const batching = raw.batching && typeof raw.batching === 'object' ? raw.batching : null;
+  const asr = raw.asr && typeof raw.asr === 'object' ? raw.asr : null;
+  const modelCard = raw.modelCard && typeof raw.modelCard === 'object' ? raw.modelCard : null;
+  const evidence = Array.isArray(raw.evidence)
+    ? raw.evidence.map((item: unknown) => sanitizeRuntimeHintEvidence(item)).filter(Boolean) as LocalModelRuntimeHintEvidence[]
+    : [];
+
+  const sanitized: LocalModelRuntimeHints = {};
+  if (typeof raw.inspectedAt === 'string' && raw.inspectedAt.trim()) sanitized.inspectedAt = raw.inspectedAt.trim();
+  if (typeof raw.hfSha === 'string' && raw.hfSha.trim()) sanitized.hfSha = raw.hfSha.trim();
+  const contextWindow = toFiniteNumber(raw.contextWindow, 1, 10_000_000);
+  const maxInputTokens = toFiniteNumber(raw.maxInputTokens, 1, 10_000_000);
+  const maxOutputTokens = toFiniteNumber(raw.maxOutputTokens, 1, 1_000_000);
+  if (contextWindow != null) sanitized.contextWindow = Math.round(contextWindow);
+  if (maxInputTokens != null) sanitized.maxInputTokens = Math.round(maxInputTokens);
+  if (maxOutputTokens != null) sanitized.maxOutputTokens = Math.round(maxOutputTokens);
+
+  if (modelCard) {
+    const baseModel = Array.isArray(modelCard.baseModel)
+      ? modelCard.baseModel.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : typeof modelCard.baseModel === 'string' && modelCard.baseModel.trim()
+        ? modelCard.baseModel.trim()
+        : null;
+    sanitized.modelCard = {
+      license: typeof modelCard.license === 'string' && modelCard.license.trim() ? modelCard.license.trim() : null,
+      baseModel,
+      pipelineTag: typeof modelCard.pipelineTag === 'string' && modelCard.pipelineTag.trim() ? modelCard.pipelineTag.trim() : null,
+      libraryName: typeof modelCard.libraryName === 'string' && modelCard.libraryName.trim() ? modelCard.libraryName.trim() : null,
+      summary: typeof modelCard.summary === 'string' && modelCard.summary.trim() ? modelCard.summary.trim().slice(0, 1200) : null,
+    };
+  }
+
+  if (generation) {
+    const nextGeneration: NonNullable<LocalModelRuntimeHints['generation']> = {};
+    if (typeof generation.doSample === 'boolean') nextGeneration.doSample = generation.doSample;
+    const temperature = toFiniteNumber(generation.temperature, 0, 2);
+    const topP = toFiniteNumber(generation.topP, 0, 1);
+    const topK = toFiniteNumber(generation.topK, 0, 1000);
+    const minP = toFiniteNumber(generation.minP, 0, 1);
+    const repetitionPenalty = toFiniteNumber(generation.repetitionPenalty, 0, 10);
+    const presencePenalty = toFiniteNumber(generation.presencePenalty, -2, 2);
+    const frequencyPenalty = toFiniteNumber(generation.frequencyPenalty, -2, 2);
+    const noRepeatNgramSize = toFiniteNumber(generation.noRepeatNgramSize, 0, 64);
+    if (temperature != null) nextGeneration.temperature = temperature;
+    if (topP != null) nextGeneration.topP = topP;
+    if (topK != null) nextGeneration.topK = Math.round(topK);
+    if (minP != null) nextGeneration.minP = minP;
+    if (repetitionPenalty != null) nextGeneration.repetitionPenalty = repetitionPenalty;
+    if (presencePenalty != null) nextGeneration.presencePenalty = presencePenalty;
+    if (frequencyPenalty != null) nextGeneration.frequencyPenalty = frequencyPenalty;
+    if (noRepeatNgramSize != null) nextGeneration.noRepeatNgramSize = Math.round(noRepeatNgramSize);
+    if (Object.keys(nextGeneration).length > 0) sanitized.generation = nextGeneration;
+  }
+
+  if (chatTemplate) {
+    const kwargs =
+      chatTemplate.kwargs && typeof chatTemplate.kwargs === 'object' && !Array.isArray(chatTemplate.kwargs)
+        ? { ...chatTemplate.kwargs }
+        : undefined;
+    sanitized.chatTemplate = {
+      ...(typeof chatTemplate.available === 'boolean' ? { available: chatTemplate.available } : {}),
+      ...(typeof chatTemplate.supportsThinking === 'boolean' ? { supportsThinking: chatTemplate.supportsThinking } : {}),
+      ...(typeof chatTemplate.defaultEnableThinking === 'boolean'
+        ? { defaultEnableThinking: chatTemplate.defaultEnableThinking }
+        : {}),
+      templateSource:
+        typeof chatTemplate.templateSource === 'string' && chatTemplate.templateSource.trim()
+          ? chatTemplate.templateSource.trim()
+          : null,
+      templateHash:
+        typeof chatTemplate.templateHash === 'string' && chatTemplate.templateHash.trim()
+          ? chatTemplate.templateHash.trim()
+          : null,
+      ...(kwargs ? { kwargs } : {}),
+    };
+  }
+
+  if (batching) {
+    const inputTokenBudget = toFiniteNumber(batching.inputTokenBudget, 1, 10_000_000);
+    const outputTokenBudget = toFiniteNumber(batching.outputTokenBudget, 1, 1_000_000);
+    const safetyReserveTokens = toFiniteNumber(batching.safetyReserveTokens, 0, 1_000_000);
+    const maxLines = toFiniteNumber(batching.maxLines, 1, 1000);
+    const charBudget = toFiniteNumber(batching.charBudget, 1, 1_000_000);
+    sanitized.batching = {
+      mode: batching.mode === 'fixed_lines' ? 'fixed_lines' : batching.mode === 'token_aware' ? 'token_aware' : undefined,
+      ...(inputTokenBudget != null ? { inputTokenBudget: Math.round(inputTokenBudget) } : {}),
+      ...(outputTokenBudget != null ? { outputTokenBudget: Math.round(outputTokenBudget) } : {}),
+      ...(safetyReserveTokens != null ? { safetyReserveTokens: Math.round(safetyReserveTokens) } : {}),
+      ...(maxLines != null ? { maxLines: Math.round(maxLines) } : {}),
+      ...(charBudget != null ? { charBudget: Math.round(charBudget) } : {}),
+      ...(batching.confidence === 'high' || batching.confidence === 'medium' || batching.confidence === 'low'
+        ? { confidence: batching.confidence }
+        : {}),
+    };
+  }
+
+  if (asr) {
+    const chunkLengthSec = toFiniteNumber(asr.chunkLengthSec, 1, 3600);
+    const samplingRate = toFiniteNumber(asr.samplingRate, 1, 384000);
+    const maxTargetPositions = toFiniteNumber(asr.maxTargetPositions, 1, 1000000);
+    sanitized.asr = {
+      ...(asr.task === 'transcribe' || asr.task === 'translate' ? { task: asr.task } : {}),
+      ...(typeof asr.returnTimestamps === 'boolean' ? { returnTimestamps: asr.returnTimestamps } : {}),
+      ...(typeof asr.wordTimestamps === 'boolean' ? { wordTimestamps: asr.wordTimestamps } : {}),
+      ...(chunkLengthSec != null ? { chunkLengthSec } : {}),
+      ...(samplingRate != null ? { samplingRate: Math.round(samplingRate) } : {}),
+      ...(maxTargetPositions != null ? { maxTargetPositions: Math.round(maxTargetPositions) } : {}),
+      ...(asr.confidence === 'high' || asr.confidence === 'medium' || asr.confidence === 'low'
+        ? { confidence: asr.confidence }
+        : {}),
+    };
+  }
+
+  if (evidence.length > 0) sanitized.evidence = evidence.slice(0, 30);
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
 export function sanitizeLocalModelDefinition(input: any): LocalModelDefinition | null {
   if (!input || typeof input !== 'object') return null;
 
   const id = typeof input.id === 'string' ? input.id.trim() : '';
   const type = input.type === 'asr' || input.type === 'translate' ? input.type : null;
-  const displayName = typeof input.displayName === 'string' ? input.displayName.trim() : '';
   const repoId = typeof input.repoId === 'string' ? input.repoId.trim() : '';
+  const rawDisplayName = typeof input.displayName === 'string' ? input.displayName.trim() : '';
+  const displayName =
+    !rawDisplayName || rawDisplayName.toLowerCase() === repoId.toLowerCase()
+      ? buildDefaultDisplayName(repoId)
+      : rawDisplayName;
   const downloadRepoId = typeof input.downloadRepoId === 'string' ? input.downloadRepoId.trim() : '';
   const localSubdir = typeof input.localSubdir === 'string' ? input.localSubdir.trim() : '';
   const requiredFiles = Array.isArray(input.requiredFiles)
@@ -1005,6 +1293,7 @@ export function sanitizeLocalModelDefinition(input: any): LocalModelDefinition |
   const conversionMethod = inferConversionMethodFromStoredDefinition(input, sourceFormat, runtimeLayout);
   const device = input.device === 'AUTO' ? 'AUTO' : null;
   const source = input.source === 'builtin' ? 'builtin' : input.source === 'custom' ? 'custom' : null;
+  const runtimeHints = sanitizeRuntimeHints(input.runtimeHints);
 
   if (
     !id ||
@@ -1036,6 +1325,7 @@ export function sanitizeLocalModelDefinition(input: any): LocalModelDefinition |
     conversionMethod,
     device,
     source,
+    ...(runtimeHints ? { runtimeHints } : {}),
   };
 }
 
@@ -1087,7 +1377,15 @@ export function inferLocalModelDefinitionFromInstalledDir(
   overrides?: Partial<
     Pick<
       LocalModelDefinition,
-      'id' | 'displayName' | 'localSubdir' | 'downloadRepoId' | 'installMode' | 'sourceFormat' | 'conversionMethod' | 'source'
+      | 'id'
+      | 'displayName'
+      | 'localSubdir'
+      | 'downloadRepoId'
+      | 'installMode'
+      | 'sourceFormat'
+      | 'conversionMethod'
+      | 'source'
+      | 'runtimeHints'
     >
   >
 ) {
