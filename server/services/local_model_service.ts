@@ -663,12 +663,26 @@ export class LocalModelService {
   private static async inspectModelMetadata(
     type: LocalModelType,
     repoIdOrUrl: string,
-    options: { modelDir?: string; inferredModel?: LocalModelDefinition } = {}
+    options: { modelDir?: string; inferredModel?: LocalModelDefinition; remoteMetadataOptional?: boolean } = {}
   ): Promise<LocalModelMetadataInspection> {
     const normalizedRepoId = this.normalizeRepoIdInput(repoIdOrUrl);
-    const metadata = await this.fetchHfModelMetadata(normalizedRepoId) as HuggingFaceModelMetadata & Record<string, any>;
+    let remoteMetadataError: string | null = null;
+    let metadata: HuggingFaceModelMetadata & Record<string, any>;
+    try {
+      metadata = await this.fetchHfModelMetadata(normalizedRepoId) as HuggingFaceModelMetadata & Record<string, any>;
+    } catch (error: any) {
+      if (!options.remoteMetadataOptional || !options.inferredModel) {
+        throw error;
+      }
+      remoteMetadataError = String(error?.message || error || 'Failed to fetch Hugging Face model metadata.');
+      metadata = {
+        id: normalizedRepoId,
+        tags: [],
+      } as HuggingFaceModelMetadata & Record<string, any>;
+    }
     const canonicalRepoId = String(metadata?.id || normalizedRepoId).trim() || normalizedRepoId;
     const inferredModel = options.inferredModel || inferLocalModelDefinitionFromHf(type, canonicalRepoId, metadata);
+    const shouldFetchRemoteFiles = !remoteMetadataError;
     const [
       readme,
       remoteConfig,
@@ -676,14 +690,16 @@ export class LocalModelService {
       remotePreprocessorConfig,
       remoteTokenizerConfig,
       remoteChatTemplate,
-    ] = await Promise.all([
-      this.fetchOptionalHfText(canonicalRepoId, 'README.md'),
-      this.fetchOptionalHfJson(canonicalRepoId, 'config.json'),
-      this.fetchOptionalHfJson(canonicalRepoId, 'generation_config.json'),
-      this.fetchOptionalHfJson(canonicalRepoId, 'preprocessor_config.json'),
-      this.fetchOptionalHfJson(canonicalRepoId, 'tokenizer_config.json'),
-      this.fetchOptionalHfText(canonicalRepoId, 'chat_template.jinja'),
-    ]);
+    ] = shouldFetchRemoteFiles
+      ? await Promise.all([
+          this.fetchOptionalHfText(canonicalRepoId, 'README.md'),
+          this.fetchOptionalHfJson(canonicalRepoId, 'config.json'),
+          this.fetchOptionalHfJson(canonicalRepoId, 'generation_config.json'),
+          this.fetchOptionalHfJson(canonicalRepoId, 'preprocessor_config.json'),
+          this.fetchOptionalHfJson(canonicalRepoId, 'tokenizer_config.json'),
+          this.fetchOptionalHfText(canonicalRepoId, 'chat_template.jinja'),
+        ])
+      : ['', null, null, null, null, ''];
 
     const modelDir = options.modelDir || '';
     const localConfig = modelDir ? this.tryReadLocalJson(modelDir, 'config.json') : null;
@@ -708,6 +724,7 @@ export class LocalModelService {
       repoId: canonicalRepoId,
       type,
       apiMetadata: metadata,
+      remoteMetadataError,
       readme,
       files: {
         config: localConfig || remoteConfig,
@@ -1096,6 +1113,7 @@ export class LocalModelService {
       const postInstallInspection = await this.inspectModelMetadata(model.type, model.repoId, {
         modelDir: getLocalModelInstallDir(model),
         inferredModel: model,
+        remoteMetadataOptional: true,
       });
       const finalizedModel =
         inferLocalModelDefinitionFromInstalledDir(model.type, model.repoId, getLocalModelInstallDir(model), {
