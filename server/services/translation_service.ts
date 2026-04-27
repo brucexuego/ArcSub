@@ -31,6 +31,8 @@ import {
   type CloudTranslationOrchestratorDeps,
   type CloudTranslationOrchestratorInput,
   type CloudTranslationOrchestratorResult,
+  type CloudTranslationBatchDebugInfo,
+  type CloudTranslationProviderBatchConfig,
 } from './llm/orchestrators/cloud_translation_orchestrator.js';
 import { runCloudTranslationConnectionProbe } from './llm/orchestrators/cloud_translation_connection_probe.js';
 import { inferLocalTranslateModelStrategy as inferLocalTranslateModelStrategyModule } from './local_llm/strategy.js';
@@ -160,9 +162,10 @@ export interface TranslationDebugInfo {
     strictRetrySucceeded?: boolean;
     relaxedWholeRequest?: boolean;
     relaxedWholeRequestFallback?: boolean;
-    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window';
+    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window' | 'provider_batch';
     cloudContextChunkCount?: number;
     cloudContextFallbackCount?: number;
+    cloudBatching?: CloudTranslationBatchDebugInfo | null;
     localModelFamily?: string;
     localModelProfileId?: string | null;
     localPromptStyle?: string;
@@ -1371,6 +1374,35 @@ export class TranslationService {
       charBudget: Math.round(this.getEnvNumber('TRANSLATE_CLOUD_CONTEXT_CHAR_BUDGET', 2400, 200, 20000)),
       maxSplitDepth: Math.round(this.getEnvNumber('TRANSLATE_CLOUD_CONTEXT_MAX_SPLIT_DEPTH', 2, 0, 8)),
     } as CloudContextConfig;
+  }
+
+  private static isNvidiaHostedCloudProvider(resolvedProvider: ResolvedCloudTranslateProvider) {
+    if (resolvedProvider.provider !== 'openai-compatible') return false;
+    try {
+      const host = new URL(resolvedProvider.endpointUrl).hostname.toLowerCase();
+      return host === 'integrate.api.nvidia.com';
+    } catch {
+      return false;
+    }
+  }
+
+  private static getNvidiaCloudBatchConfig(
+    resolvedProvider: ResolvedCloudTranslateProvider
+  ): CloudTranslationProviderBatchConfig | null {
+    if (!this.isNvidiaHostedCloudProvider(resolvedProvider)) return null;
+    if (!this.getEnvBoolean('TRANSLATE_NVIDIA_CLOUD_BATCHING', true)) return null;
+
+    return {
+      enabled: true,
+      source: 'nvidia-hosted',
+      targetLines: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_BATCH_SIZE', 24, 4, 120)),
+      minTargetLines: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MIN_BATCH_SIZE', 6, 1, 60)),
+      charBudget: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_BATCH_CHAR_BUDGET', 2400, 200, 20000)),
+      maxSplitDepth: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_SPLIT_DEPTH', 4, 0, 8)),
+      maxOutputTokens: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_OUTPUT_TOKENS', 2048, 256, 16384)),
+      timeoutMs: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_TIMEOUT_MS', 300000, 30000, 900000)),
+      stream: this.getEnvBoolean('TRANSLATE_NVIDIA_CLOUD_STREAM', false),
+    };
   }
 
   private static buildCloudContextSystemPrompt(input: {
@@ -2641,6 +2673,8 @@ export class TranslationService {
       'line_json_map_repair_applied',
       'line_json_map_pre_split_applied',
       'line_json_map_policy_split',
+      'cloud_provider_batch_translation_applied',
+      'cloud_provider_batch_split_applied',
     ]);
     const qualityWarningCodes = new Set([
       'quality_retry_triggered',
@@ -3676,6 +3710,7 @@ export class TranslationService {
         model: resolvedProvider.effectiveModel || model.model,
         modelOptions: model.options,
       },
+      providerBatching: this.getNvidiaCloudBatchConfig(resolvedProvider),
       signal: input.signal,
     };
   }
@@ -3771,6 +3806,7 @@ export class TranslationService {
         cloudStrategy: input.orchestrated.cloudStrategy,
         cloudContextChunkCount: input.orchestrated.cloudContextChunkCount,
         cloudContextFallbackCount: input.orchestrated.cloudContextFallbackCount,
+        cloudBatching: input.orchestrated.cloudBatching,
       },
       quality: this.buildTranslationQualitySummary({
         sourceLineCount: input.orchestrated.sourceLineCount,
@@ -3921,6 +3957,7 @@ export class TranslationService {
           fallbackType: strictOrchestrated.fallbackType || orchestrated.fallbackType,
           cloudContextChunkCount: orchestrated.cloudContextChunkCount + strictOrchestrated.cloudContextChunkCount,
           cloudContextFallbackCount: orchestrated.cloudContextFallbackCount + strictOrchestrated.cloudContextFallbackCount,
+          cloudBatching: strictOrchestrated.cloudBatching || orchestrated.cloudBatching,
           relaxedWholeRequestApplied:
             orchestrated.relaxedWholeRequestApplied || strictOrchestrated.relaxedWholeRequestApplied,
           relaxedWholeRequestFallback:

@@ -86,6 +86,25 @@ interface LocalTranslationBatchDebugInfo {
   maxDurationMs?: number | null;
 }
 
+interface CloudTranslationBatchDebugInfo {
+  source?: 'nvidia-hosted';
+  mode?: 'line_safe' | 'plain_ordered';
+  batchCount?: number;
+  lineCounts?: number[];
+  charCounts?: number[];
+  estimatedOutputTokens?: number[];
+  durationsMs?: number[];
+  maxLines?: number | null;
+  minLines?: number | null;
+  charBudget?: number | null;
+  maxOutputTokens?: number | null;
+  timeoutMs?: number | null;
+  stream?: boolean;
+  splitCount?: number;
+  totalDurationMs?: number | null;
+  maxDurationMs?: number | null;
+}
+
 interface TranslationPipelineDebug {
   requested?: {
     targetLanguageDescriptor?: string;
@@ -106,9 +125,10 @@ interface TranslationPipelineDebug {
     translationQualityMode?: 'plain_probe' | 'template_validated' | 'json_strict';
     qualityRetryCount?: number;
     strictRetrySucceeded?: boolean;
-    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window';
+    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window' | 'provider_batch';
     cloudContextChunkCount?: number;
     cloudContextFallbackCount?: number;
+    cloudBatching?: CloudTranslationBatchDebugInfo | null;
     localModelFamily?: string;
     localModelProfileId?: string | null;
     localPromptStyle?: string;
@@ -1025,6 +1045,11 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       return t('translation.msgCallingProviderCloudContext').replace('{provider}', providerLabel(cloudContextProviderMatch[1]));
     }
 
+    const hostedBatchProviderMatch = message.match(/^Calling translation provider \(([^)]+)\) with hosted batch\.\.\.$/);
+    if (hostedBatchProviderMatch) {
+      return t('translation.msgCallingProviderHostedBatch').replace('{provider}', providerLabel(hostedBatchProviderMatch[1]));
+    }
+
     const localBatchMatch = message.match(/^Translating local subtitle batch \((\d+)\/(\d+)\)\.\.\.$/);
     if (localBatchMatch) {
       return t('translation.msgTranslatingLocalBatch')
@@ -1044,6 +1069,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       return t('translation.msgTranslatingRemoteCloudContextBatch')
         .replace('{current}', remoteContextBatchMatch[1])
         .replace('{max}', remoteContextBatchMatch[2]);
+    }
+
+    const hostedBatchMatch = message.match(/^Translating hosted cloud subtitle batch \((\d+)\/(\d+)\)\.\.\.$/);
+    if (hostedBatchMatch) {
+      return t('translation.msgTranslatingHostedCloudBatch')
+        .replace('{current}', hostedBatchMatch[1])
+        .replace('{max}', hostedBatchMatch[2]);
     }
 
     const cloudSingleLineMatch = message.match(/^Retrying cloud translation as single line \((\d+)\)\.\.\.$/);
@@ -1106,6 +1138,8 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         return t('translation.strategyForcedAlignment');
       case 'context_window':
         return t('translation.strategyContextWindow');
+      case 'provider_batch':
+        return t('translation.strategyProviderBatch');
       default:
         return '-';
     }
@@ -1336,6 +1370,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (typeof applied.cloudContextChunkCount === 'number' && applied.cloudContextChunkCount > 0) {
       parts.push(`${t('translation.monitorCloudContextChunks')}: ${applied.cloudContextChunkCount}`);
     }
+    if (typeof applied.cloudBatching?.batchCount === 'number' && applied.cloudBatching.batchCount > 0) {
+      parts.push(`${t('translation.monitorCloudBatchCount')}: ${applied.cloudBatching.batchCount}`);
+    }
     if (inference?.acceleratorModel) {
       const memorySource = inference.memorySource ? ` / ${inference.memorySource}` : '';
       parts.push(`${t('monitor.runtime')}: ${inference.acceleratorModel}${memorySource}`);
@@ -1412,6 +1449,10 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             return t('translation.warnCloudContextSplitDepthExhausted');
           case 'cloud_context_single_line_fallback':
             return t('translation.warnCloudContextSingleLineFallback');
+          case 'cloud_provider_batch_translation_applied':
+            return t('translation.warnCloudProviderBatchTranslation');
+          case 'cloud_provider_batch_split_applied':
+            return t('translation.warnCloudProviderBatchSplit');
           case 'quality_issue_empty_output':
             return t('translation.warnQualityIssueEmptyOutput');
           case 'quality_issue_repetition_loop':
@@ -1662,6 +1703,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const translationSummary = React.useMemo(() => {
     if (!translationDebug?.requested) return null;
     const localBatching = translationDebug.applied?.localBatching || null;
+    const cloudBatching = translationDebug.applied?.cloudBatching || null;
     const localBatchCount =
       typeof localBatching?.batchCount === 'number'
         ? localBatching.batchCount
@@ -1687,6 +1729,26 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         ? `${t('translation.monitorLocalBatchCharBudget')}: ${localBatching.charBudget.toLocaleString()}`
         : null,
       localBatching?.fallbackReason ? `${t('translation.monitorLocalBatchFallback')}: ${formatTechnicalValue(localBatching.fallbackReason)}` : null,
+    ].filter(Boolean);
+    const cloudBatchBudgetParts = [
+      typeof cloudBatching?.maxLines === 'number'
+        ? `${t('translation.monitorLocalBatchMaxLines')}: ${cloudBatching.maxLines.toLocaleString()}`
+        : null,
+      typeof cloudBatching?.minLines === 'number'
+        ? `${t('translation.monitorCloudBatchMinLines')}: ${cloudBatching.minLines.toLocaleString()}`
+        : null,
+      typeof cloudBatching?.charBudget === 'number'
+        ? `${t('translation.monitorLocalBatchCharBudget')}: ${cloudBatching.charBudget.toLocaleString()}`
+        : null,
+      typeof cloudBatching?.maxOutputTokens === 'number'
+        ? `${t('translation.monitorCloudBatchMaxOutputTokens')}: ${cloudBatching.maxOutputTokens.toLocaleString()}`
+        : null,
+      typeof cloudBatching?.timeoutMs === 'number'
+        ? `${t('translation.monitorCloudBatchTimeout')}: ${formatElapsedTime(cloudBatching.timeoutMs)}`
+        : null,
+      typeof cloudBatching?.stream === 'boolean'
+        ? `${t('translation.monitorCloudBatchStream')}: ${cloudBatching.stream ? t('translation.monitorYes') : t('translation.monitorNo')}`
+        : null,
     ].filter(Boolean);
     return {
       targetLanguage: String(translationDebug.requested.targetLanguageDescriptor || langLabel || '').trim() || '-',
@@ -1724,6 +1786,17 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       localBatchTotalDuration: formatElapsedTime(localBatching?.totalDurationMs),
       localBatchMaxDuration: formatElapsedTime(localBatching?.maxDurationMs),
       localBatchBudget: localBatchBudgetParts.length > 0 ? localBatchBudgetParts.join(' · ') : '-',
+      cloudBatchCount:
+        typeof cloudBatching?.batchCount === 'number' ? String(cloudBatching.batchCount) : '-',
+      cloudBatchLineCounts: formatNumberList(cloudBatching?.lineCounts),
+      cloudBatchCharCounts: formatNumberList(cloudBatching?.charCounts),
+      cloudBatchEstimatedOutputTokens: formatNumberList(cloudBatching?.estimatedOutputTokens),
+      cloudBatchDurations: formatDurationList(cloudBatching?.durationsMs),
+      cloudBatchTotalDuration: formatElapsedTime(cloudBatching?.totalDurationMs),
+      cloudBatchMaxDuration: formatElapsedTime(cloudBatching?.maxDurationMs),
+      cloudBatchSplitCount:
+        typeof cloudBatching?.splitCount === 'number' ? String(cloudBatching.splitCount) : '-',
+      cloudBatchBudget: cloudBatchBudgetParts.length > 0 ? cloudBatchBudgetParts.join(' · ') : '-',
       strictJsonRepair:
         typeof translationDebug.requested.jsonLineRepairEnabled === 'boolean'
           ? (translationDebug.requested.jsonLineRepairEnabled ? t('translation.monitorYes') : t('translation.monitorNo'))
@@ -1872,10 +1945,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (translationSummary?.localBatchCount && translationSummary.localBatchCount !== '-') {
       parts.push(`${t('translation.monitorLocalBatchCount')}: ${translationSummary.localBatchCount}`);
     }
+    if (translationSummary?.cloudBatchCount && translationSummary.cloudBatchCount !== '-') {
+      parts.push(`${t('translation.monitorCloudBatchCount')}: ${translationSummary.cloudBatchCount}`);
+    }
     if (pipelineWarnings.length > 0) parts.push(`${t('translation.pipelineWarnings')} ${pipelineWarnings.length}`);
     if (pipelineErrors.length > 0) parts.push(`${t('translation.pipelineErrors')} ${pipelineErrors.length}`);
     return parts.join(' · ');
-  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.localBatchCount, translationSummary?.qualityMode]);
+  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.cloudBatchCount, translationSummary?.localBatchCount, translationSummary?.qualityMode]);
   const translationMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
     const badges: RunMonitorBadge[] = [];
     if (pipelineMode) {
@@ -1931,6 +2007,19 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                 { label: t('translation.monitorLocalBatchTotalDuration'), value: translationSummary.localBatchTotalDuration },
                 { label: t('translation.monitorLocalBatchMaxDuration'), value: translationSummary.localBatchMaxDuration },
                 { label: t('translation.monitorLocalBatchBudget'), value: translationSummary.localBatchBudget },
+              ]
+            : []),
+          ...(translationSummary.cloudBatchCount !== '-'
+            ? [
+                { label: t('translation.monitorCloudBatchCount'), value: translationSummary.cloudBatchCount },
+                { label: t('translation.monitorCloudBatchLines'), value: translationSummary.cloudBatchLineCounts },
+                { label: t('translation.monitorCloudBatchChars'), value: translationSummary.cloudBatchCharCounts },
+                { label: t('translation.monitorCloudBatchEstimatedOutput'), value: translationSummary.cloudBatchEstimatedOutputTokens },
+                { label: t('translation.monitorCloudBatchDurations'), value: translationSummary.cloudBatchDurations },
+                { label: t('translation.monitorCloudBatchTotalDuration'), value: translationSummary.cloudBatchTotalDuration },
+                { label: t('translation.monitorCloudBatchMaxDuration'), value: translationSummary.cloudBatchMaxDuration },
+                { label: t('translation.monitorCloudBatchSplitCount'), value: translationSummary.cloudBatchSplitCount },
+                { label: t('translation.monitorLocalBatchBudget'), value: translationSummary.cloudBatchBudget },
               ]
             : []),
           { label: t('translation.strictJsonRepairToggle'), value: translationSummary.strictJsonRepair },

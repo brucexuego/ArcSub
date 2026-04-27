@@ -1786,7 +1786,9 @@ export class AsrService {
 
     const attempted = this.toFiniteNumber(diagnostics?.attemptedSegmentCount, 0);
     const aligned = this.toFiniteNumber(diagnostics?.alignedSegmentCount, 0);
-    const avgConfidence = this.toFiniteNumber(diagnostics?.avgConfidence, Number.NaN);
+    const rawAvgConfidence = diagnostics?.avgConfidence;
+    const avgConfidence =
+      rawAvgConfidence == null ? Number.NaN : this.toFiniteNumber(rawAvgConfidence, Number.NaN);
     const alignedRatio = attempted > 0 ? aligned / attempted : 0;
 
     const minAlignedRatio = this.getNoSpaceVariantNumber(language, undefined, 'alignmentMinAppliedRatio', 0.22);

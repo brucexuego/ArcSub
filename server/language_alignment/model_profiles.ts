@@ -54,6 +54,17 @@ const alignmentProfiles: AlignmentModelProfile[] = [
     },
   },
   {
+    id: 'ko-kresnik-xlsr-korean-v1',
+    kind: 'ctc',
+    modelId: 'kresnik/wav2vec2-large-xlsr-korean',
+    sourceFormat: 'pytorch',
+    conversionMethod: 'openvino-ctc-asr-export',
+    runtimeLayout: 'asr-ctc',
+    envOverrides: {
+      OPENVINO_HF_CONVERTER_CTC_PRESERVE_PRECISION: '1',
+    },
+  },
+  {
     id: 'en-jonatas-xlsr53-english-v1',
     kind: 'ctc',
     modelId: 'jonatasgrosman/wav2vec2-large-xlsr-53-english',

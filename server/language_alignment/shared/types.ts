@@ -37,8 +37,14 @@ export type ForcedAlignmentSelectionContext = {
   localModelRuntime?: string | null;
 };
 
+export type ForcedAlignmentRunContext = ForcedAlignmentSelectionContext & {
+  profileId?: string | null;
+};
+
 export type ForcedAlignmentPlanConfig = {
   profileId: string;
+  fallbackProfileId?: string;
+  fallbackProgressLabel?: string;
   clipPaddingSec: number;
   minSegmentConfidence?: number;
   minRunConfidence?: number;
@@ -92,10 +98,10 @@ export interface ForcedAlignmentLanguageModule<
     sampleText?: string,
     context?: ForcedAlignmentSelectionContext
   ): ForcedAlignmentPlanConfig;
-  projectWordReadings(segment: TSegment, language?: string, sampleText?: string): Promise<TWord[] | null>;
-  extractAlignableRuns(words: TWord[]): AlignmentRun[];
-  normalizeAlignmentToken(value: string): string;
-  supportsAlignmentToken(value: string): boolean;
+  projectWordReadings(segment: TSegment, language?: string, sampleText?: string, context?: ForcedAlignmentRunContext): Promise<TWord[] | null>;
+  extractAlignableRuns(words: TWord[], context?: ForcedAlignmentRunContext): AlignmentRun[];
+  normalizeAlignmentToken(value: string, context?: ForcedAlignmentRunContext): string;
+  supportsAlignmentToken(value: string, context?: ForcedAlignmentRunContext): boolean;
 }
 
 export interface LocalAsrPromptModule {

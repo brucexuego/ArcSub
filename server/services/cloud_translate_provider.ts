@@ -42,6 +42,25 @@ function parseUrl(url: string) {
   return new URL(String(url || '').trim());
 }
 
+function isGitHubModelsHost(parsed: URL) {
+  return parsed.hostname.toLowerCase() === 'models.github.ai';
+}
+
+function buildGitHubModelsChatEndpoint(parsed: URL) {
+  const next = new URL(parsed.toString());
+  const parts = next.pathname
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const orgIndex = parts.findIndex((part) => part.toLowerCase() === 'orgs');
+  const org = orgIndex >= 0 ? parts[orgIndex + 1] : '';
+
+  next.pathname = org
+    ? `/orgs/${encodeURIComponent(org)}/inference/chat/completions`
+    : '/inference/chat/completions';
+  return next.toString();
+}
+
 export function redactUrlSecrets(rawUrl: string) {
   try {
     const parsed = new URL(rawUrl);
@@ -63,6 +82,7 @@ export function detectCloudTranslateProvider(url: string, modelName?: string): C
   if (host.includes('mistral.ai')) return 'mistral-chat';
   if (host.includes('cohere.com') || pathname.includes('/v2/chat')) return 'cohere-chat';
   if (host.includes('x.ai')) return 'xai-chat';
+  if (isGitHubModelsHost(parsed)) return 'openai-compatible';
 
   if (host.includes('generativelanguage.googleapis.com')) {
     if (pathname.includes('/openai/')) return 'openai-compatible';
@@ -146,6 +166,10 @@ export function buildCloudTranslateEndpointUrl(
   const parsed = parseUrl(rawUrl);
   const path = parsed.pathname.toLowerCase();
   const trimmedModel = String(model || '').trim();
+
+  if (provider === 'openai-compatible' && isGitHubModelsHost(parsed)) {
+    return buildGitHubModelsChatEndpoint(parsed);
+  }
 
   const ensureEndpointPath = (targetPath: string) => {
     const next = new URL(parsed.toString());
