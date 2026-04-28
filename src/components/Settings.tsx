@@ -80,11 +80,14 @@ interface LocalModelEntry {
     | 'optimum-export-openvino'
     | 'openvino-ctc-asr-export'
     | 'openvino-qwen3-asr-export'
+    | 'openvino-cohere-asr-export'
     | 'unsupported';
   runtimeLayout?:
     | 'asr-whisper'
     | 'asr-ctc'
     | 'asr-qwen3-official'
+    | 'asr-cohere-ov'
+    | 'asr-hf-transformers'
     | 'translate-llm'
     | 'translate-seq2seq'
     | 'translate-vlm';
@@ -92,8 +95,10 @@ interface LocalModelEntry {
     | 'openvino-whisper-node'
     | 'openvino-ctc-asr'
     | 'openvino-qwen3-asr'
-      | 'openvino-seq2seq-translate'
-      | 'openvino-llm-node';
+    | 'openvino-cohere-asr'
+    | 'hf-transformers-asr'
+    | 'openvino-seq2seq-translate'
+    | 'openvino-llm-node';
   runtimeHints?: LocalModelRuntimeHints;
   selected: boolean;
   installError?: string | null;
@@ -660,6 +665,9 @@ function formatLocalModelConversionMethod(language: Language, value?: LocalModel
   if (normalized === 'openvino-qwen3-asr-export') {
     return 'Qwen3-ASR Export';
   }
+  if (normalized === 'openvino-cohere-asr-export') {
+    return 'Cohere ASR Export';
+  }
   return normalized ? normalized : 'Unknown';
 }
 
@@ -668,6 +676,8 @@ function formatLocalModelRuntimeLayout(language: Language, value?: LocalModelEnt
   if (normalized === 'asr-whisper') return 'ASR / Whisper';
   if (normalized === 'asr-ctc') return 'ASR / CTC';
   if (normalized === 'asr-qwen3-official') return 'ASR / Qwen3 Official';
+  if (normalized === 'asr-cohere-ov') return 'ASR / Cohere OV';
+  if (normalized === 'asr-hf-transformers') return 'ASR / HF Transformers';
   if (normalized === 'translate-llm') return 'Translate / LLM';
   if (normalized === 'translate-seq2seq') return 'Translate / Seq2Seq';
   if (normalized === 'translate-vlm') return 'Translate / VLM';
@@ -679,6 +689,8 @@ function formatLocalModelRuntimeEngine(value?: LocalModelEntry['runtime']) {
   if (normalized === 'openvino-whisper-node') return 'OpenVINO Whisper';
   if (normalized === 'openvino-ctc-asr') return 'OpenVINO CTC-ASR';
   if (normalized === 'openvino-qwen3-asr') return 'OpenVINO Qwen3-ASR';
+  if (normalized === 'openvino-cohere-asr') return 'OpenVINO Cohere ASR';
+  if (normalized === 'hf-transformers-asr') return 'HF Transformers ASR';
   if (normalized === 'openvino-seq2seq-translate') return 'OpenVINO Seq2Seq';
   if (normalized === 'openvino-llm-node') return 'OpenVINO LLM';
   return normalized ? normalized : 'Unknown';

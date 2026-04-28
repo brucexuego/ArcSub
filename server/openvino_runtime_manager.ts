@@ -259,6 +259,7 @@ class OpenVinoAsrHelperClient {
       windowsHide: true,
       env: {
         ...process.env,
+        ...PathManager.getRuntimeTempEnv(),
         PYTHONIOENCODING: 'utf-8',
       },
     });
@@ -524,6 +525,7 @@ class OpenVinoTranslateHelperClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...PathManager.getRuntimeTempEnv(),
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
       },
@@ -756,6 +758,7 @@ class OpenVinoGenaiTranslateHelperClient {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...PathManager.getRuntimeTempEnv(),
         NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS || '1',
       },
     });
@@ -1225,6 +1228,17 @@ export class OpenvinoRuntimeManager {
     return this.isOpenvinoGpuAllocationLimitError(error) || this.isOpenvinoRemoteTensorNotImplementedError(error);
   }
 
+  private static isAsrHelperDeviceCompatible(
+    helperDevice: string | null | undefined,
+    requestedDevice: string,
+    allowCpuFallback: boolean
+  ) {
+    const normalizedHelperDevice = this.normalizeRequestedDevice(helperDevice, requestedDevice);
+    if (normalizedHelperDevice === requestedDevice) return true;
+    if (requestedDevice === 'AUTO' && normalizedHelperDevice) return true;
+    return allowCpuFallback && normalizedHelperDevice === 'CPU';
+  }
+
   private static shouldFallbackTranslateToCpu(requestedDevice: string, error: unknown) {
     const normalized = this.normalizeRequestedDevice(requestedDevice, 'AUTO');
     if (normalized === 'CPU') return false;
@@ -1255,18 +1269,22 @@ export class OpenvinoRuntimeManager {
     modelPath: string;
     requestedDevice: string;
     cacheDir: string;
-    helperRuntimeKind: 'qwen3_asr_official' | 'ctc_asr' | null;
+    helperRuntimeKind: 'qwen3_asr_official' | 'ctc_asr' | 'cohere_openvino_asr' | 'cohere_transformers_asr' | null;
   }) {
     const requestedDevice = this.normalizeRequestedDevice(input.requestedDevice, 'AUTO');
     const loadTimeoutMs =
-      input.helperRuntimeKind === 'qwen3_asr_official' || input.helperRuntimeKind === 'ctc_asr'
+      input.helperRuntimeKind === 'qwen3_asr_official' ||
+        input.helperRuntimeKind === 'ctc_asr' ||
+        input.helperRuntimeKind === 'cohere_openvino_asr' ||
+        input.helperRuntimeKind === 'cohere_transformers_asr'
         ? this.getEnvNumber('OPENVINO_HELPER_HEAVY_LOAD_TIMEOUT_MS', 600000, 30000, 1800000)
         : this.getEnvNumber('OPENVINO_HELPER_LOAD_TIMEOUT_MS', 180000, 1000, 1800000);
     try {
-      await OpenVinoAsrHelperClient.loadModel(input.modelPath, requestedDevice, input.cacheDir, loadTimeoutMs);
+      const loaded = await OpenVinoAsrHelperClient.loadModel(input.modelPath, requestedDevice, input.cacheDir, loadTimeoutMs);
+      const effectiveDevice = this.normalizeRequestedDevice(loaded?.device, requestedDevice);
       return {
-        effectiveDevice: requestedDevice,
-        fallbackToCpu: false,
+        effectiveDevice,
+        fallbackToCpu: effectiveDevice === 'CPU' && !['CPU', 'AUTO'].includes(requestedDevice),
       };
     } catch (error) {
       const serializationCacheError =
@@ -1436,6 +1454,7 @@ export class OpenvinoRuntimeManager {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,
+        ...PathManager.getRuntimeTempEnv(),
         NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS || '1',
       },
     });
@@ -2913,23 +2932,38 @@ export class OpenvinoRuntimeManager {
     const helperHealth = await OpenVinoAsrHelperClient.healthCheck(5000).catch(() => null);
     const expectedRuntimeKind = await this.detectHelperAsrRuntimeKind(input.modelPath);
     const isQwenRuntime = expectedRuntimeKind === 'qwen3_asr_official';
+    const isCohereRuntime =
+      expectedRuntimeKind === 'cohere_openvino_asr' || expectedRuntimeKind === 'cohere_transformers_asr';
+    const loadedRuntimeKind = String(helperHealth?.runtimeKind || '').trim().toLowerCase();
+    const expectedModelPath = path.resolve(input.modelPath).toLowerCase();
+    const loadedModelPath = helperHealth?.modelPath
+      ? path.resolve(String(helperHealth.modelPath)).toLowerCase()
+      : '';
     let effectiveDevice = requestedDevice;
     let fallbackToCpu = false;
     const helperModelLoaded =
       Boolean(helperHealth?.modelLoaded) &&
-      String(helperHealth?.modelPath || '').toLowerCase() === String(input.modelPath).toLowerCase() &&
-      (
-        this.normalizeRequestedDevice(helperHealth?.device, requestedDevice) === requestedDevice ||
-        (isQwenRuntime && this.normalizeRequestedDevice(helperHealth?.device, requestedDevice) === 'CPU')
-      ) &&
+      loadedModelPath === expectedModelPath &&
+      this.isAsrHelperDeviceCompatible(helperHealth?.device, requestedDevice, isQwenRuntime || isCohereRuntime) &&
       (!expectedRuntimeKind || String(helperHealth?.runtimeKind || '').trim().toLowerCase() === expectedRuntimeKind);
 
     if (helperModelLoaded) {
       effectiveDevice = this.normalizeRequestedDevice(helperHealth?.device, requestedDevice);
-      fallbackToCpu = effectiveDevice === 'CPU' && requestedDevice !== 'CPU';
+      fallbackToCpu = effectiveDevice === 'CPU' && !['CPU', 'AUTO'].includes(requestedDevice);
     }
 
     if (!helperModelLoaded) {
+      const needsIsolatedTransformersRestart =
+        Boolean(helperHealth) &&
+        (
+          expectedRuntimeKind === 'cohere_openvino_asr' ||
+          expectedRuntimeKind === 'cohere_transformers_asr' ||
+          loadedRuntimeKind === 'cohere_openvino_asr' ||
+          loadedRuntimeKind === 'cohere_transformers_asr'
+        );
+      if (needsIsolatedTransformersRestart) {
+        OpenVinoAsrHelperClient.forceShutdownNow('Restarting ASR helper for isolated Cohere ASR runtime.');
+      }
       const loaded = await this.loadAsrHelperModelWithFallback({
         modelPath: input.modelPath,
         requestedDevice,
@@ -2967,6 +3001,10 @@ export class OpenvinoRuntimeManager {
           ? 'qwen3-asr-official-helper'
           : resolvedRuntimeKind === 'ctc_asr'
             ? 'ctc-asr-helper'
+            : resolvedRuntimeKind === 'cohere_openvino_asr'
+              ? 'cohere-openvino-asr-helper'
+            : resolvedRuntimeKind === 'cohere_transformers_asr'
+              ? 'cohere-transformers-asr-helper'
             : 'whisper-helper';
       const rawChunks = Array.isArray(resultPayload?.chunks) ? resultPayload.chunks : [];
       const normalizedWords = this.normalizeWhisperWordTimings(Array.isArray(resultPayload?.words) ? resultPayload.words : []);
@@ -3022,7 +3060,10 @@ export class OpenvinoRuntimeManager {
               asrTimeoutMaxMs: timeoutDecision.maxMs,
             },
             promptIgnored:
-              runtimeKind === 'qwen3_asr_official' || runtimeKind === 'ctc_asr'
+              runtimeKind === 'qwen3_asr_official' ||
+              runtimeKind === 'ctc_asr' ||
+              runtimeKind === 'cohere_openvino_asr' ||
+              runtimeKind === 'cohere_transformers_asr'
                 ? Boolean(String(input.prompt || '').trim())
                 : undefined,
           },
@@ -3092,7 +3133,10 @@ export class OpenvinoRuntimeManager {
             asrTimeoutMaxMs: timeoutDecision.maxMs,
           },
           promptIgnored:
-            runtimeKind === 'qwen3_asr_official' || runtimeKind === 'ctc_asr'
+            runtimeKind === 'qwen3_asr_official' ||
+            runtimeKind === 'ctc_asr' ||
+            runtimeKind === 'cohere_openvino_asr' ||
+            runtimeKind === 'cohere_transformers_asr'
               ? Boolean(String(input.prompt || '').trim())
               : undefined,
         },
@@ -3774,8 +3818,12 @@ export class OpenvinoRuntimeManager {
       normalizedRuntime !== 'openvino-whisper-node' ? await this.detectHelperAsrRuntimeKind(input.modelPath) : null;
     const shouldUseHelperRuntime =
       normalizedRuntime === 'openvino-ctc-asr' ||
+      normalizedRuntime === 'openvino-cohere-asr' ||
+      normalizedRuntime === 'hf-transformers-asr' ||
       detectedHelperRuntimeKind === 'qwen3_asr_official' ||
-      detectedHelperRuntimeKind === 'ctc_asr';
+      detectedHelperRuntimeKind === 'ctc_asr' ||
+      detectedHelperRuntimeKind === 'cohere_openvino_asr' ||
+      detectedHelperRuntimeKind === 'cohere_transformers_asr';
     if (shouldUseHelperRuntime) {
       return this.transcribeWithAsrHelper(input);
     }
@@ -4006,6 +4054,7 @@ export class OpenvinoRuntimeManager {
         windowsHide: true,
         env: {
           ...process.env,
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONIOENCODING: 'utf-8',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -4069,6 +4118,12 @@ export class OpenvinoRuntimeManager {
     if (normalized === 'openvino-ctc-asr') {
       return 'openvino-ctc-asr';
     }
+    if (normalized === 'openvino-cohere-asr') {
+      return 'openvino-cohere-asr';
+    }
+    if (normalized === 'hf-transformers-asr') {
+      return 'hf-transformers-asr';
+    }
     if (normalized === 'openvino-whisper-node') {
       return 'openvino-whisper-node';
     }
@@ -4105,6 +4160,7 @@ export class OpenvinoRuntimeManager {
         windowsHide: true,
         env: {
           ...process.env,
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONIOENCODING: 'utf-8',
           PYTHONUTF8: '1',
         },
@@ -4184,6 +4240,7 @@ export class OpenvinoRuntimeManager {
         windowsHide: true,
         env: {
           ...process.env,
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONIOENCODING: 'utf-8',
           PYTHONUTF8: '1',
         },
@@ -4273,7 +4330,9 @@ export class OpenvinoRuntimeManager {
     return detailParts.length > 0 ? `\n${detailParts.join('\n\n')}` : '';
   }
 
-  private static async detectHelperAsrRuntimeKind(modelPath: string): Promise<'qwen3_asr_official' | 'ctc_asr' | null> {
+  private static async detectHelperAsrRuntimeKind(
+    modelPath: string
+  ): Promise<'qwen3_asr_official' | 'ctc_asr' | 'cohere_openvino_asr' | 'cohere_transformers_asr' | null> {
     const officialChecks = await Promise.all([
       fs.pathExists(path.join(modelPath, 'thinker', 'openvino_thinker_language_model.xml')),
       fs.pathExists(path.join(modelPath, 'thinker', 'openvino_thinker_audio_model.xml')),
@@ -4282,6 +4341,19 @@ export class OpenvinoRuntimeManager {
     ]);
     if (officialChecks.every(Boolean)) {
       return 'qwen3_asr_official';
+    }
+
+    const cohereOvChecks = await Promise.all([
+      fs.pathExists(path.join(modelPath, 'arcsub_cohere_asr_ov_config.json')),
+      fs.pathExists(path.join(modelPath, 'openvino_model.xml')),
+      fs.pathExists(path.join(modelPath, 'openvino_model.bin')),
+      fs.pathExists(path.join(modelPath, 'config.json')),
+      fs.pathExists(path.join(modelPath, 'preprocessor_config.json')),
+      fs.pathExists(path.join(modelPath, 'processor_config.json')),
+      fs.pathExists(path.join(modelPath, 'tokenizer_config.json')),
+    ]);
+    if (cohereOvChecks.every(Boolean)) {
+      return 'cohere_openvino_asr';
     }
 
     const ctcChecks = await Promise.all([
@@ -4296,6 +4368,20 @@ export class OpenvinoRuntimeManager {
       (await fs.pathExists(path.join(modelPath, 'vocab.txt')));
     if (ctcChecks.every(Boolean) && hasCtcTokenizer) {
       return 'ctc_asr';
+    }
+
+    const cohereChecks = await Promise.all([
+      fs.pathExists(path.join(modelPath, 'config.json')),
+      fs.pathExists(path.join(modelPath, 'preprocessor_config.json')),
+      fs.pathExists(path.join(modelPath, 'tokenizer_config.json')),
+      fs.pathExists(path.join(modelPath, 'model.safetensors')),
+      fs.pathExists(path.join(modelPath, 'configuration_cohere_asr.py')),
+      fs.pathExists(path.join(modelPath, 'modeling_cohere_asr.py')),
+      fs.pathExists(path.join(modelPath, 'processing_cohere_asr.py')),
+      fs.pathExists(path.join(modelPath, 'tokenization_cohere_asr.py')),
+    ]);
+    if (cohereChecks.every(Boolean)) {
+      return 'cohere_transformers_asr';
     }
 
     return null;
@@ -4341,6 +4427,7 @@ export class OpenvinoRuntimeManager {
         env: {
           ...process.env,
           ...(input.envOverrides || {}),
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONIOENCODING: 'utf-8',
         },
         stdio: ['ignore', 'pipe', 'pipe'],

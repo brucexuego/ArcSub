@@ -76,6 +76,32 @@ export class PathManager {
     return p;
   }
 
+  static getRuntimeTempEnv() {
+    const runtimePath = this.getRuntimePath();
+    const tmpPath = this.getTmpPath();
+    const huggingFaceCachePath = path.join(tmpPath, 'huggingface');
+    const pipCachePath = path.join(tmpPath, 'pip-cache');
+    const torchCachePath = path.join(tmpPath, 'torch-cache');
+    fs.ensureDirSync(huggingFaceCachePath);
+    fs.ensureDirSync(pipCachePath);
+    fs.ensureDirSync(torchCachePath);
+    return {
+      APP_RUNTIME_DIR: runtimePath,
+      APP_TMP_DIR: tmpPath,
+      ARCSUB_RUNTIME_DIR: runtimePath,
+      ARCSUB_RUNTIME_TMP_DIR: tmpPath,
+      HF_HOME: huggingFaceCachePath,
+      HF_HUB_CACHE: path.join(huggingFaceCachePath, 'hub'),
+      HF_XET_CACHE: path.join(huggingFaceCachePath, 'xet'),
+      HF_DATASETS_CACHE: path.join(huggingFaceCachePath, 'datasets'),
+      PIP_CACHE_DIR: pipCachePath,
+      TORCH_HOME: torchCachePath,
+      TMPDIR: tmpPath,
+      TEMP: tmpPath,
+      TMP: tmpPath,
+    };
+  }
+
   static getLocalPath() {
     const p = this.resolveConfiguredDir('APP_LOCAL_DIR', 'local');
     fs.ensureDirSync(p);

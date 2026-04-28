@@ -3,6 +3,7 @@ import fs from "fs-extra";
 import { PathManager } from "./path_manager.js";
 import { AudioProcessor } from "./audio_processor.js";
 import { OpenvinoBackend } from "./openvino_backend.js";
+import { ResourceManager } from "./services/resource_manager.js";
 
 export class SpeakerEmbeddingService {
   private static compiledModel: any | null = null;
@@ -14,6 +15,15 @@ export class SpeakerEmbeddingService {
    */
   static async init() {
     if (this.compiledModel) return;
+    if (!(await fs.pathExists(this.modelPath))) {
+      try {
+        await ResourceManager.ensureBaselineAsset("speaker_embedding");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[Embedding] Could not download speaker embedding model, continuing with existing fallback behavior: ${message}`);
+      }
+    }
+
     if (!(await fs.pathExists(this.modelPath))) {
       throw new Error(`[Embedding] model not found: ${this.modelPath}`);
     }

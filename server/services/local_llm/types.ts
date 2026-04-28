@@ -57,7 +57,9 @@ export interface LocalOpenvinoOfficialBaseline {
     | 'openvino-seq2seq-translate'
     | 'openvino-whisper-node'
     | 'openvino-ctc-asr'
-    | 'openvino-qwen3-asr';
+    | 'openvino-qwen3-asr'
+    | 'openvino-cohere-asr'
+    | 'hf-transformers-asr';
   taskFamily: 'translate' | 'asr' | 'vlm';
   baselineConfidence: LocalOpenvinoBaselineConfidence;
   sourceLinks: string[];

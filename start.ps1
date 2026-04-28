@@ -23,6 +23,39 @@ function Write-Info($message) {
   Write-Host "[ArcSub] $message" -ForegroundColor Gray
 }
 
+function Start-BrowserLauncher([string]$Url, [switch]$Disabled) {
+  if ($Disabled) { return }
+
+  $launcherScript = @'
+param([string]$Url)
+$ErrorActionPreference = "SilentlyContinue"
+$deadline = (Get-Date).AddMinutes(2)
+while ((Get-Date) -lt $deadline) {
+  try {
+    $response = Invoke-WebRequest -UseBasicParsing -Uri ($Url.TrimEnd('/') + "/api/runtime/readiness") -TimeoutSec 5
+    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
+      Start-Process $Url | Out-Null
+      exit 0
+    }
+  } catch {
+  }
+  Start-Sleep -Seconds 2
+}
+exit 0
+'@
+
+  Start-Job -ScriptBlock {
+    param($scriptText, $targetUrl)
+    $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("arcsub-dev-open-browser-" + [Guid]::NewGuid().ToString("N") + ".ps1")
+    [System.IO.File]::WriteAllText($tempPath, $scriptText, [System.Text.UTF8Encoding]::new($false))
+    try {
+      & powershell -ExecutionPolicy Bypass -File $tempPath -Url $targetUrl | Out-Null
+    } finally {
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+  } -ArgumentList $launcherScript, $Url | Out-Null
+}
+
 function Get-DotEnvValue([string]$Key, [string]$Default = "") {
   $envPath = Join-Path $scriptPath ".env"
   if (-not (Test-Path $envPath)) { return $Default }
@@ -57,7 +90,7 @@ function Resolve-LogsDir([string]$WorkspaceRoot) {
   return Join-Path (Join-Path $WorkspaceRoot $runtimeDir) "logs"
 }
 
-function Kill-ProcessTree([int]$ProcessId) {
+function Stop-ProcessTree([int]$ProcessId) {
   if ($ProcessId -le 0) { return }
   if ($DryRun) {
     Write-Info "DryRun: would kill PID $ProcessId"
@@ -126,7 +159,7 @@ try {
   if ($killPids.Count -gt 0) {
     Write-Step "Stopping stale processes: $($killPids -join ', ')"
     foreach ($procId in $killPids) {
-      Kill-ProcessTree -ProcessId $procId
+      Stop-ProcessTree -ProcessId $procId
     }
     if (-not $DryRun) {
       Start-Sleep -Milliseconds 800
@@ -140,8 +173,10 @@ try {
     exit 0
   }
 
+  $browserUrl = "http://127.0.0.1:3000"
+  Start-BrowserLauncher -Url $browserUrl -Disabled:$NoBrowser
   if (-not $NoBrowser) {
-    Start-Process "http://127.0.0.1:3000" | Out-Null
+    Write-Info "Browser will open after dev server is ready: $browserUrl"
   }
 
   $logsDir = Resolve-LogsDir -WorkspaceRoot $scriptPath
@@ -154,7 +189,7 @@ try {
 
   Write-Step "Starting dev server (npm run dev)..."
   Write-Info "Dev log: $logPath"
-  npm run dev 2>&1 | Tee-Object -FilePath $logPath
+  cmd /d /s /c "npm run dev < NUL" 2>&1 | Tee-Object -FilePath $logPath
   if ($LASTEXITCODE -ne 0) {
     throw "Dev server exited with code $LASTEXITCODE. Check log: $logPath"
   }

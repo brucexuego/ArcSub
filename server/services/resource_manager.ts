@@ -6,15 +6,47 @@ import unzipper from 'unzipper';
 import { pipeline } from 'stream/promises';
 import { getBundledToolPath, isCommandAvailable } from '../runtime_tools.js';
 
+interface BaselineAssetDefinition {
+  id: string;
+  targetRelativePath: string;
+  sourceUrl: string;
+  category: string;
+}
+
+export interface BaselineAssetEnsureResult {
+  id: string;
+  category: string;
+  path: string;
+  sourceUrl: string;
+  installed: boolean;
+  skipped: boolean;
+  ready: boolean;
+}
+
 export class ResourceManager {
   private static HF_BASE = 'https://huggingface.co';
   private static readonly ENSURE_TOOLS_FAILURE_COOLDOWN_MS = 120_000;
   private static readonly DOWNLOAD_MAX_REDIRECTS = 5;
   private static readonly DOWNLOAD_MAX_RETRIES = 3;
   private static readonly DOWNLOAD_TIMEOUT_MS = 45_000;
+  private static readonly DEFAULT_REQUIRED_ASSETS = [
+    {
+      id: 'silero-vad',
+      targetRelativePath: 'silero_vad.onnx',
+      sourceUrl: 'https://huggingface.co/onnx-community/silero-vad/resolve/main/onnx/model.onnx?download=true',
+      category: 'vad',
+    },
+    {
+      id: 'ecapa-tdnn',
+      targetRelativePath: 'ecapa-tdnn.onnx',
+      sourceUrl: 'https://huggingface.co/AXERA-TECH/3D-Speaker/resolve/main/ecapa-tdnn.onnx?download=true',
+      category: 'speaker_embedding',
+    },
+  ];
   private static deployManifestCache: any | null = null;
   private static ensureToolsTask: Promise<void> | null = null;
   private static ensureToolsFailure: { message: string; until: number } | null = null;
+  private static baselineAssetTasks = new Map<string, Promise<BaselineAssetEnsureResult>>();
 
   private static async getDeployManifest() {
     if (this.deployManifestCache) return this.deployManifestCache;
@@ -23,6 +55,99 @@ export class ResourceManager {
       ? await fs.readJson(manifestPath).catch(() => null)
       : null;
     return this.deployManifestCache;
+  }
+
+  private static async getRequiredBaselineAssets(manifestOverride?: any) {
+    const manifest = manifestOverride ?? (await this.getDeployManifest());
+    const manifestAssets = Array.isArray(manifest?.assets?.required) ? manifest.assets.required : [];
+    const byId = new Map<string, BaselineAssetDefinition>();
+
+    for (const rawAsset of [...this.DEFAULT_REQUIRED_ASSETS, ...manifestAssets]) {
+      const id = String(rawAsset?.id || '').trim();
+      const targetRelativePath = String(rawAsset?.targetRelativePath || '').trim();
+      const sourceUrl = String(rawAsset?.sourceUrl || '').trim();
+      const category = String(rawAsset?.category || '').trim();
+      if (!id || !targetRelativePath || !sourceUrl || !category) continue;
+      byId.set(id, { id, targetRelativePath, sourceUrl, category });
+    }
+
+    return [...byId.values()];
+  }
+
+  private static async getRequiredBaselineAsset(identifier: string, manifestOverride?: any) {
+    const normalized = String(identifier || '').trim();
+    const assets = await this.getRequiredBaselineAssets(manifestOverride);
+    const asset = assets.find(
+      (candidate) =>
+        candidate.id === normalized ||
+        candidate.category === normalized ||
+        candidate.targetRelativePath === normalized
+    );
+    if (!asset) {
+      throw new Error(`Unknown baseline asset: ${identifier}`);
+    }
+    return asset;
+  }
+
+  static async ensureBaselineAsset(identifier: string, manifestOverride?: any): Promise<BaselineAssetEnsureResult> {
+    const asset = await this.getRequiredBaselineAsset(identifier, manifestOverride);
+    const destination = path.join(PathManager.getModelsPath(), asset.targetRelativePath);
+
+    if (await fs.pathExists(destination)) {
+      return {
+        id: asset.id,
+        category: asset.category,
+        path: destination,
+        sourceUrl: asset.sourceUrl,
+        installed: false,
+        skipped: true,
+        ready: true,
+      };
+    }
+
+    const taskKey = `${asset.id}:${asset.targetRelativePath}:${asset.sourceUrl}`;
+    const existingTask = this.baselineAssetTasks.get(taskKey);
+    if (existingTask) return existingTask;
+
+    const task = (async () => {
+      console.log(`[ResourceManager] Downloading baseline asset ${asset.id} -> ${destination}`);
+      await this.downloadWithRedirect(asset.sourceUrl, destination);
+      return {
+        id: asset.id,
+        category: asset.category,
+        path: destination,
+        sourceUrl: asset.sourceUrl,
+        installed: true,
+        skipped: false,
+        ready: true,
+      };
+    })()
+      .catch(async (error: any) => {
+        await fs.remove(`${destination}.part`).catch(() => {});
+        throw error;
+      })
+      .finally(() => {
+        this.baselineAssetTasks.delete(taskKey);
+      });
+
+    this.baselineAssetTasks.set(taskKey, task);
+    return task;
+  }
+
+  static async ensureRequiredBaselineAssets(manifestOverride?: any) {
+    const installed: Array<{ id: string; path: string }> = [];
+    const skipped: Array<{ id: string; path: string }> = [];
+
+    for (const asset of await this.getRequiredBaselineAssets(manifestOverride)) {
+      const result = await this.ensureBaselineAsset(asset.id, manifestOverride);
+      if (result.installed) {
+        installed.push({ id: result.id, path: result.path });
+      } else {
+        skipped.push({ id: result.id, path: result.path });
+      }
+    }
+
+    return { installed, skipped };
   }
 
   static async ensureTools() {

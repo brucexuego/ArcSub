@@ -15,6 +15,16 @@ const CUSTOM_REPO_SEEDS: RepoSeed[] = [
     runtimeFamily: 'openvino-whisper-node',
     taskFamily: 'asr',
   },
+  {
+    repoId: 'reazon-research/japanese-wav2vec2-large-rs35kh',
+    runtimeFamily: 'openvino-ctc-asr',
+    taskFamily: 'asr',
+  },
+  {
+    repoId: 'CohereLabs/cohere-transcribe-03-2026',
+    runtimeFamily: 'openvino-cohere-asr',
+    taskFamily: 'asr',
+  },
 ];
 
 const LLM_REPO_IDS = [
@@ -338,6 +348,24 @@ function createExactOrFamilyBaseline(seed: RepoSeed): LocalOpenvinoOfficialBasel
     };
   }
 
+  if (/reazon-research\/japanese-wav2vec2-large-rs35kh/i.test(normalized)) {
+    return {
+      ...base,
+      baselineConfidence: 'partial_public',
+      sourceLinks: buildModelLinks(seed.repoId, true, true),
+      officialAsr: {
+        task: 'transcribe',
+        returnTimestamps: false,
+        chunkLengthSec: 30,
+        samplingRate: 16000,
+      },
+      notes: [
+        'Reazon Japanese Wav2Vec2 RS35KH is a Transformers AutoModelForCTC ASR model for Japanese.',
+        'ArcSub exports it through the OpenVINO CTC ASR runtime path and treats it as a Japanese transcription model.',
+      ],
+    };
+  }
+
   if (/qwen\/qwen3-asr-/i.test(normalized)) {
     return {
       ...base,
@@ -351,6 +379,25 @@ function createExactOrFamilyBaseline(seed: RepoSeed): LocalOpenvinoOfficialBasel
       notes: [
         'Qwen3-ASR fallback baseline: runtime family is inferred from ArcSub local integration.',
         'Verify helper/runtime-specific generation details when this model is first tuned.',
+      ],
+    };
+  }
+
+  if (/coherelabs\/cohere-transcribe-03-2026/i.test(normalized)) {
+    return {
+      ...base,
+      runtimeFamily: 'openvino-cohere-asr',
+      baselineConfidence: 'gated_partial',
+      officialAsr: {
+        task: 'transcribe',
+        returnTimestamps: false,
+        chunkLengthSec: 30,
+        samplingRate: 16000,
+      },
+      sourceLinks: buildModelLinks(seed.repoId, true, true),
+      notes: [
+        'Cohere Transcribe 03 2026 is a gated ASR model that ArcSub converts into a Cohere-specific OpenVINO INT8 runtime.',
+        'It requires an explicit source language, does not provide native timestamps/diarization, and benefits from VAD before transcription.',
       ],
     };
   }
@@ -373,6 +420,7 @@ function inferFallbackTaskFamily(repoId: string): TaskFamily {
 function inferFallbackRuntimeFamily(repoId: string): RuntimeFamily {
   const normalized = normalizeRepoId(repoId);
   if (/qwen\/qwen3-asr-/.test(normalized)) return 'openvino-qwen3-asr';
+  if (/coherelabs\/cohere-transcribe-03-2026/.test(normalized)) return 'openvino-cohere-asr';
   if (/wav2vec2|hubert|wavlm|unispeech|sew|data2vec-audio/.test(normalized)) return 'openvino-ctc-asr';
   if (/(^|\/)(flan-|mt5|umt5|t5|bart|mbart|marian|pegasus|m2m100|m2m_100|fsmt|prophetnet)/.test(normalized)) {
     return 'openvino-seq2seq-translate';

@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import { PathManager } from "./path_manager.js";
 import { OpenvinoBackend } from "./openvino_backend.js";
 import { resolveToolCommand } from "./runtime_tools.js";
+import { ResourceManager } from "./services/resource_manager.js";
 
 export interface SpeechSegment {
   start: number;
@@ -429,11 +430,21 @@ export class VadService {
 
   static async init() {
     if (this.compiledModel || this.session) return;
-    if (!(await fs.pathExists(this.modelPath))) {
+    let openvinoModelPath = await this.getOpenvinoModelPath();
+    if (!openvinoModelPath && !(await fs.pathExists(this.modelPath))) {
+      try {
+        await ResourceManager.ensureBaselineAsset("vad");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[VAD] Could not download baseline VAD model, continuing with existing fallback behavior: ${message}`);
+      }
+      openvinoModelPath = await this.getOpenvinoModelPath();
+    }
+
+    if (!openvinoModelPath && !(await fs.pathExists(this.modelPath))) {
       throw new Error(`[VAD] model not found: ${this.modelPath}`);
     }
 
-    const openvinoModelPath = await this.getOpenvinoModelPath();
     let openvinoError: unknown = null;
     if (openvinoModelPath) {
       try {

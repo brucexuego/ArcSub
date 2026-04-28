@@ -40,6 +40,22 @@ const LOCAL_ASR_MODEL_PROFILES: LocalAsrModelProfile[] = [
     repoIds: ['MediaTek-Research/Breeze-ASR-25'],
     notes: ['Breeze ASR 25 is fine-tuned from Whisper large-v2; uses the local Whisper OpenVINO runtime path.'],
   },
+  {
+    id: 'local-reazon-japanese-wav2vec2-large-rs35kh',
+    repoIds: ['reazon-research/japanese-wav2vec2-large-rs35kh'],
+    notes: [
+      'Japanese CTC ASR model fine-tuned on ReazonSpeech; uses the OpenVINO CTC ASR runtime path after export.',
+      'This is an ASR transcription model, not the default Japanese forced-alignment profile.',
+    ],
+  },
+  {
+    id: 'local-cohere-transcribe-03-2026',
+    repoIds: ['CohereLabs/cohere-transcribe-03-2026'],
+    notes: [
+      'Cohere Transcribe is a gated 2B ASR model with 14 supported languages; ArcSub exports it to a Cohere-specific OpenVINO INT8 runtime.',
+      'It requires an explicit source language and does not provide native timestamps or diarization.',
+    ],
+  },
 ];
 
 const MODEL_PROFILE_BY_REPO_ID = new Map<string, LocalAsrModelProfile>();
