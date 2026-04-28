@@ -32,8 +32,8 @@ const LOCAL_ASR_MODEL_PROFILES: LocalAsrModelProfile[] = [
     repoIds: ['Qwen/Qwen3-ASR-0.6B'],
   },
   {
-    id: 'local-qwen3-asr-4b',
-    repoIds: ['Qwen/Qwen3-ASR-4B'],
+    id: 'local-qwen3-asr-1-7b',
+    repoIds: ['Qwen/Qwen3-ASR-1.7B'],
   },
   {
     id: 'local-breeze-asr-26',

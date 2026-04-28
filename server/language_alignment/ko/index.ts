@@ -12,6 +12,7 @@ import type {
   LanguageAlignmentPack,
   LocalAsrPromptModule,
   NoSpaceLanguageConfig,
+  ForcedAlignmentRunContext,
 } from '../shared/types.js';
 
 type KoreanConfig = NoSpaceLanguageConfig & {
@@ -40,6 +41,7 @@ type KoreanConfig = NoSpaceLanguageConfig & {
   cjkSparseMediumCoverageRatio?: number;
   cjkSparseMediumCoverageMaxWords?: number;
   localAsrPrompt?: string;
+  fallbackAlignmentProfileId?: string;
 };
 
 const config = loadJsonFromModuleDir<KoreanConfig>(import.meta.url, 'config.json');
@@ -73,11 +75,36 @@ function normalizeKoreanAlignmentToken(value: string) {
     .trim();
 }
 
+function normalizeKoreanHangulAlignmentToken(value: string) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, '')
+    .replace(/[^\uac00-\ud7af]+/gu, '')
+    .trim();
+}
+
+function shouldUseHangulAlignment(context?: ForcedAlignmentRunContext) {
+  return String(context?.profileId || config.alignmentProfileId || '').trim() === 'ko-kresnik-xlsr-korean-v1';
+}
+
+function normalizeKoreanProfileToken(value: string, context?: ForcedAlignmentRunContext) {
+  return shouldUseHangulAlignment(context)
+    ? normalizeKoreanHangulAlignmentToken(value)
+    : normalizeKoreanAlignmentToken(value);
+}
+
 function romanizeKoreanToken(value: string) {
   const source = String(value || '').normalize('NFKC').trim();
   if (!source) return '';
   const romanized = romanizeHangul(source);
   return normalizeKoreanAlignmentToken(romanized);
+}
+
+function projectKoreanToken(value: string, context?: ForcedAlignmentRunContext) {
+  return shouldUseHangulAlignment(context)
+    ? normalizeKoreanHangulAlignmentToken(value)
+    : romanizeKoreanToken(value);
 }
 
 function getWordEnd(word: AlignmentWordLike) {
@@ -86,12 +113,12 @@ function getWordEnd(word: AlignmentWordLike) {
   return Number(word?.start_ts) || 0;
 }
 
-function projectKoreanWords(segment: AlignmentSegmentLike<AlignmentWordLike>) {
+function projectKoreanWords(segment: AlignmentSegmentLike<AlignmentWordLike>, context?: ForcedAlignmentRunContext) {
   if (Array.isArray(segment?.words) && segment.words.length > 0) {
     const cloned = segment.words
       .map((word) => ({
         ...word,
-        normalizedReading: romanizeKoreanToken(word.text || ''),
+        normalizedReading: projectKoreanToken(word.text || '', context),
       }))
       .filter((word) => String(word.normalizedReading || '').length > 0);
     return cloned.length > 0 ? cloned : null;
@@ -110,7 +137,7 @@ function projectKoreanWords(segment: AlignmentSegmentLike<AlignmentWordLike>) {
   if (!(Number.isFinite(start) && Number.isFinite(end) && end > start)) {
     return tokens.map((token) => ({
       text: token,
-      normalizedReading: romanizeKoreanToken(token),
+      normalizedReading: projectKoreanToken(token, context),
       start_ts: 0,
       end_ts: 0,
     }));
@@ -125,7 +152,7 @@ function projectKoreanWords(segment: AlignmentSegmentLike<AlignmentWordLike>) {
     const tokenEnd = start + ((end - start) * cursor) / totalChars;
     return {
       text: token,
-      normalizedReading: romanizeKoreanToken(token),
+      normalizedReading: projectKoreanToken(token, context),
       start_ts: Number(tokenStart.toFixed(3)),
       end_ts: Number(tokenEnd.toFixed(3)),
     };
@@ -181,6 +208,8 @@ const forcedAlignment: ForcedAlignmentLanguageModule = {
   ): ForcedAlignmentPlanConfig {
     return {
       profileId: config.alignmentProfileId,
+      fallbackProfileId: config.fallbackAlignmentProfileId,
+      fallbackProgressLabel: 'Korean MMS forced alignment fallback',
       clipPaddingSec: config.clipPaddingSec,
       minRunConfidence: config.minRunConfidence,
       minOverallConfidence: config.minOverallConfidence,
@@ -188,16 +217,21 @@ const forcedAlignment: ForcedAlignmentLanguageModule = {
       progressLabel: config.progressLabel,
     };
   },
-  async projectWordReadings(segment: AlignmentSegmentLike<AlignmentWordLike>) {
-    const words = projectKoreanWords(segment);
+  async projectWordReadings(
+    segment: AlignmentSegmentLike<AlignmentWordLike>,
+    _language?: string,
+    _sampleText?: string,
+    context?: ForcedAlignmentRunContext
+  ) {
+    const words = projectKoreanWords(segment, context);
     return Array.isArray(words) && words.length > 0 ? words : null;
   },
-  extractAlignableRuns(words: AlignmentWordLike[]) {
+  extractAlignableRuns(words: AlignmentWordLike[], context?: ForcedAlignmentRunContext) {
     const annotated = words
       .map((word, index) => ({
         index,
         word,
-        normalized: normalizeKoreanAlignmentToken(word?.normalizedReading || word?.text || ''),
+        normalized: normalizeKoreanProfileToken(word?.normalizedReading || word?.text || '', context),
       }))
       .filter((item) => item.normalized.length > 0);
 
@@ -233,9 +267,11 @@ const forcedAlignment: ForcedAlignmentLanguageModule = {
 
     return runs.filter((run) => run.tokens.some((token) => token.normalized.length >= config.minRunTokenLength));
   },
-  normalizeAlignmentToken: normalizeKoreanAlignmentToken,
-  supportsAlignmentToken(value: string) {
-    return /[A-Za-z0-9]/.test(String(value || ''));
+  normalizeAlignmentToken: normalizeKoreanProfileToken,
+  supportsAlignmentToken(value: string, context?: ForcedAlignmentRunContext) {
+    return shouldUseHangulAlignment(context)
+      ? /[\uac00-\ud7af]/u.test(String(value || ''))
+      : /[A-Za-z0-9]/.test(String(value || ''));
   },
 };
 

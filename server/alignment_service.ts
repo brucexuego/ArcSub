@@ -206,7 +206,41 @@ export class AlignmentService {
       };
     }
 
-    const primaryResult = await this.runCtcAlignmentPlan({
+    let primaryResult: AlignmentResult;
+    try {
+      primaryResult = await this.runCtcAlignmentPlan({
+        audioPath,
+        language,
+        transcriptText,
+        segments,
+        plan,
+        startedAt,
+        onProgress: options.onProgress,
+        signal: options.signal,
+      });
+    } catch (primaryError) {
+      const configuredFallbackProfileId = String(plan.config.fallbackProfileId || '').trim();
+      if (!configuredFallbackProfileId || configuredFallbackProfileId === plan.profile.id) {
+        throw primaryError;
+      }
+      return this.runFallbackCtcAlignmentPlan({
+        audioPath,
+        language,
+        transcriptText,
+        segments,
+        plan,
+        startedAt,
+        onProgress: options.onProgress,
+        signal: options.signal,
+        fallbackProfileId: configuredFallbackProfileId,
+        reason: 'failed',
+      });
+    }
+    const fallbackProfileId = this.resolveFallbackProfileId(language, plan, primaryResult.diagnostics);
+    if (!fallbackProfileId) {
+      return primaryResult;
+    }
+    const fallbackResult = await this.runFallbackCtcAlignmentPlan({
       audioPath,
       language,
       transcriptText,
@@ -215,38 +249,80 @@ export class AlignmentService {
       startedAt,
       onProgress: options.onProgress,
       signal: options.signal,
+      fallbackProfileId,
+      reason: 'quality_gate',
     });
-    if (!this.shouldRetryZhCnWithMmsFallback(language, plan, primaryResult.diagnostics)) {
-      return primaryResult;
-    }
+    return fallbackResult.applied ? fallbackResult : primaryResult;
+  }
 
-    const mmsProfile = AlignmentModelProfileRegistry.get('mms-300m-forced-aligner-v1');
-    if (!mmsProfile || mmsProfile.kind !== 'ctc') {
-      return primaryResult;
+  private static async runFallbackCtcAlignmentPlan(input: {
+    audioPath: string;
+    language: string;
+    transcriptText: string;
+    segments: AlignmentStructuredSegment[];
+    plan: ResolvedAlignmentPlan;
+    startedAt: number;
+    onProgress?: (msg: string) => void;
+    signal?: AbortSignal;
+    fallbackProfileId: string;
+    reason: 'failed' | 'quality_gate';
+  }) {
+    const fallbackProfile = AlignmentModelProfileRegistry.get(input.fallbackProfileId);
+    if (!fallbackProfile || fallbackProfile.kind !== 'ctc') {
+      throw new Error(`Unknown fallback alignment profile: ${input.fallbackProfileId}`);
     }
 
     const fallbackPlan: ResolvedAlignmentPlan = {
-      ...plan,
-      profile: mmsProfile,
+      ...input.plan,
+      profile: fallbackProfile,
       mode: 'ctc',
       config: {
-        ...plan.config,
-        profileId: mmsProfile.id,
-        progressLabel: `${plan.config.progressLabel} (MMS fallback)`,
+        ...input.plan.config,
+        profileId: fallbackProfile.id,
+        fallbackProfileId: undefined,
+        progressLabel:
+          input.plan.config.fallbackProgressLabel || `${input.plan.config.progressLabel} fallback`,
       },
     };
-    options.onProgress?.('zh-CN specialized aligner produced no aligned segments, retrying with MMS fallback.');
+    const reasonLabel = input.reason === 'failed' ? 'failed' : 'did not meet alignment gate';
+    input.onProgress?.(
+      `${input.plan.config.progressLabel} ${reasonLabel}, retrying with ${fallbackProfile.modelId}.`
+    );
     const fallbackResult = await this.runCtcAlignmentPlan({
-      audioPath,
-      language,
-      transcriptText,
-      segments,
+      audioPath: input.audioPath,
+      language: input.language,
+      transcriptText: input.transcriptText,
+      segments: input.segments,
       plan: fallbackPlan,
-      startedAt,
-      onProgress: options.onProgress,
-      signal: options.signal,
+      startedAt: input.startedAt,
+      onProgress: input.onProgress,
+      signal: input.signal,
     });
-    return fallbackResult.applied ? fallbackResult : primaryResult;
+    return fallbackResult;
+  }
+
+  private static resolveFallbackProfileId(
+    language: string,
+    plan: ResolvedAlignmentPlan,
+    diagnostics: AlignmentDiagnostics
+  ) {
+    if (this.shouldRetryConfiguredFallback(plan, diagnostics)) {
+      return String(plan.config.fallbackProfileId || '').trim() || null;
+    }
+    if (this.shouldRetryZhCnWithMmsFallback(language, plan, diagnostics)) {
+      return 'mms-300m-forced-aligner-v1';
+    }
+    return null;
+  }
+
+  private static shouldRetryConfiguredFallback(plan: ResolvedAlignmentPlan, diagnostics: AlignmentDiagnostics) {
+    const fallbackProfileId = String(plan.config.fallbackProfileId || '').trim();
+    return Boolean(
+      fallbackProfileId &&
+        fallbackProfileId !== plan.profile.id &&
+        diagnostics.attemptedSegmentCount > 0 &&
+        !diagnostics.applied
+    );
   }
 
   private static shouldRetryZhCnWithMmsFallback(
@@ -299,11 +375,16 @@ export class AlignmentService {
     let confidenceCount = 0;
 
     const languageModule = input.plan.module as ForcedAlignmentLanguageModule;
+    const runContext = {
+      language: input.language,
+      sampleText: input.transcriptText,
+      profileId: input.plan.profile.id,
+    };
     const nextSegments: AlignmentStructuredSegment[] = [];
     for (let index = 0; index < input.segments.length; index += 1) {
       this.throwIfAborted(input.signal);
       const segment = this.cloneSegment(input.segments[index]);
-      const projectedWords = await languageModule.projectWordReadings(segment, input.language, input.transcriptText);
+      const projectedWords = await languageModule.projectWordReadings(segment, input.language, input.transcriptText, runContext);
       const words =
         projectedWords && projectedWords.length > 0
           ? projectedWords
@@ -321,7 +402,7 @@ export class AlignmentService {
         continue;
       }
 
-      const runs = languageModule.extractAlignableRuns(words) as LanguageAlignmentRun[];
+      const runs = languageModule.extractAlignableRuns(words, runContext) as LanguageAlignmentRun[];
       if (runs.length === 0) {
         skippedSegments += 1;
         nextSegments.push(segment);

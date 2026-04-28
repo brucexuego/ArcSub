@@ -22,6 +22,19 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
   return merged;
 }
 
+function isGitHubModelsEndpoint(endpointUrl: string) {
+  try {
+    return new URL(endpointUrl).hostname.toLowerCase() === 'models.github.ai';
+  } catch {
+    return false;
+  }
+}
+
+function hasHeader(headers: Record<string, string>, target: string) {
+  const targetLower = target.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === targetLower);
+}
+
 function parseOpenAiLikeContent(content: any) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -112,6 +125,14 @@ function buildOpenAiChatRequest(input: CanonicalLlmRequest, context: LlmAdapterC
     ? (input.providerHints?.requestBody as Record<string, unknown>)
     : null;
   const finalBody = requestBody ? deepMerge(body, requestBody) : body;
+  if (isGitHubModelsEndpoint(context.endpointUrl)) {
+    if (!hasHeader(headers, 'X-GitHub-Api-Version')) {
+      headers['X-GitHub-Api-Version'] = '2026-03-10';
+    }
+    if (!hasHeader(headers, 'Accept') && finalBody.stream !== true) {
+      headers.Accept = 'application/vnd.github+json';
+    }
+  }
 
   return {
     method: 'POST' as const,

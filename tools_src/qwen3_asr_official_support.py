@@ -39,8 +39,10 @@ _HELPER_MODULE: Any = None
 
 def _ensure_qwen_runtime_packages(include_torch: bool = True) -> None:
     requirements: dict[str, str] = {
+        "nagisa": "nagisa==0.2.11",
         "nncf": "nncf",
         "openvino": "openvino",
+        "soynlp": "soynlp==0.0.493",
         "transformers": "transformers",
         "huggingface_hub": "huggingface_hub",
         "sentencepiece": "sentencepiece",

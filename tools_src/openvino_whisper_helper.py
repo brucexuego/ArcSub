@@ -394,9 +394,9 @@ class RuntimeState:
     def _resolve_qwen_official_chunk_seconds(self) -> int:
         raw = str(os.environ.get("OPENVINO_QWEN3_ASR_MAX_CHUNK_SEC", "")).strip()
         try:
-            value = int(raw) if raw else 120
+            value = int(raw) if raw else 30
         except Exception:
-            value = 120
+            value = 30
         return max(15, min(value, 1200))
 
     def _split_qwen_official_audio(self, audio: Any, sample_rate: int, max_chunk_sec: int) -> list[tuple[Any, float]]:
@@ -521,15 +521,29 @@ class RuntimeState:
     ) -> Dict[str, Any]:
         aligner = self._get_qwen_official_forced_aligner()
         effective_languages = [lang or "English" for lang in chunk_languages]
-        results = aligner.align(
-            audio=[(chunk_audio, 16000) for chunk_audio, _ in chunk_inputs],
-            text=chunk_texts,
-            language=effective_languages,
-        )
         words = []
-        for (chunk_audio, offset_sec), aligned in zip(chunk_inputs, results or []):
-            del chunk_audio
-            for item in getattr(aligned, "items", []) or []:
+        errors = []
+        aligned_chunk_count = 0
+
+        for index, ((chunk_audio, offset_sec), chunk_text, language) in enumerate(
+            zip(chunk_inputs, chunk_texts, effective_languages)
+        ):
+            try:
+                results = aligner.align(
+                    audio=[(chunk_audio, 16000)],
+                    text=[chunk_text],
+                    language=[language],
+                )
+            except Exception as error:
+                errors.append({"chunk": index, "error": str(error)})
+                continue
+            finally:
+                del chunk_audio
+
+            aligned_items = getattr((results or [None])[0], "items", []) or []
+            if aligned_items:
+                aligned_chunk_count += 1
+            for item in aligned_items:
                 text = str(getattr(item, "text", "") or "").strip()
                 if not text:
                     continue
@@ -549,6 +563,9 @@ class RuntimeState:
                 os.environ.get("OPENVINO_QWEN3_ASR_FORCED_ALIGNER_REPO") or "Qwen/Qwen3-ForcedAligner-0.6B"
             ).strip(),
             "language": effective_languages[0] if effective_languages else "",
+            "alignedChunkCount": aligned_chunk_count,
+            "skippedChunkCount": len(errors),
+            "errors": errors[:5],
         }
 
     def _transcribe_qwen_official(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -612,6 +629,9 @@ class RuntimeState:
                     "modelId": aligned["modelId"],
                     "language": aligned["language"],
                     "applied": len(words) > 0,
+                    "alignedChunkCount": aligned.get("alignedChunkCount", 0),
+                    "skippedChunkCount": aligned.get("skippedChunkCount", 0),
+                    "errors": aligned.get("errors", []),
                 }
             except Exception as error:
                 forced_alignment = {
