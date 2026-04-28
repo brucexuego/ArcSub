@@ -85,15 +85,28 @@ SOURCE_ARTIFACT_SUFFIXES = (
 
 HF_SNAPSHOT_IGNORE_PATTERNS = [
     "optimizer.bin",
+    "checkpoint-*/optimizer.bin",
     "scheduler.bin",
+    "checkpoint-*/scheduler.bin",
     "random_states_*.pkl",
+    "checkpoint-*/random_states_*.pkl",
     "rng_state*.pth",
+    "checkpoint-*/rng_state*.pth",
     "trainer_state.json",
+    "checkpoint-*/trainer_state.json",
     "training_args.bin",
+    "checkpoint-*/training_args.bin",
     "events.out.tfevents.*",
+    "checkpoint-*/events.out.tfevents.*",
     "runs/*",
-    "checkpoint-*/*",
+    "checkpoint-*/runs/*",
     "whisper-github/*/*.pt",
+]
+
+ENCODER_DECODER_OV_XML_FILES = [
+    "openvino_encoder_model.xml",
+    "openvino_decoder_model.xml",
+    "openvino_decoder_with_past_model.xml",
 ]
 
 
@@ -555,10 +568,7 @@ def _export_transformers_from_tf(repo_id: str, output_dir: pathlib.Path, runtime
         processor.save_pretrained(output_dir)
 
         tokenizers = _generate_openvino_tokenizers(output_dir, output_dir, trust_remote_code)
-        compressed = _compress_exported_ov_files(
-            output_dir,
-            ["openvino_encoder_model.xml", "openvino_decoder_model.xml"],
-        )
+        compressed = _compress_exported_ov_files(output_dir, ENCODER_DECODER_OV_XML_FILES)
         return {
             "mode": "ovmodel-from-tf-whisper",
             "repoId": repo_id,
@@ -593,10 +603,7 @@ def _export_transformers_from_tf(repo_id: str, output_dir: pathlib.Path, runtime
         tokenizer.save_pretrained(output_dir)
 
         tokenizers = _generate_openvino_tokenizers(output_dir, output_dir, trust_remote_code)
-        compressed = _compress_exported_ov_files(
-            output_dir,
-            ["openvino_encoder_model.xml", "openvino_decoder_model.xml"],
-        )
+        compressed = _compress_exported_ov_files(output_dir, ENCODER_DECODER_OV_XML_FILES)
         return {
             "mode": "ovmodel-from-tf-seq2seq",
             "repoId": repo_id,
@@ -671,11 +678,13 @@ def _export_whisper_asr_with_ovmodel(repo_id: str, output_dir: pathlib.Path, tru
         processor.save_pretrained(output_dir)
 
         tokenizers = _generate_openvino_tokenizers(output_dir, output_dir, trust_remote_code)
+        compressed = _compress_exported_ov_files(output_dir, ENCODER_DECODER_OV_XML_FILES)
         return {
             "mode": "ovmodel-for-speech-seq2seq-export",
             "repoId": repo_id,
             "snapshotFiles": _iter_repo_files(snapshot_dir),
             "generatedFiles": _iter_repo_files(output_dir),
+            "compressedFiles": compressed,
             "tokenizerFiles": tokenizers,
         }
 
