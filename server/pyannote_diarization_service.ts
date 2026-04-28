@@ -173,6 +173,7 @@ export class PyannoteDiarizationService {
         cwd: workspaceRoot,
         env: {
           ...process.env,
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONUTF8: '1',
           PYTHONIOENCODING: 'utf-8',
         },
@@ -295,6 +296,7 @@ export class PyannoteDiarizationService {
         cwd: workspaceRoot,
         env: {
           ...process.env,
+          ...PathManager.getRuntimeTempEnv(),
           PYTHONUTF8: '1',
           PYTHONIOENCODING: 'utf-8',
         },
@@ -324,6 +326,7 @@ export class PyannoteDiarizationService {
           cwd: workspaceRoot,
           env: {
             ...process.env,
+            ...PathManager.getRuntimeTempEnv(),
             PYTHONUTF8: '1',
             PYTHONIOENCODING: 'utf-8',
           },
@@ -355,6 +358,7 @@ export class PyannoteDiarizationService {
           cwd: workspaceRoot,
           env: {
             ...process.env,
+            ...PathManager.getRuntimeTempEnv(),
             PYTHONUTF8: '1',
             PYTHONIOENCODING: 'utf-8',
           },

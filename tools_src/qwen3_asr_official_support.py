@@ -31,7 +31,61 @@ THINKER_AUDIO_ENCODER_NAME = "openvino_thinker_audio_encoder_model.xml"
 THINKER_EMBEDDING_NAME = "openvino_thinker_embedding_model.xml"
 
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[1]
-_CACHE_ROOT = _WORKSPACE_ROOT / "runtime" / "local" / "qwen3_asr_support"
+
+
+def _resolve_workspace_path(raw_path: str | None, fallback: Path) -> Path:
+    value = str(raw_path or "").strip()
+    if not value:
+        return fallback.resolve()
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = _WORKSPACE_ROOT / candidate
+    return candidate.resolve()
+
+
+def _resolve_runtime_root() -> Path:
+    return _resolve_workspace_path(
+        os.environ.get("ARCSUB_RUNTIME_DIR") or os.environ.get("APP_RUNTIME_DIR"),
+        _WORKSPACE_ROOT / "runtime",
+    )
+
+
+def _resolve_runtime_tmp_root() -> Path:
+    root = _resolve_workspace_path(
+        os.environ.get("ARCSUB_RUNTIME_TMP_DIR") or os.environ.get("APP_TMP_DIR"),
+        _resolve_runtime_root() / "tmp",
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _resolve_runtime_local_root() -> Path:
+    root = _resolve_workspace_path(os.environ.get("APP_LOCAL_DIR"), _resolve_runtime_root() / "local")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+_RUNTIME_TMP_ROOT = _resolve_runtime_tmp_root()
+_CACHE_ROOT = _resolve_runtime_local_root() / "qwen3_asr_support"
+_TMP_ROOT = _RUNTIME_TMP_ROOT / "qwen3_asr_support"
+_HF_CACHE_ROOT = _RUNTIME_TMP_ROOT / "huggingface"
+_PIP_CACHE_ROOT = _RUNTIME_TMP_ROOT / "pip-cache"
+_TORCH_CACHE_ROOT = _RUNTIME_TMP_ROOT / "torch-cache"
+_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+_HF_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+_PIP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+_TORCH_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+for _env_key in ("TMPDIR", "TEMP", "TMP"):
+    os.environ[_env_key] = str(_RUNTIME_TMP_ROOT)
+os.environ["ARCSUB_RUNTIME_TMP_DIR"] = str(_RUNTIME_TMP_ROOT)
+os.environ["APP_TMP_DIR"] = str(_RUNTIME_TMP_ROOT)
+os.environ["HF_HOME"] = str(_HF_CACHE_ROOT)
+os.environ["HF_HUB_CACHE"] = str(_HF_CACHE_ROOT / "hub")
+os.environ["HF_XET_CACHE"] = str(_HF_CACHE_ROOT / "xet")
+os.environ["HF_DATASETS_CACHE"] = str(_HF_CACHE_ROOT / "datasets")
+os.environ["PIP_CACHE_DIR"] = str(_PIP_CACHE_ROOT)
+os.environ["TORCH_HOME"] = str(_TORCH_CACHE_ROOT)
+tempfile.tempdir = str(_RUNTIME_TMP_ROOT)
 _LEGACY_LOCAL_CACHE_ROOT = _WORKSPACE_ROOT / "local" / "qwen3_asr_support"
 _LEGACY_TMP_CACHE_ROOT = _WORKSPACE_ROOT / "tmp" / "qwen3_asr_support"
 _HELPER_MODULE: Any = None
@@ -72,7 +126,8 @@ def _normalize_torch_dtype_name(raw: str | None) -> str:
 
 def _download_to_file(url: str, destination: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = destination.with_suffix(destination.suffix + ".part")
+    _TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    temp_path = _TMP_ROOT / f"{destination.name}.{os.getpid()}.part"
     with urllib.request.urlopen(url) as response, temp_path.open("wb") as handle:
         shutil.copyfileobj(response, handle)
     temp_path.replace(destination)
@@ -86,7 +141,8 @@ def _download_and_extract_github_archive(repo: str, commit: str, destination: Pa
 
     archive_url = f"https://github.com/{repo}/archive/{commit}.zip"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_root = Path(tempfile.mkdtemp(prefix="arcsub_qwen3asr_", dir=str(destination.parent)))
+    _TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    temp_root = Path(tempfile.mkdtemp(prefix="arcsub_qwen3asr_", dir=str(_TMP_ROOT)))
     archive_path = temp_root / "repo.zip"
     extracted_root = temp_root / "extract"
     try:

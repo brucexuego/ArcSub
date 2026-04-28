@@ -226,6 +226,7 @@ function inspectPythonCommand(candidate: PythonCommandCandidate) {
     encoding: 'utf8',
     env: {
       ...process.env,
+      ...PathManager.getRuntimeTempEnv(),
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
     },

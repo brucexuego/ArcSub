@@ -7,6 +7,8 @@ export type LocalModelRuntime =
   | 'openvino-whisper-node'
   | 'openvino-ctc-asr'
   | 'openvino-qwen3-asr'
+  | 'openvino-cohere-asr'
+  | 'hf-transformers-asr'
   | 'openvino-seq2seq-translate'
   | 'openvino-llm-node';
 export type LocalModelInstallMode = 'hf-direct' | 'hf-qwen3-asr-convert' | 'hf-auto-convert';
@@ -27,11 +29,14 @@ export type LocalModelConversionMethod =
   | 'optimum-export-openvino'
   | 'openvino-ctc-asr-export'
   | 'openvino-qwen3-asr-export'
+  | 'openvino-cohere-asr-export'
   | 'unsupported';
 export type LocalModelRuntimeLayout =
   | 'asr-whisper'
   | 'asr-ctc'
   | 'asr-qwen3-official'
+  | 'asr-cohere-ov'
+  | 'asr-hf-transformers'
   | 'translate-llm'
   | 'translate-seq2seq'
   | 'translate-vlm';
@@ -198,6 +203,36 @@ const QWEN3_ASR_OFFICIAL_CONVERTED_OPTIONAL_FILES = [
   'added_tokens.json',
   'special_tokens_map.json',
   'tokenizer.json',
+];
+
+const HF_TRANSFORMERS_ASR_REQUIRED_FILES = [
+  'config.json',
+  'generation_config.json',
+  'preprocessor_config.json',
+  'processor_config.json',
+  'tokenizer_config.json',
+  'special_tokens_map.json',
+  'tokenizer.json',
+  'tokenizer.model',
+  'model.safetensors',
+  'configuration_cohere_asr.py',
+  'modeling_cohere_asr.py',
+  'processing_cohere_asr.py',
+  'tokenization_cohere_asr.py',
+];
+
+const COHERE_ASR_OV_REQUIRED_FILES = [
+  'config.json',
+  'generation_config.json',
+  'preprocessor_config.json',
+  'processor_config.json',
+  'tokenizer_config.json',
+  'special_tokens_map.json',
+  'tokenizer.json',
+  'tokenizer.model',
+  'openvino_model.xml',
+  'openvino_model.bin',
+  'arcsub_cohere_asr_ov_config.json',
 ];
 
 const TRANSLATE_SHARED_REQUIRED_FILES = [
@@ -432,6 +467,10 @@ function getRequiredFilesForRuntimeLayout(layout: LocalModelRuntimeLayout, fileS
       return fileSet
         ? pickExistingFiles(fileSet, [...getOfficialQwen3AsrConvertedRequiredFiles(fileSet), ...QWEN3_ASR_OFFICIAL_CONVERTED_OPTIONAL_FILES])
         : getOfficialQwen3AsrConvertedRequiredFiles();
+    case 'asr-cohere-ov':
+      return fileSet ? pickExistingFiles(fileSet, COHERE_ASR_OV_REQUIRED_FILES) : [...COHERE_ASR_OV_REQUIRED_FILES];
+    case 'asr-hf-transformers':
+      return fileSet ? pickExistingFiles(fileSet, HF_TRANSFORMERS_ASR_REQUIRED_FILES) : [...HF_TRANSFORMERS_ASR_REQUIRED_FILES];
     case 'translate-vlm':
       return fileSet
         ? pickExistingFiles(
@@ -465,6 +504,31 @@ function inferRuntimeLayoutFromArtifacts(type: LocalModelType, fileSet: Set<stri
       QWEN3_ASR_OFFICIAL_CONVERTED_BASE_REQUIRED_FILES.every((file) => fileSet.has(file));
     if (hasOfficialQwenLayout) {
       return 'asr-qwen3-official';
+    }
+
+    const hasCohereOvLayout =
+      fileSet.has('arcsub_cohere_asr_ov_config.json') &&
+      fileSet.has('openvino_model.xml') &&
+      fileSet.has('openvino_model.bin') &&
+      fileSet.has('config.json') &&
+      fileSet.has('preprocessor_config.json') &&
+      fileSet.has('processor_config.json') &&
+      fileSet.has('tokenizer_config.json');
+    if (hasCohereOvLayout) {
+      return 'asr-cohere-ov';
+    }
+
+    const hasCohereTransformersLayout =
+      fileSet.has('configuration_cohere_asr.py') &&
+      fileSet.has('modeling_cohere_asr.py') &&
+      fileSet.has('processing_cohere_asr.py') &&
+      fileSet.has('tokenization_cohere_asr.py') &&
+      fileSet.has('model.safetensors') &&
+      fileSet.has('config.json') &&
+      fileSet.has('preprocessor_config.json') &&
+      fileSet.has('tokenizer_config.json');
+    if (hasCohereTransformersLayout) {
+      return 'asr-hf-transformers';
     }
 
     const hasCtcTokenizerFile = CTC_ASR_TOKENIZER_FILES.some((file) => fileSet.has(file));
@@ -502,6 +566,10 @@ function inferRuntimeFromLayout(layout: LocalModelRuntimeLayout | null): LocalMo
       return 'openvino-ctc-asr';
     case 'asr-qwen3-official':
       return 'openvino-qwen3-asr';
+    case 'asr-cohere-ov':
+      return 'openvino-cohere-asr';
+    case 'asr-hf-transformers':
+      return 'hf-transformers-asr';
     case 'translate-llm':
       return 'openvino-llm-node';
     case 'translate-seq2seq':
@@ -520,6 +588,8 @@ function normalizeRuntimeValue(input: any, runtimeLayout: LocalModelRuntimeLayou
   if (
     input.runtime === 'openvino-whisper-node' ||
     input.runtime === 'openvino-ctc-asr' ||
+    input.runtime === 'openvino-cohere-asr' ||
+    input.runtime === 'hf-transformers-asr' ||
     input.runtime === 'openvino-seq2seq-translate' ||
     input.runtime === 'openvino-llm-node'
   ) {
@@ -549,6 +619,7 @@ function inferDirectSourceFormatFromArtifacts(fileSet: Set<string>) {
 
 function inferSourceFormatFromStoredDefinition(input: any, fileSet: Set<string>): LocalModelSourceFormat {
   const runtimeLayout = inferRuntimeLayoutFromStoredDefinition(input);
+  if (runtimeLayout === 'asr-hf-transformers') return 'pytorch';
   if (runtimeLayout) return 'openvino-ir';
   return inferDirectSourceFormatFromArtifacts(fileSet);
 }
@@ -563,12 +634,16 @@ function inferConversionMethodFromStoredDefinition(
       input?.conversionMethod === 'optimum-export-openvino' ||
       input?.conversionMethod === 'openvino-ctc-asr-export' ||
       input?.conversionMethod === 'openvino-qwen3-asr-export' ||
+      input?.conversionMethod === 'openvino-cohere-asr-export' ||
       input?.conversionMethod === 'unsupported') {
     return input.conversionMethod;
   }
 
   if (input?.installMode === 'hf-qwen3-asr-convert') {
     return 'openvino-qwen3-asr-export';
+  }
+  if (runtimeLayout === 'asr-hf-transformers') {
+    return 'direct-download';
   }
   if (input?.installMode === 'hf-auto-convert') {
     if (
@@ -672,6 +747,9 @@ function guessRuntimeLayoutFromMetadata(
       return 'asr-qwen3-official';
     }
     const modelType = String(metadata?.config?.model_type || '').trim().toLowerCase();
+    if (modelType === 'cohere_asr') {
+      return 'asr-cohere-ov';
+    }
     const architectures = Array.isArray(metadata?.config?.architectures)
       ? metadata!.config!.architectures!.map((item) => String(item || '').trim().toLowerCase())
       : [];
@@ -735,6 +813,12 @@ function inferConversionMethodFromHfMetadata(
   }
   if (type === 'asr' && isOfficialQwen3AsrRepo(repoId)) {
     return 'openvino-qwen3-asr-export';
+  }
+  if (type === 'asr' && runtimeLayout === 'asr-hf-transformers') {
+    return 'direct-download';
+  }
+  if (type === 'asr' && runtimeLayout === 'asr-cohere-ov') {
+    return 'openvino-cohere-asr-export';
   }
   if (sourceFormat === 'gguf') {
     return 'unsupported';
@@ -919,6 +1003,20 @@ export const BUILTIN_LOCAL_MODELS: LocalModelDefinition[] = [
     ],
     runtime: 'openvino-whisper-node',
     installMode: 'hf-direct',
+    device: 'AUTO',
+  }),
+  createBuiltInModel({
+    id: 'local_asr_coherelabs_cohere_transcribe_03_2026',
+    type: 'asr',
+    displayName: 'Cohere Transcribe 03 2026',
+    repoId: 'CohereLabs/cohere-transcribe-03-2026',
+    localSubdir: 'openvino/CohereLabs--cohere-transcribe-03-2026-int8-ov',
+    requiredFiles: [...COHERE_ASR_OV_REQUIRED_FILES],
+    runtime: 'openvino-cohere-asr',
+    runtimeLayout: 'asr-cohere-ov',
+    sourceFormat: 'pytorch',
+    conversionMethod: 'openvino-cohere-asr-export',
+    installMode: 'hf-auto-convert',
     device: 'AUTO',
   }),
   createBuiltInModel({
@@ -1266,6 +1364,8 @@ export function sanitizeLocalModelDefinition(input: any): LocalModelDefinition |
     input.runtimeLayout === 'asr-whisper' ||
     input.runtimeLayout === 'asr-ctc' ||
     input.runtimeLayout === 'asr-qwen3-official' ||
+    input.runtimeLayout === 'asr-cohere-ov' ||
+    input.runtimeLayout === 'asr-hf-transformers' ||
     input.runtimeLayout === 'translate-llm' ||
     input.runtimeLayout === 'translate-seq2seq' ||
     input.runtimeLayout === 'translate-vlm'
@@ -1413,6 +1513,7 @@ export function inferLocalModelDefinitionFromHf(
   const fileSet = new Set(allFiles);
   const pipelineTag = String(metadata?.pipeline_tag || '').trim().toLowerCase();
   const tags = normalizeTagSet(metadata);
+  const modelType = String(metadata?.config?.model_type || '').trim().toLowerCase();
 
   if (type === 'translate' && (pipelineTag === 'automatic-speech-recognition' || tags.has('automatic-speech-recognition'))) {
     throw new Error('This Hugging Face model is an ASR model, not a translation model.');
@@ -1421,12 +1522,18 @@ export function inferLocalModelDefinitionFromHf(
     throw new Error('This Hugging Face model is not tagged as an ASR model.');
   }
 
-  const directDefinition = buildDefinitionFromArtifactFiles(type, repoId, fileSet, {
-    installMode: 'hf-direct',
-    sourceFormat: 'openvino-ir',
-    conversionMethod: 'direct-download',
-    source: 'custom',
-  });
+  const directDefinition =
+    modelType === 'cohere_asr' && type === 'asr'
+      ? null
+      : buildDefinitionFromArtifactFiles(type, repoId, fileSet, {
+          installMode: 'hf-direct',
+          sourceFormat:
+            inferRuntimeLayoutFromArtifacts(type, fileSet) === 'asr-hf-transformers'
+              ? 'pytorch'
+              : inferDirectSourceFormatFromArtifacts(fileSet),
+          conversionMethod: 'direct-download',
+          source: 'custom',
+        });
   if (directDefinition) {
     return directDefinition;
   }
@@ -1477,7 +1584,12 @@ export function inferLocalModelDefinitionFromHf(
     requiredFiles: getRequiredFilesForRuntimeLayout(runtimeLayout),
     runtime,
     runtimeLayout,
-    installMode: conversionMethod === 'openvino-qwen3-asr-export' ? 'hf-qwen3-asr-convert' : 'hf-auto-convert',
+    installMode:
+      conversionMethod === 'openvino-qwen3-asr-export'
+        ? 'hf-qwen3-asr-convert'
+        : conversionMethod === 'direct-download'
+          ? 'hf-direct'
+          : 'hf-auto-convert',
     sourceFormat,
     conversionMethod,
     device: 'AUTO',

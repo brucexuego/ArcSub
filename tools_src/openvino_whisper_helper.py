@@ -11,10 +11,14 @@ JSON IPC over stdin/stdout (one JSON object per line):
 from __future__ import annotations
 
 import gc
+import importlib
+import importlib.util
 import json
+import math
 import os
 import pathlib
 import re
+import subprocess
 import time
 import sys
 import traceback
@@ -39,6 +43,124 @@ from qwen3_asr_official_support import (
 )
 
 
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    numbers = [int(part) for part in re.findall(r"\d+", str(value or ""))[:3]]
+    while len(numbers) < 3:
+        numbers.append(0)
+    return numbers[0], numbers[1], numbers[2]
+
+
+def _runtime_root() -> pathlib.Path:
+    configured = (
+        os.environ.get("ARCSUB_RUNTIME_DIR")
+        or os.environ.get("APP_RUNTIME_DIR")
+        or os.environ.get("APP_RUNTIME_PATH")
+    )
+    if configured:
+        return pathlib.Path(configured).expanduser().resolve()
+    return (SCRIPT_DIR.parent / "runtime").resolve()
+
+
+def _module_loaded_from(target_dir: pathlib.Path, module_name: str) -> bool:
+    module = sys.modules.get(module_name)
+    if module is None:
+        return False
+    locations = []
+    origin = getattr(module, "__file__", None)
+    if origin:
+        locations.append(origin)
+    spec = getattr(module, "__spec__", None)
+    if spec is not None:
+        spec_origin = getattr(spec, "origin", None)
+        if spec_origin:
+            locations.append(spec_origin)
+        search_locations = getattr(spec, "submodule_search_locations", None) or []
+        locations.extend([str(item) for item in search_locations])
+    if not locations:
+        return False
+    try:
+        target = target_dir.resolve()
+        return any(pathlib.Path(item).resolve().is_relative_to(target) for item in locations)
+    except Exception:
+        return False
+
+
+def _clear_loaded_module_tree(prefixes: tuple[str, ...]) -> None:
+    for name in list(sys.modules.keys()):
+        if name in prefixes or any(name.startswith(f"{prefix}.") for prefix in prefixes):
+            sys.modules.pop(name, None)
+
+
+def _cohere_transformers_site() -> pathlib.Path:
+    return _runtime_root() / "tools" / "python" / "cohere-transcribe-03-2026-site"
+
+
+def _cohere_transformers_ready(target_dir: pathlib.Path) -> bool:
+    target_text = str(target_dir)
+    if target_text not in sys.path:
+        sys.path.insert(0, target_text)
+        importlib.invalidate_caches()
+
+    if "transformers" in sys.modules and not _module_loaded_from(target_dir, "transformers"):
+        _clear_loaded_module_tree(("transformers", "huggingface_hub", "tokenizers", "safetensors"))
+
+    try:
+        import transformers  # pylint: disable=import-error,import-outside-toplevel
+    except Exception:
+        return False
+
+    return _module_loaded_from(target_dir, "transformers") and _version_tuple(
+        getattr(transformers, "__version__", "0.0.0")
+    ) >= (5, 4, 0)
+
+
+def _ensure_cohere_transformers_runtime() -> pathlib.Path:
+    target_dir = _cohere_transformers_site()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if _cohere_transformers_ready(target_dir):
+        return target_dir
+
+    if not str(os.environ.get("ARCSUB_AUTO_INSTALL_PYTHON_DEPS", "1")).strip().lower() in (
+        "",
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
+        raise ModuleNotFoundError(
+            "Cohere Transcribe requires isolated Python packages under runtime/tools/python: "
+            "transformers>=5.4.0, protobuf, sentencepiece."
+        )
+
+    sys.stderr.write(
+        "[arcsub-python-bootstrap] Installing isolated Python packages for Cohere Transcribe ASR: "
+        "transformers>=5.4.0, protobuf, sentencepiece\n"
+    )
+    sys.stderr.flush()
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--target",
+            str(target_dir),
+            "transformers>=5.4.0",
+            "protobuf",
+            "sentencepiece",
+        ],
+        check=True,
+    )
+    _clear_loaded_module_tree(("transformers", "huggingface_hub", "tokenizers", "safetensors", "google.protobuf"))
+    importlib.invalidate_caches()
+    if not _cohere_transformers_ready(target_dir):
+        raise ModuleNotFoundError(
+            f"Cohere Transcribe isolated Transformers runtime is unavailable after installation: {target_dir}"
+        )
+    return target_dir
+
+
 def _normalize_whisper_language(raw: Optional[str]) -> Optional[str]:
     value = str(raw or "").strip()
     if not value:
@@ -61,6 +183,18 @@ def _normalize_whisper_language(raw: Optional[str]) -> Optional[str]:
 
 
 def _detect_runtime_kind(model_dir: pathlib.Path) -> str:
+    cohere_ov_required = [
+        "arcsub_cohere_asr_ov_config.json",
+        "config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "tokenizer_config.json",
+        "openvino_model.xml",
+        "openvino_model.bin",
+    ]
+    if all((model_dir / name).exists() for name in cohere_ov_required):
+        return "cohere_openvino_asr"
+
     ctc_required = [
         "config.json",
         "preprocessor_config.json",
@@ -85,6 +219,18 @@ def _detect_runtime_kind(model_dir: pathlib.Path) -> str:
     has_official_template = (model_dir / "chat_template.jinja").exists() or (model_dir / "chat_template.json").exists()
     if has_official_template and all((model_dir / name).exists() for name in official_qwen_base_required):
         return "qwen3_asr_official"
+    cohere_required = [
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "model.safetensors",
+        "configuration_cohere_asr.py",
+        "modeling_cohere_asr.py",
+        "processing_cohere_asr.py",
+        "tokenization_cohere_asr.py",
+    ]
+    if all((model_dir / name).exists() for name in cohere_required):
+        return "cohere_transformers_asr"
     if (model_dir / "openvino_encoder_model.xml").exists():
         return "whisper"
     raise RuntimeError(f"Unsupported ASR model layout: {model_dir}")
@@ -141,6 +287,11 @@ class RuntimeState:
     pipeline: Any = None
     ctc_model: Any = None
     ctc_processor: Any = None
+    hf_asr_model: Any = None
+    hf_asr_processor: Any = None
+    cohere_ov_compiled_model: Any = None
+    cohere_ov_marker: Optional[Dict[str, Any]] = None
+    torch: Any = None
     qwen_official_model: Any = None
     qwen_official_forced_aligner: Any = None
     runtime_kind: Optional[str] = None
@@ -186,6 +337,10 @@ class RuntimeState:
         self.pipeline = None
         self.ctc_model = None
         self.ctc_processor = None
+        self.hf_asr_model = None
+        self.hf_asr_processor = None
+        self.cohere_ov_compiled_model = None
+        self.cohere_ov_marker = None
         self.qwen_official_model = None
         self.qwen_official_forced_aligner = None
         self.runtime_kind = None
@@ -230,6 +385,8 @@ class RuntimeState:
             self.ensure_common_modules()
             self.pipeline = None
             self.qwen_official_model = None
+            self.hf_asr_model = None
+            self.hf_asr_processor = None
             self.ctc_processor = AutoProcessor.from_pretrained(str(model_dir), local_files_only=True, trust_remote_code=False)
             self.ctc_model = OVModelForCTC.from_pretrained(
                 str(model_dir),
@@ -239,10 +396,80 @@ class RuntimeState:
                 trust_remote_code=False,
             )
             self.ctc_model.compile()
+        elif runtime_kind == "cohere_openvino_asr":
+            ensure_python_packages(
+                {
+                    "torch": "torch",
+                    "soundfile": "soundfile",
+                    "librosa": "librosa",
+                },
+                reason="OpenVINO Cohere ASR helper",
+            )
+            self.ensure_common_modules()
+            _ensure_cohere_transformers_runtime()
+            import torch  # pylint: disable=import-error
+            from transformers import AutoProcessor  # pylint: disable=import-error
+
+            marker_path = model_dir / "arcsub_cohere_asr_ov_config.json"
+            try:
+                self.cohere_ov_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except Exception:
+                self.cohere_ov_marker = {}
+
+            self.pipeline = None
+            self.ctc_model = None
+            self.ctc_processor = None
+            self.hf_asr_model = None
+            self.qwen_official_model = None
+            self.hf_asr_processor = AutoProcessor.from_pretrained(
+                str(model_dir),
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+            core = self.openvino.Core()
+            self.cohere_ov_compiled_model = core.compile_model(str(model_dir / "openvino_model.xml"), device)
+            self.torch = torch
+        elif runtime_kind == "cohere_transformers_asr":
+            ensure_python_packages(
+                {
+                    "torch": "torch",
+                    "soundfile": "soundfile",
+                    "librosa": "librosa",
+                },
+                reason="HF Transformers ASR helper",
+            )
+            self.ensure_common_modules()
+            _ensure_cohere_transformers_runtime()
+            import torch  # pylint: disable=import-error
+            from transformers import AutoProcessor, CohereAsrForConditionalGeneration  # pylint: disable=import-error
+
+            self.pipeline = None
+            self.ctc_model = None
+            self.ctc_processor = None
+            self.qwen_official_model = None
+            requested = str(device or "").strip().lower()
+            torch_device = "cuda" if requested not in ("cpu",) and torch.cuda.is_available() else "cpu"
+            torch_dtype = torch.float16 if torch_device == "cuda" else torch.float32
+            self.hf_asr_processor = AutoProcessor.from_pretrained(
+                str(model_dir),
+                local_files_only=True,
+                trust_remote_code=False,
+            )
+            self.hf_asr_model = CohereAsrForConditionalGeneration.from_pretrained(
+                str(model_dir),
+                local_files_only=True,
+                dtype=torch_dtype,
+            )
+            self.hf_asr_model.to(torch_device)
+            self.hf_asr_model.eval()
+            self.torch = torch
+            device = "CPU" if torch_device == "cpu" else "CUDA"
         else:
             self.pipeline = None
             self.ctc_model = None
             self.ctc_processor = None
+            self.hf_asr_model = None
+            self.hf_asr_processor = None
             self.qwen_official_model = create_official_qwen3_asr_model(str(model_dir), device=device)
 
         self.runtime_kind = runtime_kind
@@ -263,6 +490,376 @@ class RuntimeState:
             raise RuntimeError(f"Audio file not found: {file_path}")
         audio, _sr = self.librosa.load(str(file_path), sr=16000, mono=True)
         return audio
+
+    def _normalize_cohere_language(self, raw: Optional[str]) -> str:
+        value = str(raw or "").strip().lower().replace("_", "-")
+        aliases = {
+            "zh-cn": "zh",
+            "zh-tw": "zh",
+            "zh-hk": "zh",
+            "zh-hans": "zh",
+            "zh-hant": "zh",
+            "cmn": "zh",
+            "cmn-hans-cn": "zh",
+            "yue": "zh",
+            "yue-hant-hk": "zh",
+            "jp": "ja",
+            "ja-jp": "ja",
+            "kr": "ko",
+            "ko-kr": "ko",
+            "pt-br": "pt",
+            "pt-pt": "pt",
+            "es-419": "es",
+            "en-us": "en",
+            "en-gb": "en",
+            "ar-eg": "ar",
+            "de-de": "de",
+            "el-gr": "el",
+            "fr-fr": "fr",
+            "it-it": "it",
+            "nl-nl": "nl",
+            "pl-pl": "pl",
+            "vi-vn": "vi",
+        }
+        normalized = aliases.get(value, value)
+        if normalized in ("auto", "none", "null", ""):
+            raise RuntimeError(
+                "Cohere Transcribe requires an explicit source language. Supported languages: "
+                "ar, de, el, en, es, fr, it, ja, ko, nl, pl, pt, vi, zh."
+            )
+        supported = {"ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh"}
+        if normalized not in supported:
+            raise RuntimeError(
+                f'Cohere Transcribe does not support language "{raw}". Supported languages: '
+                "ar, de, el, en, es, fr, it, ja, ko, nl, pl, pt, vi, zh."
+            )
+        return normalized
+
+    def _move_batch_to_model_device(self, inputs: Any) -> Any:
+        if self.torch is None or self.hf_asr_model is None:
+            return inputs
+        device = next(self.hf_asr_model.parameters()).device
+        dtype = getattr(self.hf_asr_model, "dtype", self.torch.float32)
+        if hasattr(inputs, "to"):
+            try:
+                return inputs.to(device, dtype=dtype)
+            except TypeError:
+                return inputs.to(device)
+        for key, value in list(inputs.items()):
+            if not hasattr(value, "to"):
+                continue
+            if hasattr(value, "is_floating_point") and value.is_floating_point():
+                inputs[key] = value.to(device=device, dtype=dtype)
+            else:
+                inputs[key] = value.to(device=device)
+        return inputs
+
+    def _decode_cohere_output(self, outputs: Any, audio_chunk_index: Any, language: str) -> str:
+        if self.hf_asr_processor is None:
+            return ""
+        try:
+            decoded = self.hf_asr_processor.decode(
+                outputs,
+                skip_special_tokens=True,
+                audio_chunk_index=audio_chunk_index,
+                language=language,
+            )
+        except TypeError:
+            decoded = self.hf_asr_processor.decode(outputs, skip_special_tokens=True)
+        if isinstance(decoded, (list, tuple)):
+            return " ".join(str(item).strip() for item in decoded if str(item).strip()).strip()
+        return str(decoded or "").strip()
+
+    def _as_numpy(self, value: Any, dtype: Any = None):
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        elif hasattr(value, "cpu") and hasattr(value, "numpy"):
+            value = value.cpu().numpy()
+        else:
+            value = self.numpy.asarray(value)
+        return value.astype(dtype) if dtype is not None else value
+
+    def _cohere_join_texts(self, texts: list[str], language: str) -> str:
+        parts = [str(item or "").strip() for item in texts if str(item or "").strip()]
+        if not parts:
+            return ""
+        separator = "" if language in {"ja", "zh"} else " "
+        return separator.join(parts).replace("  ", " ").strip()
+
+    def _cohere_split_audio(self, audio: Any) -> list[tuple[float, Any]]:
+        total_samples = int(len(audio)) if hasattr(audio, "__len__") else 0
+        if total_samples <= 0:
+            return []
+        marker = self.cohere_ov_marker or {}
+        try:
+            max_clip_sec = float(marker.get("maxAudioClipSec") or 35.0)
+        except Exception:
+            max_clip_sec = 35.0
+        raw_chunk_sec = str(os.environ.get("OPENVINO_COHERE_ASR_CHUNK_SEC", "")).strip()
+        try:
+            chunk_sec = float(raw_chunk_sec) if raw_chunk_sec else min(30.0, max_clip_sec)
+        except Exception:
+            chunk_sec = min(30.0, max_clip_sec)
+        chunk_sec = max(1.0, min(chunk_sec, max_clip_sec))
+        chunk_samples = max(1, int(round(chunk_sec * 16000)))
+        chunks: list[tuple[float, Any]] = []
+        for start in range(0, total_samples, chunk_samples):
+            end = min(total_samples, start + chunk_samples)
+            if end <= start:
+                continue
+            chunks.append((start / 16000.0, audio[start:end]))
+        return chunks
+
+    def _cohere_split_text_for_display(self, text: str, language: str) -> list[str]:
+        normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+        if not normalized:
+            return []
+        no_space = language in {"ja", "zh"}
+        max_chars = 42 if no_space else 118
+        hard_max_chars = 58 if no_space else 160
+        primary_pattern = r"(?<=[。！？!?])" if no_space else r"(?<=[.!?])\s+"
+        raw_parts = [part.strip() for part in re.split(primary_pattern, normalized) if part.strip()]
+        if not raw_parts:
+            raw_parts = [normalized]
+
+        parts: list[str] = []
+        for raw in raw_parts:
+            pending = raw
+            while len(pending) > hard_max_chars:
+                window = pending[:hard_max_chars]
+                break_at = -1
+                for pattern in (r"[、，,;；:：]\s*", r"\s+"):
+                    matches = list(re.finditer(pattern, window))
+                    matches = [match for match in matches if match.end() >= max_chars]
+                    if matches:
+                        break_at = matches[-1].end()
+                        break
+                if break_at <= 0:
+                    break_at = hard_max_chars
+                head = pending[:break_at].strip()
+                if head:
+                    parts.append(head)
+                pending = pending[break_at:].strip()
+            if pending:
+                parts.append(pending)
+        return parts or [normalized]
+
+    def _cohere_make_display_chunks(self, text: str, start_sec: float, end_sec: float, language: str) -> list[Dict[str, Any]]:
+        parts = self._cohere_split_text_for_display(text, language)
+        if not parts:
+            return []
+        start = float(start_sec)
+        end = float(end_sec)
+        if not math.isfinite(end) or end <= start:
+            end = start + max(0.4, len(parts) * 0.8)
+        duration = max(0.4, end - start)
+        weights = [max(1, len(re.sub(r"\s+", "", part))) for part in parts]
+        total_weight = max(1, sum(weights))
+        cursor = start
+        chunks: list[Dict[str, Any]] = []
+        for index, part in enumerate(parts):
+            if index + 1 == len(parts):
+                part_end = end
+            else:
+                part_end = start + duration * (sum(weights[: index + 1]) / total_weight)
+            if part_end <= cursor:
+                part_end = cursor + 0.4
+            chunks.append(
+                {
+                    "start_ts": round(cursor, 3),
+                    "end_ts": round(part_end, 3),
+                    "text": part,
+                    "source": "cohere_display_sentence",
+                }
+            )
+            cursor = part_end
+        return chunks
+
+    def _cohere_decode_ids(self, token_ids: Any, audio_chunk_index: Any, language: str) -> str:
+        if self.hf_asr_processor is None:
+            return ""
+        decoded = self.hf_asr_processor.decode(
+            token_ids,
+            skip_special_tokens=True,
+            audio_chunk_index=audio_chunk_index,
+            language=language,
+        )
+        return _coerce_text_payload(decoded[0] if isinstance(decoded, list) and decoded else decoded)
+
+    def _transcribe_cohere_openvino(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.cohere_ov_compiled_model is None or self.hf_asr_processor is None or self.numpy is None:
+            raise RuntimeError("OpenVINO Cohere ASR model is not loaded.")
+
+        audio_path = str(params.get("audioPath") or "").strip()
+        if not audio_path:
+            raise RuntimeError("audioPath is required.")
+
+        language = self._normalize_cohere_language(params.get("language"))
+        audio = self._read_audio(audio_path)
+        started_at = time.time()
+        duration_sec = float(len(audio) / 16000.0) if hasattr(audio, "__len__") else 0.0
+
+        raw_max_new_tokens = str(
+            os.environ.get("OPENVINO_COHERE_ASR_MAX_NEW_TOKENS")
+            or os.environ.get("HF_TRANSFORMERS_ASR_MAX_NEW_TOKENS")
+            or ""
+        ).strip()
+        try:
+            base_max_new_tokens = int(raw_max_new_tokens) if raw_max_new_tokens else int(math.ceil(duration_sec * 8.0) + 24)
+        except ValueError:
+            base_max_new_tokens = int(math.ceil(duration_sec * 8.0) + 24)
+        base_max_new_tokens = max(32, min(base_max_new_tokens, 256))
+
+        eos_token_id = int(getattr(self.hf_asr_processor.tokenizer, "eos_token_id", 3) or 3)
+        chunks = self._cohere_split_audio(audio)
+        transcript_chunks: list[Dict[str, Any]] = []
+        generated_texts: list[str] = []
+        inference_ms = 0
+        token_count = 0
+        return_timestamps = bool(params.get("returnTimestamps", True))
+
+        for chunk_index, (offset_sec, chunk_audio) in enumerate(chunks):
+            chunk_duration_sec = float(len(chunk_audio) / 16000.0) if hasattr(chunk_audio, "__len__") else 0.0
+            chunk_max_new_tokens = max(16, min(base_max_new_tokens, int(math.ceil(chunk_duration_sec * 8.0) + 24)))
+            inputs = self.hf_asr_processor(
+                chunk_audio,
+                sampling_rate=16000,
+                return_tensors="pt",
+                language=language,
+                punctuation=True,
+            )
+            audio_chunk_index = inputs.get("audio_chunk_index") if hasattr(inputs, "get") else None
+            input_features = self._as_numpy(inputs["input_features"], self.numpy.float32)
+            if input_features.ndim == 3 and input_features.shape[-1] == 128:
+                input_features = self.numpy.transpose(input_features, (0, 2, 1)).astype(self.numpy.float32)
+            attention_mask = self._as_numpy(inputs.get("attention_mask"), self.numpy.int64)
+            length = attention_mask.sum(axis=1).astype(self.numpy.int64)
+            decoder_input_ids = self._as_numpy(inputs["decoder_input_ids"], self.numpy.int64)
+
+            for _step in range(chunk_max_new_tokens):
+                decoder_attention_mask = self.numpy.ones_like(decoder_input_ids, dtype=self.numpy.int64)
+                feed = {
+                    self.cohere_ov_compiled_model.inputs[0]: input_features,
+                    self.cohere_ov_compiled_model.inputs[1]: length,
+                    self.cohere_ov_compiled_model.inputs[2]: decoder_input_ids,
+                    self.cohere_ov_compiled_model.inputs[3]: decoder_attention_mask,
+                }
+                infer_started = time.time()
+                result = self.cohere_ov_compiled_model(feed)
+                inference_ms += int(max(0, time.time() - infer_started) * 1000)
+                logits = list(result.values())[0]
+                next_token_id = int(self.numpy.argmax(logits[0, -1, :]))
+                decoder_input_ids = self.numpy.concatenate(
+                    [decoder_input_ids, self.numpy.array([[next_token_id]], dtype=self.numpy.int64)],
+                    axis=1,
+                )
+                token_count += 1
+                if next_token_id == eos_token_id:
+                    break
+
+            text = self._cohere_decode_ids(decoder_input_ids, audio_chunk_index, language)
+            if text:
+                generated_texts.append(text)
+                if return_timestamps:
+                    transcript_chunks.extend(
+                        self._cohere_make_display_chunks(text, offset_sec, offset_sec + chunk_duration_sec, language)
+                    )
+                else:
+                    transcript_chunks.append(
+                        {
+                            "start_ts": offset_sec,
+                            "end_ts": offset_sec + chunk_duration_sec,
+                            "text": text,
+                            "source": "cohere_model_window",
+                        }
+                    )
+
+        text = self._cohere_join_texts(generated_texts, language)
+        return {
+            "text": text,
+            "chunks": transcript_chunks,
+            "words": [],
+            "runtimeKind": self.runtime_kind,
+            "modelPath": self.model_path,
+            "device": self.device,
+            "language": language,
+            "chunking": {
+                "strategy": "cohere_openvino_greedy",
+                "chunkCount": len(chunks),
+                "maxNewTokens": base_max_new_tokens,
+                "generatedTokens": token_count,
+            },
+            "timing": {
+                "generateMs": int(max(0, time.time() - started_at) * 1000),
+                "inferenceMs": inference_ms,
+                "audioDurationSec": duration_sec,
+            },
+        }
+
+    def _transcribe_cohere_transformers(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if self.hf_asr_model is None or self.hf_asr_processor is None or self.torch is None:
+            raise RuntimeError("HF Transformers ASR model is not loaded.")
+
+        audio_path = str(params.get("audioPath") or "").strip()
+        if not audio_path:
+            raise RuntimeError("audioPath is required.")
+
+        language = self._normalize_cohere_language(params.get("language"))
+        audio = self._read_audio(audio_path)
+        started_at = time.time()
+
+        duration_sec = float(len(audio) / 16000.0) if hasattr(audio, "__len__") else 0.0
+        raw_max_new_tokens = str(os.environ.get("HF_TRANSFORMERS_ASR_MAX_NEW_TOKENS", "")).strip()
+        try:
+            max_new_tokens = int(raw_max_new_tokens) if raw_max_new_tokens else int(math.ceil(duration_sec * 8.0) + 24)
+        except ValueError:
+            max_new_tokens = int(math.ceil(duration_sec * 8.0) + 24)
+        max_new_tokens = max(32, min(max_new_tokens, 256))
+
+        inputs = self.hf_asr_processor(
+            audio,
+            sampling_rate=16000,
+            return_tensors="pt",
+            language=language,
+            punctuation=True,
+        )
+        audio_chunk_index = inputs.get("audio_chunk_index") if hasattr(inputs, "get") else None
+        inputs = self._move_batch_to_model_device(inputs)
+
+        with self.torch.inference_mode():
+            outputs = self.hf_asr_model.generate(**inputs, max_new_tokens=max_new_tokens)
+        decoded = self.hf_asr_processor.decode(
+            outputs,
+            skip_special_tokens=True,
+            audio_chunk_index=audio_chunk_index,
+            language=language,
+        )
+        text = _coerce_text_payload(decoded[0] if isinstance(decoded, list) and decoded else decoded)
+        if bool(params.get("returnTimestamps", True)):
+            chunks = self._cohere_make_display_chunks(text, 0.0, duration_sec, language)
+        else:
+            chunk = {"start_ts": 0.0, "text": text, "source": "cohere_model_window"}
+            if duration_sec > 0:
+                chunk["end_ts"] = duration_sec
+            chunks = [chunk] if text else []
+        return {
+            "text": text,
+            "chunks": chunks,
+            "words": [],
+            "runtimeKind": self.runtime_kind,
+            "modelPath": self.model_path,
+            "device": self.device,
+            "language": language,
+            "chunking": {
+                "strategy": "cohere_builtin_generate",
+                "maxNewTokens": max_new_tokens,
+                "audioChunkIndex": bool(audio_chunk_index is not None),
+            },
+            "timing": {
+                "generateMs": int(max(0, time.time() - started_at) * 1000),
+                "audioDurationSec": duration_sec,
+            },
+        }
 
     def _transcribe_whisper(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.pipeline is None:
@@ -666,12 +1263,22 @@ class RuntimeState:
             return self._transcribe_ctc(params)
         if self.runtime_kind == "qwen3_asr_official":
             return self._transcribe_qwen_official(params)
+        if self.runtime_kind == "cohere_openvino_asr":
+            return self._transcribe_cohere_openvino(params)
+        if self.runtime_kind == "cohere_transformers_asr":
+            return self._transcribe_cohere_transformers(params)
         raise RuntimeError("ASR model is not loaded.")
 
     def health(self) -> Dict[str, Any]:
         return {
             "ready": True,
-            "modelLoaded": self.pipeline is not None or self.ctc_model is not None or self.qwen_official_model is not None,
+            "modelLoaded": (
+                self.pipeline is not None
+                or self.ctc_model is not None
+                or self.qwen_official_model is not None
+                or self.cohere_ov_compiled_model is not None
+                or self.hf_asr_model is not None
+            ),
             "modelPath": self.model_path,
             "device": self.device,
             "runtimeKind": self.runtime_kind,

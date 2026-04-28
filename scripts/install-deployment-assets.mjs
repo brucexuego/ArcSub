@@ -45,23 +45,6 @@ async function loadBuiltModule(rootDir, relativePath) {
   return import(pathToFileURL(absolutePath).href);
 }
 
-async function downloadFile(url, destination) {
-  await fs.ensureDir(path.dirname(destination));
-  const tempPath = `${destination}.part`;
-  const response = await fetch(url, {
-    redirect: 'follow',
-    headers: {
-      'User-Agent': 'ArcSub-Deploy/1.0',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url} (${response.status})`);
-  }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.writeFile(tempPath, buffer);
-  await fs.move(tempPath, destination, { overwrite: true });
-}
-
 async function hasConfiguredEnvValue(rootDir, key) {
   if (String(process.env[key] || '').trim()) return true;
   const envPath = path.join(rootDir, '.env');
@@ -69,23 +52,6 @@ async function hasConfiguredEnvValue(rootDir, key) {
   const content = await fs.readFile(envPath, 'utf8');
   const matched = content.match(new RegExp(`^${key}=(.+)$`, 'm'));
   return Boolean(String(matched?.[1] || '').trim());
-}
-
-async function ensureRequiredAssets(manifest, modelsPath) {
-  const installed = [];
-  const skipped = [];
-
-  for (const asset of manifest.assets?.required || []) {
-    const destination = path.join(modelsPath, asset.targetRelativePath);
-    if (await fs.pathExists(destination)) {
-      skipped.push({ id: asset.id, path: destination });
-      continue;
-    }
-    await downloadFile(asset.sourceUrl, destination);
-    installed.push({ id: asset.id, path: destination });
-  }
-
-  return { installed, skipped };
 }
 
 function printSummary(snapshot, assetSummary, pyannoteSummary) {
@@ -121,7 +87,7 @@ async function main() {
   await PathManager.ensureBaseDirs();
   await ResourceManager.ensureTools();
 
-  const assetSummary = await ensureRequiredAssets(manifest, PathManager.getModelsPath());
+  const assetSummary = await ResourceManager.ensureRequiredBaselineAssets(manifest);
 
   const pyannoteSummary = {
     status: 'skipped',

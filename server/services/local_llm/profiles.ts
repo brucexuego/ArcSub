@@ -9,6 +9,8 @@ function inferProfileFamily(localModel: LocalModelDefinition) {
     if (localModel.runtime === 'openvino-whisper-node') return 'whisper';
     if (localModel.runtime === 'openvino-ctc-asr') return 'ctc_asr';
     if (localModel.runtime === 'openvino-qwen3-asr') return 'qwen3_asr';
+    if (localModel.runtime === 'openvino-cohere-asr') return 'cohere_asr';
+    if (localModel.runtime === 'hf-transformers-asr') return 'hf_transformers_asr';
     if (repoId.includes('whisper')) return 'whisper';
     if (repoId.includes('qwen3-asr')) return 'qwen3_asr';
     return 'local-asr';

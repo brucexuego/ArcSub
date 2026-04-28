@@ -1312,7 +1312,7 @@ export class LocalModelService {
       if (asrModels.some((model: any) => model?.id === local.id)) continue;
       asrModels.push({
         id: local.id,
-        name: `${local.displayName} (OpenVINO Local)`,
+        name: `${local.displayName} (Local)`,
         url: 'local://openvino/asr',
         key: '',
         model: local.repoId,

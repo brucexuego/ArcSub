@@ -13,12 +13,61 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from typing import Iterable
 
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+
+
+def _resolve_workspace_path(raw_path: str | None, fallback: pathlib.Path) -> pathlib.Path:
+    value = str(raw_path or "").strip()
+    if not value:
+        return fallback.resolve()
+    candidate = pathlib.Path(value)
+    if not candidate.is_absolute():
+        candidate = SCRIPT_DIR.parent / candidate
+    return candidate.resolve()
+
+
+def _resolve_runtime_root() -> pathlib.Path:
+    return _resolve_workspace_path(
+        os.environ.get("ARCSUB_RUNTIME_DIR") or os.environ.get("APP_RUNTIME_DIR"),
+        SCRIPT_DIR.parent / "runtime",
+    )
+
+
+def _resolve_runtime_tmp_root() -> pathlib.Path:
+    root = _resolve_workspace_path(
+        os.environ.get("ARCSUB_RUNTIME_TMP_DIR") or os.environ.get("APP_TMP_DIR"),
+        _resolve_runtime_root() / "tmp",
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+RUNTIME_TMP_ROOT = _resolve_runtime_tmp_root()
+CONVERTER_TMP_ROOT = RUNTIME_TMP_ROOT / "openvino-convert"
+HF_CACHE_ROOT = RUNTIME_TMP_ROOT / "huggingface"
+PIP_CACHE_ROOT = RUNTIME_TMP_ROOT / "pip-cache"
+TORCH_CACHE_ROOT = RUNTIME_TMP_ROOT / "torch-cache"
+CONVERTER_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+HF_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+PIP_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+TORCH_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+for env_key in ("TMPDIR", "TEMP", "TMP"):
+    os.environ[env_key] = str(RUNTIME_TMP_ROOT)
+os.environ["ARCSUB_RUNTIME_TMP_DIR"] = str(RUNTIME_TMP_ROOT)
+os.environ["APP_TMP_DIR"] = str(RUNTIME_TMP_ROOT)
+os.environ["HF_HOME"] = str(HF_CACHE_ROOT)
+os.environ["HF_HUB_CACHE"] = str(HF_CACHE_ROOT / "hub")
+os.environ["HF_XET_CACHE"] = str(HF_CACHE_ROOT / "xet")
+os.environ["HF_DATASETS_CACHE"] = str(HF_CACHE_ROOT / "datasets")
+os.environ["PIP_CACHE_DIR"] = str(PIP_CACHE_ROOT)
+os.environ["TORCH_HOME"] = str(TORCH_CACHE_ROOT)
+tempfile.tempdir = str(RUNTIME_TMP_ROOT)
 
 from openvino_asr_env import prepare_openvino_env
 from python_runtime_bootstrap import ensure_python_packages
@@ -53,6 +102,8 @@ COPY_METADATA_FILES = [
     "config.json",
     "generation_config.json",
     "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer.model",
     "tokenizer.json",
     "tokenizer_config.json",
     "special_tokens_map.json",
@@ -108,6 +159,8 @@ ENCODER_DECODER_OV_XML_FILES = [
     "openvino_decoder_model.xml",
     "openvino_decoder_with_past_model.xml",
 ]
+
+COHERE_ASR_OV_MARKER_FILE = "arcsub_cohere_asr_ov_config.json"
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -188,8 +241,7 @@ def _copy_repo_metadata(snapshot_dir: pathlib.Path, output_dir: pathlib.Path) ->
     for relative_name in _pick_existing(available, COPY_METADATA_FILES):
         source_path = snapshot_dir / relative_name
         target_path = output_dir / relative_name
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target_path)
+        _copy_file_with_retry(source_path, target_path)
         copied.append(relative_name)
     return copied
 
@@ -206,22 +258,82 @@ def _compress_to_int8(model: ov.Model) -> ov.Model:
     return compress_weights(model)
 
 
+def _retry_file_operation(operation_name: str, callback, *, missing_ok: bool = False):
+    attempts = max(1, int(os.environ.get("OPENVINO_HF_CONVERTER_FILE_RETRY_ATTEMPTS", "24") or "24"))
+    delay_sec = max(0.05, float(os.environ.get("OPENVINO_HF_CONVERTER_FILE_RETRY_DELAY_SEC", "0.25") or "0.25"))
+    last_error: BaseException | None = None
+
+    for attempt in range(attempts):
+        try:
+            return callback()
+        except FileNotFoundError as error:
+            if missing_ok:
+                return None
+            raise error
+        except PermissionError as error:
+            last_error = error
+        except OSError as error:
+            if getattr(error, "winerror", None) not in (32, 33):
+                raise
+            last_error = error
+
+        gc.collect()
+        if attempt + 1 < attempts:
+            time.sleep(delay_sec * min(4, attempt + 1))
+
+    raise RuntimeError(f"{operation_name} failed after {attempts} attempts: {last_error}") from last_error
+
+
+def _replace_file_with_retry(source_path: pathlib.Path, target_path: pathlib.Path) -> None:
+    def replace() -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.replace(target_path)
+
+    _retry_file_operation(f"Replacing {target_path}", replace)
+
+
+def _copy_file_with_retry(source_path: pathlib.Path, target_path: pathlib.Path) -> None:
+    def copy() -> None:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+    _retry_file_operation(f"Copying {source_path} to {target_path}", copy)
+
+
+def _remove_tree_with_retry(path_obj: pathlib.Path) -> None:
+    if not path_obj.exists():
+        return
+
+    def remove() -> None:
+        shutil.rmtree(path_obj)
+
+    _retry_file_operation(f"Removing {path_obj}", remove, missing_ok=True)
+
+
+def _temporary_directory(prefix: str):
+    CONVERTER_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(
+        prefix=prefix,
+        dir=str(CONVERTER_TMP_ROOT),
+        ignore_cleanup_errors=True,
+    )
+
+
 def _save_model_preserve_precision(model: ov.Model, xml_path: pathlib.Path) -> None:
     _save_ov_model(model, xml_path)
 
 
 def _save_ov_model(model: ov.Model, xml_path: pathlib.Path) -> None:
     xml_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_xml = xml_path.with_name(f"{xml_path.stem}.tmp.xml")
-    temp_bin = temp_xml.with_suffix(".bin")
     final_bin = xml_path.with_suffix(".bin")
-    temp_xml.unlink(missing_ok=True)
-    temp_bin.unlink(missing_ok=True)
-    ov.save_model(model, str(temp_xml), compress_to_fp16=False)
-    xml_path.unlink(missing_ok=True)
-    final_bin.unlink(missing_ok=True)
-    shutil.move(temp_xml, xml_path)
-    shutil.move(temp_bin, final_bin)
+    with _temporary_directory(f"{xml_path.stem}-save-") as temp_dir:
+        temp_xml = pathlib.Path(temp_dir) / xml_path.name
+        temp_bin = temp_xml.with_suffix(".bin")
+        ov.save_model(model, str(temp_xml), compress_to_fp16=False)
+        gc.collect()
+
+        _replace_file_with_retry(temp_bin, final_bin)
+        _replace_file_with_retry(temp_xml, xml_path)
 
 
 def _compress_exported_ov_files(output_dir: pathlib.Path, xml_names: Iterable[str]) -> list[str]:
@@ -230,23 +342,24 @@ def _compress_exported_ov_files(output_dir: pathlib.Path, xml_names: Iterable[st
         xml_path = output_dir / xml_name
         if not xml_path.exists():
             continue
-        source_model = ov.Core().read_model(str(xml_path))
-        compressed_model = _compress_to_int8(source_model)
-        del source_model
+        bin_path = xml_path.with_suffix(".bin")
+        if not bin_path.exists():
+            raise RuntimeError(f"Cannot compress OpenVINO IR without matching bin file: {bin_path}")
 
-        temp_xml = xml_path.with_name(f"{xml_path.stem}.compressed.xml")
-        temp_bin = temp_xml.with_suffix(".bin")
-        final_bin = xml_path.with_suffix(".bin")
-        temp_xml.unlink(missing_ok=True)
-        temp_bin.unlink(missing_ok=True)
-        ov.save_model(compressed_model, str(temp_xml), compress_to_fp16=False)
-        del compressed_model
-        gc.collect()
+        with _temporary_directory(f"{xml_path.stem}-compress-") as temp_dir:
+            source_xml = pathlib.Path(temp_dir) / xml_path.name
+            source_bin = source_xml.with_suffix(".bin")
+            _copy_file_with_retry(xml_path, source_xml)
+            _copy_file_with_retry(bin_path, source_bin)
 
-        xml_path.unlink(missing_ok=True)
-        final_bin.unlink(missing_ok=True)
-        shutil.move(temp_xml, xml_path)
-        shutil.move(temp_bin, final_bin)
+            source_model = ov.Core().read_model(str(source_xml))
+            compressed_model = _compress_to_int8(source_model)
+            del source_model
+            gc.collect()
+
+            _save_ov_model(compressed_model, xml_path)
+            del compressed_model
+            gc.collect()
         compressed.append(xml_name)
     return compressed
 
@@ -504,32 +617,47 @@ def _export_ctc_asr_with_ovmodel(
     from optimum.intel import OVModelForCTC  # type: ignore
 
     token = _resolve_hf_token()
-    model = OVModelForCTC.from_pretrained(
-        repo_id,
-        export=True,
-        compile=False,
-        trust_remote_code=trust_remote_code,
-        token=token,
-        from_tf=from_tf,
-    )
-    model.save_pretrained(output_dir)
+    with _temporary_directory("arcsub-ov-ctc-export-") as export_tmp_dir:
+        export_dir = pathlib.Path(export_tmp_dir)
+        model = OVModelForCTC.from_pretrained(
+            repo_id,
+            export=True,
+            compile=False,
+            trust_remote_code=trust_remote_code,
+            token=token,
+            from_tf=from_tf,
+        )
+        model.save_pretrained(export_dir)
+        model = None
+        gc.collect()
 
-    processor_info = _save_ctc_processor_bundle(
-        repo_id,
-        output_dir,
-        trust_remote_code,
-        token,
-    )
+        processor_info = _save_ctc_processor_bundle(
+            repo_id,
+            output_dir,
+            trust_remote_code,
+            token,
+        )
 
-    exported_xml = output_dir / "openvino_model.xml"
-    if not exported_xml.exists():
-        raise RuntimeError("OVModelForCTC export did not produce openvino_model.xml.")
+        exported_xml = export_dir / "openvino_model.xml"
+        if not exported_xml.exists():
+            raise RuntimeError("OVModelForCTC export did not produce openvino_model.xml.")
+        for metadata_file in ("config.json", "openvino_config.json"):
+            source_metadata = export_dir / metadata_file
+            if source_metadata.exists():
+                _copy_file_with_retry(source_metadata, output_dir / metadata_file)
 
-    preserve_precision = _bool_env("OPENVINO_HF_CONVERTER_CTC_PRESERVE_PRECISION", False)
-    if not preserve_precision:
-        source_model = ov.Core().read_model(str(exported_xml))
-        compressed = _compress_to_int8(source_model)
-        _save_ov_model(compressed, exported_xml)
+        preserve_precision = _bool_env("OPENVINO_HF_CONVERTER_CTC_PRESERVE_PRECISION", False)
+        if preserve_precision:
+            _copy_file_with_retry(exported_xml, output_dir / "openvino_model.xml")
+            _copy_file_with_retry(exported_xml.with_suffix(".bin"), output_dir / "openvino_model.bin")
+        else:
+            source_model = ov.Core().read_model(str(exported_xml))
+            compressed = _compress_to_int8(source_model)
+            del source_model
+            gc.collect()
+            _save_ov_model(compressed, output_dir / "openvino_model.xml")
+            del compressed
+            gc.collect()
 
     return {
         "mode": "ovmodel-for-ctc-export",
@@ -652,7 +780,7 @@ def _export_whisper_asr_with_ovmodel(repo_id: str, output_dir: pathlib.Path, tru
 
     from optimum.intel import OVModelForSpeechSeq2Seq  # type: ignore
 
-    with tempfile.TemporaryDirectory(prefix="arcsub-ov-whisper-") as tmp_dir:
+    with _temporary_directory("arcsub-ov-whisper-") as tmp_dir:
         snapshot_dir = _download_snapshot(repo_id, pathlib.Path(tmp_dir))
         print(
             f"[arcsub-convert] Exporting Whisper ASR with OVModelForSpeechSeq2Seq from {snapshot_dir}",
@@ -686,6 +814,139 @@ def _export_whisper_asr_with_ovmodel(repo_id: str, output_dir: pathlib.Path, tru
             "generatedFiles": _iter_repo_files(output_dir),
             "compressedFiles": compressed,
             "tokenizerFiles": tokenizers,
+        }
+
+
+def _build_cohere_decoder_prompt_ids(tokenizer, language: str = "en"):
+    tokens = [
+        "▁",
+        "<|startofcontext|>",
+        "<|startoftranscript|>",
+        "<|emo:undefined|>",
+        f"<|{language}|>",
+        f"<|{language}|>",
+        "<|pnc|>",
+        "<|noitn|>",
+        "<|notimestamp|>",
+        "<|nodiarize|>",
+    ]
+    ids = tokenizer.convert_tokens_to_ids(tokens)
+    if not isinstance(ids, list) or any(item is None or int(item) < 0 for item in ids):
+        raise RuntimeError("Unable to build Cohere ASR decoder prompt ids from tokenizer special tokens.")
+    return [int(item) for item in ids]
+
+
+def _export_cohere_asr_with_traced_ov(repo_id: str, output_dir: pathlib.Path, trust_remote_code: bool) -> dict:
+    ensure_python_packages(
+        {
+            "numpy": "numpy",
+            "torch": "torch",
+        },
+        reason="Cohere ASR OpenVINO export helper",
+    )
+    import numpy as np  # type: ignore
+    import torch  # type: ignore
+    from transformers import AutoModelForSpeechSeq2Seq  # type: ignore
+
+    class _CohereForwardWrapper(torch.nn.Module):
+        def __init__(self, model):
+            super().__init__()
+            self.model = model
+
+        def forward(self, input_features, length, decoder_input_ids, decoder_attention_mask):
+            return self.model(
+                input_features=input_features,
+                length=length,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                use_cache=False,
+            ).logits
+
+    with _temporary_directory("arcsub-ov-cohere-asr-") as tmp_dir:
+        snapshot_dir = _download_snapshot(repo_id, pathlib.Path(tmp_dir))
+        with open(snapshot_dir / "config.json", "r", encoding="utf-8") as file_obj:
+            config = json.load(file_obj)
+        model_type = str(config.get("model_type") or "").strip().lower()
+        if model_type != "cohere_asr":
+            raise RuntimeError(f"Cohere ASR exporter only supports model_type=cohere_asr, got {model_type or 'unknown'}.")
+
+        sample_rate = int(config.get("sample_rate") or config.get("preprocessor", {}).get("sample_rate") or 16000)
+        max_audio_clip_s = float(config.get("max_audio_clip_s") or 35.0)
+        example_seconds = float(os.environ.get("OPENVINO_COHERE_ASR_EXPORT_EXAMPLE_SECONDS", "8") or "8")
+        example_seconds = max(1.0, min(example_seconds, max_audio_clip_s))
+        dummy_audio = np.zeros((max(1, int(round(sample_rate * example_seconds))),), dtype=np.float32)
+
+        print(
+            f"[arcsub-convert] Exporting Cohere ASR traced OpenVINO INT8 from {snapshot_dir} "
+            f"(example_seconds={example_seconds:g})",
+            file=sys.stderr,
+            flush=True,
+        )
+        processor = AutoProcessor.from_pretrained(
+            str(snapshot_dir),
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+        inputs = processor(dummy_audio, sampling_rate=sample_rate, return_tensors="pt")
+        prompt_ids = _build_cohere_decoder_prompt_ids(processor.tokenizer, "en")
+        example_inputs = (
+            inputs["input_features"].clone(),
+            inputs["length"].clone(),
+            torch.tensor([prompt_ids], dtype=torch.long),
+            torch.ones((1, len(prompt_ids)), dtype=torch.long),
+        )
+
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            str(snapshot_dir),
+            dtype=torch.float32,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+        model.eval()
+        wrapper = _CohereForwardWrapper(model).eval()
+        torch.set_grad_enabled(False)
+        traced = torch.jit.trace(wrapper, example_inputs, check_trace=False)
+        ov_model = ov.convert_model(traced, example_input=example_inputs)
+        del traced
+        del wrapper
+        del model
+        gc.collect()
+
+        compressed = _compress_to_int8(ov_model)
+        del ov_model
+        gc.collect()
+        _save_ov_model(compressed, output_dir / "openvino_model.xml")
+        del compressed
+        gc.collect()
+
+        copied = _copy_repo_metadata(snapshot_dir, output_dir)
+        marker = {
+            "runtimeKind": "cohere_openvino_asr",
+            "repoId": repo_id,
+            "modelType": model_type,
+            "exportMode": "torchscript-forward-int8",
+            "exampleSeconds": example_seconds,
+            "sampleRate": sample_rate,
+            "maxAudioClipSec": max_audio_clip_s,
+            "inputOrder": ["input_features", "length", "decoder_input_ids", "decoder_attention_mask"],
+            "promptLanguage": "en",
+            "decoderPromptIds": prompt_ids,
+            "notes": [
+                "This IR is a Cohere ASR forward model. ArcSub performs greedy autoregressive decoding in the ASR helper.",
+                "The model card requires an explicit source language; native timestamps and diarization are not emitted by this model.",
+            ],
+        }
+        (output_dir / COHERE_ASR_OV_MARKER_FILE).write_text(json.dumps(marker, ensure_ascii=True, indent=2), encoding="utf-8")
+
+        return {
+            "mode": "cohere-asr-traced-forward-int8",
+            "repoId": repo_id,
+            "snapshotFiles": _iter_repo_files(snapshot_dir),
+            "generatedFiles": _iter_repo_files(output_dir),
+            "copiedMetadataFiles": copied,
+            "compressedFiles": ["openvino_model.xml"],
+            "markerFile": COHERE_ASR_OV_MARKER_FILE,
+            "exampleSeconds": example_seconds,
         }
 
 
@@ -749,13 +1010,15 @@ def _maybe_bootstrap_optimum() -> None:
 def _run_optimum_export(repo_id: str, output_dir: pathlib.Path, hf_task: str | None, trust_remote_code: bool) -> dict:
     _maybe_bootstrap_optimum()
     snapshot_files: list[str] = []
-    with tempfile.TemporaryDirectory(prefix="arcsub-ov-export-") as tmp_dir:
+    with _temporary_directory("arcsub-ov-export-") as tmp_dir:
         snapshot_dir = _download_snapshot(repo_id, pathlib.Path(tmp_dir))
         snapshot_files = _iter_repo_files(snapshot_dir)
         command = [
             sys.executable,
             "-m",
-            "optimum.exporters.openvino",
+            "optimum.commands.optimum_cli",
+            "export",
+            "openvino",
             "--model",
             str(snapshot_dir),
             "--weight-format",
@@ -805,7 +1068,7 @@ def _convert_via_snapshot(
     runtime_layout: str,
     trust_remote_code: bool,
 ) -> dict:
-    with tempfile.TemporaryDirectory(prefix="arcsub-ov-convert-") as tmp_dir:
+    with _temporary_directory("arcsub-ov-convert-") as tmp_dir:
         work_dir = pathlib.Path(tmp_dir)
         snapshot_dir = _download_snapshot(repo_id, work_dir)
 
@@ -859,7 +1122,7 @@ def main() -> int:
     output_dir = pathlib.Path(args.output_dir).resolve()
     _assert_safe_output_dir(output_dir)
     if output_dir.exists():
-        shutil.rmtree(output_dir, ignore_errors=True)
+        _remove_tree_with_retry(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     trust_remote_code = _bool_env("OPENVINO_HF_EXPORT_TRUST_REMOTE_CODE", False)
@@ -878,6 +1141,8 @@ def main() -> int:
                     result = _run_optimum_export(args.repo_id, output_dir, task_name or None, trust_remote_code)
             elif args.conversion_method == "openvino-ctc-asr-export":
                 result = _export_ctc_asr_with_ovmodel(args.repo_id, output_dir, trust_remote_code)
+            elif args.conversion_method == "openvino-cohere-asr-export":
+                result = _export_cohere_asr_with_traced_ov(args.repo_id, output_dir, trust_remote_code=True)
             elif args.conversion_method == "openvino-convert-model":
                 result = _convert_via_snapshot(
                     args.repo_id,

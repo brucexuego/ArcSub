@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { PathManager } from '../path_manager.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -208,7 +209,7 @@ async function readWindowsIntelDxdiagEntries() {
     return windowsDxdiagCached;
   }
 
-  const tmpPath = path.join(os.tmpdir(), `arcsub-dxdiag-${process.pid}-${Date.now()}.txt`);
+  const tmpPath = path.join(PathManager.getTmpPath(), `arcsub-dxdiag-${process.pid}-${Date.now()}.txt`);
   try {
     await execFileAsync('dxdiag', ['/t', tmpPath], { windowsHide: true });
     const text = await fs.readFile(tmpPath, 'utf8');

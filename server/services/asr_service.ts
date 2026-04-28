@@ -160,6 +160,21 @@ export class AsrService {
     }
   }
 
+  private static isQwen3AsrLocalModel(input: {
+    localModelId?: string | null;
+    localModelRuntime?: string | null;
+    localModelPath?: string | null;
+  }) {
+    const signature = [
+      input.localModelRuntime,
+      input.localModelId,
+      input.localModelPath,
+    ]
+      .map((value) => String(value || '').toLowerCase())
+      .join(' ');
+    return signature.includes('openvino-qwen3-asr') || signature.includes('qwen3-asr');
+  }
+
   private static getEnvNumber(name: string, fallback: number, min?: number, max?: number) {
     const raw = process.env[name];
     if (typeof raw !== 'string' || !raw.trim()) return fallback;
@@ -878,6 +893,11 @@ export class AsrService {
       if (!input.localModelId || !input.localModelPath) {
         throw new Error('Local ASR runtime is not configured.');
       }
+      const preferAlignmentFirstNoSpace = Boolean(input.options.wordAlignment) && !this.isQwen3AsrLocalModel({
+        localModelId: input.localModelId,
+        localModelRuntime: input.localModelRuntime,
+        localModelPath: input.localModelPath,
+      });
       return transcribeWithLocalAsrRuntime({
         filePath,
         localModelId: input.localModelId,
@@ -891,7 +911,7 @@ export class AsrService {
         extractStructuredTranscript: (transcript, transcriptLanguage, extractOptions = {}) =>
           this.extractStructuredTranscript(transcript, transcriptLanguage, {
             ...extractOptions,
-            preferAlignmentFirstNoSpace: Boolean(input.options.wordAlignment),
+            preferAlignmentFirstNoSpace,
           }),
         toFiniteNumber: this.toFiniteNumber.bind(this),
       });

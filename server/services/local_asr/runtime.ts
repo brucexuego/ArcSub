@@ -6,11 +6,13 @@ import type { LocalAsrRuntimeInput } from './runtimes/shared.js';
 export async function transcribeWithLocalAsrRuntime(input: LocalAsrRuntimeInput) {
   const isQwen3AsrRuntime = input.localModelRuntime === 'openvino-qwen3-asr';
   const isCtcAsrRuntime = input.localModelRuntime === 'openvino-ctc-asr';
+  const isCohereAsrRuntime = input.localModelRuntime === 'openvino-cohere-asr';
+  const isHfTransformersAsrRuntime = input.localModelRuntime === 'hf-transformers-asr';
 
   if (isQwen3AsrRuntime) {
     return transcribeWithLocalQwen3AsrRuntime(input);
   }
-  if (isCtcAsrRuntime) {
+  if (isCtcAsrRuntime || isCohereAsrRuntime || isHfTransformersAsrRuntime) {
     return transcribeWithLocalCtcAsrRuntime(input);
   }
 

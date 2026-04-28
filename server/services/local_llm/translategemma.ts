@@ -33,13 +33,13 @@ function toTranslateGemmaLanguageCode(language?: string): string | null {
     uk: 'uk',
     vi: 'vi',
     zh: 'zh',
-    'zh-cn': 'zh-CN',
-    'zh-hans': 'zh-CN',
-    'zh-sg': 'zh-CN',
+    'zh-cn': 'zh-Hans',
+    'zh-hans': 'zh-Hans',
+    'zh-sg': 'zh-Hans-SG',
     'zh-tw': 'zh-TW',
-    'zh-hant': 'zh-TW',
-    'zh-hk': 'zh-TW',
-    'zh-mo': 'zh-TW',
+    'zh-hant': 'zh-Hant',
+    'zh-hk': 'zh-Hant-HK',
+    'zh-mo': 'zh-Hant-MO',
   };
 
   if (exactMap[normalized]) return exactMap[normalized];

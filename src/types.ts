@@ -106,12 +106,16 @@ export interface LocalModelSelection {
       | 'openvino-whisper-node'
       | 'openvino-ctc-asr'
       | 'openvino-qwen3-asr'
+      | 'openvino-cohere-asr'
+      | 'hf-transformers-asr'
       | 'openvino-seq2seq-translate'
       | 'openvino-llm-node';
     runtimeLayout?:
       | 'asr-whisper'
       | 'asr-ctc'
       | 'asr-qwen3-official'
+      | 'asr-cohere-ov'
+      | 'asr-hf-transformers'
       | 'translate-llm'
       | 'translate-seq2seq'
       | 'translate-vlm';
@@ -133,6 +137,7 @@ export interface LocalModelSelection {
       | 'optimum-export-openvino'
       | 'openvino-ctc-asr-export'
       | 'openvino-qwen3-asr-export'
+      | 'openvino-cohere-asr-export'
       | 'unsupported';
     device: 'AUTO';
     source: 'builtin' | 'custom';
