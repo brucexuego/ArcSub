@@ -36,9 +36,9 @@ const LOCAL_ASR_MODEL_PROFILES: LocalAsrModelProfile[] = [
     repoIds: ['Qwen/Qwen3-ASR-1.7B'],
   },
   {
-    id: 'local-breeze-asr-26',
-    repoIds: ['MediaTek-Research/Breeze-ASR-26'],
-    notes: ['Breeze Taigi ASR fine-tuned from Whisper large-v2; uses the local Whisper OpenVINO runtime path.'],
+    id: 'local-breeze-asr-25',
+    repoIds: ['MediaTek-Research/Breeze-ASR-25'],
+    notes: ['Breeze ASR 25 is fine-tuned from Whisper large-v2; uses the local Whisper OpenVINO runtime path.'],
   },
 ];
 
