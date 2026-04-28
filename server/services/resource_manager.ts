@@ -74,9 +74,9 @@ export class ResourceManager {
     return [...byId.values()];
   }
 
-  private static async getRequiredBaselineAsset(identifier: string) {
+  private static async getRequiredBaselineAsset(identifier: string, manifestOverride?: any) {
     const normalized = String(identifier || '').trim();
-    const assets = await this.getRequiredBaselineAssets();
+    const assets = await this.getRequiredBaselineAssets(manifestOverride);
     const asset = assets.find(
       (candidate) =>
         candidate.id === normalized ||
@@ -89,8 +89,8 @@ export class ResourceManager {
     return asset;
   }
 
-  static async ensureBaselineAsset(identifier: string): Promise<BaselineAssetEnsureResult> {
-    const asset = await this.getRequiredBaselineAsset(identifier);
+  static async ensureBaselineAsset(identifier: string, manifestOverride?: any): Promise<BaselineAssetEnsureResult> {
+    const asset = await this.getRequiredBaselineAsset(identifier, manifestOverride);
     const destination = path.join(PathManager.getModelsPath(), asset.targetRelativePath);
 
     if (await fs.pathExists(destination)) {
@@ -105,7 +105,8 @@ export class ResourceManager {
       };
     }
 
-    const existingTask = this.baselineAssetTasks.get(asset.id);
+    const taskKey = `${asset.id}:${asset.targetRelativePath}:${asset.sourceUrl}`;
+    const existingTask = this.baselineAssetTasks.get(taskKey);
     if (existingTask) return existingTask;
 
     const task = (async () => {
@@ -126,10 +127,10 @@ export class ResourceManager {
         throw error;
       })
       .finally(() => {
-        this.baselineAssetTasks.delete(asset.id);
+        this.baselineAssetTasks.delete(taskKey);
       });
 
-    this.baselineAssetTasks.set(asset.id, task);
+    this.baselineAssetTasks.set(taskKey, task);
     return task;
   }
 
@@ -138,7 +139,7 @@ export class ResourceManager {
     const skipped: Array<{ id: string; path: string }> = [];
 
     for (const asset of await this.getRequiredBaselineAssets(manifestOverride)) {
-      const result = await this.ensureBaselineAsset(asset.id);
+      const result = await this.ensureBaselineAsset(asset.id, manifestOverride);
       if (result.installed) {
         installed.push({ id: result.id, path: result.path });
       } else {

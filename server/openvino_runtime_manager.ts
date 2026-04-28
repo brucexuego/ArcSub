@@ -1228,6 +1228,17 @@ export class OpenvinoRuntimeManager {
     return this.isOpenvinoGpuAllocationLimitError(error) || this.isOpenvinoRemoteTensorNotImplementedError(error);
   }
 
+  private static isAsrHelperDeviceCompatible(
+    helperDevice: string | null | undefined,
+    requestedDevice: string,
+    allowCpuFallback: boolean
+  ) {
+    const normalizedHelperDevice = this.normalizeRequestedDevice(helperDevice, requestedDevice);
+    if (normalizedHelperDevice === requestedDevice) return true;
+    if (requestedDevice === 'AUTO' && normalizedHelperDevice) return true;
+    return allowCpuFallback && normalizedHelperDevice === 'CPU';
+  }
+
   private static shouldFallbackTranslateToCpu(requestedDevice: string, error: unknown) {
     const normalized = this.normalizeRequestedDevice(requestedDevice, 'AUTO');
     if (normalized === 'CPU') return false;
@@ -2933,11 +2944,7 @@ export class OpenvinoRuntimeManager {
     const helperModelLoaded =
       Boolean(helperHealth?.modelLoaded) &&
       loadedModelPath === expectedModelPath &&
-      (
-        this.normalizeRequestedDevice(helperHealth?.device, requestedDevice) === requestedDevice ||
-        ((isQwenRuntime || isCohereRuntime) &&
-          this.normalizeRequestedDevice(helperHealth?.device, requestedDevice) === 'CPU')
-      ) &&
+      this.isAsrHelperDeviceCompatible(helperHealth?.device, requestedDevice, isQwenRuntime || isCohereRuntime) &&
       (!expectedRuntimeKind || String(helperHealth?.runtimeKind || '').trim().toLowerCase() === expectedRuntimeKind);
 
     if (helperModelLoaded) {

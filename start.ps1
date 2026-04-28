@@ -90,7 +90,7 @@ function Resolve-LogsDir([string]$WorkspaceRoot) {
   return Join-Path (Join-Path $WorkspaceRoot $runtimeDir) "logs"
 }
 
-function Kill-ProcessTree([int]$ProcessId) {
+function Stop-ProcessTree([int]$ProcessId) {
   if ($ProcessId -le 0) { return }
   if ($DryRun) {
     Write-Info "DryRun: would kill PID $ProcessId"
@@ -159,7 +159,7 @@ try {
   if ($killPids.Count -gt 0) {
     Write-Step "Stopping stale processes: $($killPids -join ', ')"
     foreach ($procId in $killPids) {
-      Kill-ProcessTree -ProcessId $procId
+      Stop-ProcessTree -ProcessId $procId
     }
     if (-not $DryRun) {
       Start-Sleep -Milliseconds 800

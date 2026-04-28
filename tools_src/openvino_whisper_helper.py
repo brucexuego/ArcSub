@@ -463,7 +463,7 @@ class RuntimeState:
             self.hf_asr_model.to(torch_device)
             self.hf_asr_model.eval()
             self.torch = torch
-            device = "CPU" if torch_device == "cpu" else "CUDA"
+            device = "CPU" if torch_device == "cpu" else "GPU"
         else:
             self.pipeline = None
             self.ctc_model = None
