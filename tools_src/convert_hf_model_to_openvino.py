@@ -30,6 +30,7 @@ ensure_python_packages(
         "nncf": "nncf",
         "openvino": "openvino",
         "huggingface_hub": "huggingface_hub",
+        "hf_xet": "hf_xet",
         "openvino_tokenizers": "openvino-tokenizers",
         "transformers": "transformers",
         "optimum.intel": "optimum-intel[openvino]",
@@ -82,6 +83,19 @@ SOURCE_ARTIFACT_SUFFIXES = (
     ".index",
 )
 
+HF_SNAPSHOT_IGNORE_PATTERNS = [
+    "optimizer.bin",
+    "scheduler.bin",
+    "random_states_*.pkl",
+    "rng_state*.pth",
+    "trainer_state.json",
+    "training_args.bin",
+    "events.out.tfevents.*",
+    "runs/*",
+    "checkpoint-*/*",
+    "whisper-github/*/*.pt",
+]
+
 
 def _bool_env(name: str, default: bool = False) -> bool:
     raw = str(os.environ.get(name, "")).strip()
@@ -103,6 +117,22 @@ def _ensure_dir(path_like: str | pathlib.Path) -> pathlib.Path:
     path_obj = pathlib.Path(path_like).resolve()
     path_obj.mkdir(parents=True, exist_ok=True)
     return path_obj
+
+
+def _assert_safe_output_dir(output_dir: pathlib.Path) -> None:
+    resolved = output_dir.resolve()
+    cwd = pathlib.Path.cwd().resolve()
+    repo_root = SCRIPT_DIR.parent.resolve()
+    home = pathlib.Path.home().resolve()
+    anchor = pathlib.Path(resolved.anchor).resolve()
+
+    unsafe_exact = {cwd, repo_root, home, anchor}
+    if resolved in unsafe_exact:
+        raise RuntimeError(f"Refusing unsafe output directory for model conversion: {resolved}")
+    if (resolved / ".git").exists() or (resolved / "package.json").exists():
+        raise RuntimeError(f"Refusing to clear a source tree as model output directory: {resolved}")
+    if len(resolved.parts) < 4:
+        raise RuntimeError(f"Refusing suspiciously shallow model output directory: {resolved}")
 
 
 def _iter_repo_files(root_dir: pathlib.Path) -> list[str]:
@@ -282,10 +312,12 @@ def _save_ctc_processor_bundle(
 def _download_snapshot(repo_id: str, work_dir: pathlib.Path) -> pathlib.Path:
     target_dir = work_dir / "snapshot"
     token = _resolve_hf_token()
+    print(f"[arcsub-convert] Downloading filtered Hugging Face snapshot: {repo_id}", file=sys.stderr, flush=True)
     snapshot_path = snapshot_download(
         repo_id=repo_id,
         local_dir=str(target_dir),
         local_dir_use_symlinks=False,
+        ignore_patterns=HF_SNAPSHOT_IGNORE_PATTERNS,
         token=token,
     )
     return pathlib.Path(snapshot_path).resolve()
@@ -608,6 +640,46 @@ def _export_transformers_from_tf(repo_id: str, output_dir: pathlib.Path, runtime
     raise RuntimeError(f"TensorFlow export is not supported for runtime layout: {runtime_layout}")
 
 
+def _export_whisper_asr_with_ovmodel(repo_id: str, output_dir: pathlib.Path, trust_remote_code: bool) -> dict:
+    _maybe_bootstrap_optimum()
+
+    from optimum.intel import OVModelForSpeechSeq2Seq  # type: ignore
+
+    with tempfile.TemporaryDirectory(prefix="arcsub-ov-whisper-") as tmp_dir:
+        snapshot_dir = _download_snapshot(repo_id, pathlib.Path(tmp_dir))
+        print(
+            f"[arcsub-convert] Exporting Whisper ASR with OVModelForSpeechSeq2Seq from {snapshot_dir}",
+            file=sys.stderr,
+            flush=True,
+        )
+        model = OVModelForSpeechSeq2Seq.from_pretrained(
+            str(snapshot_dir),
+            export=True,
+            compile=False,
+            trust_remote_code=trust_remote_code,
+            local_files_only=True,
+        )
+        model.save_pretrained(output_dir)
+        model = None
+        gc.collect()
+
+        processor = AutoProcessor.from_pretrained(
+            str(snapshot_dir),
+            trust_remote_code=trust_remote_code,
+            local_files_only=True,
+        )
+        processor.save_pretrained(output_dir)
+
+        tokenizers = _generate_openvino_tokenizers(output_dir, output_dir, trust_remote_code)
+        return {
+            "mode": "ovmodel-for-speech-seq2seq-export",
+            "repoId": repo_id,
+            "snapshotFiles": _iter_repo_files(snapshot_dir),
+            "generatedFiles": _iter_repo_files(output_dir),
+            "tokenizerFiles": tokenizers,
+        }
+
+
 def _export_visual_causal_lm(repo_id: str, output_dir: pathlib.Path, trust_remote_code: bool) -> dict:
     _maybe_bootstrap_optimum()
     from optimum.intel import OVModelForVisualCausalLM  # type: ignore
@@ -667,40 +739,51 @@ def _maybe_bootstrap_optimum() -> None:
 
 def _run_optimum_export(repo_id: str, output_dir: pathlib.Path, hf_task: str | None, trust_remote_code: bool) -> dict:
     _maybe_bootstrap_optimum()
-    command = [
-        sys.executable,
-        "-m",
-        "optimum.exporters.openvino",
-        "--model",
-        repo_id,
-        "--weight-format",
-        "int8",
-    ]
-    if hf_task:
-        command.extend(["--task", hf_task])
-    if trust_remote_code:
-        command.append("--trust-remote-code")
-    command.append(str(output_dir))
+    snapshot_files: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="arcsub-ov-export-") as tmp_dir:
+        snapshot_dir = _download_snapshot(repo_id, pathlib.Path(tmp_dir))
+        snapshot_files = _iter_repo_files(snapshot_dir)
+        command = [
+            sys.executable,
+            "-m",
+            "optimum.exporters.openvino",
+            "--model",
+            str(snapshot_dir),
+            "--weight-format",
+            "int8",
+        ]
+        if hf_task:
+            command.extend(["--task", hf_task])
+        if trust_remote_code:
+            command.append("--trust-remote-code")
+        command.append(str(output_dir))
 
-    env = os.environ.copy()
-    token = _resolve_hf_token()
-    if token:
-        env["HF_TOKEN"] = token
+        env = os.environ.copy()
+        token = _resolve_hf_token()
+        if token:
+            env["HF_TOKEN"] = token
 
-    try:
-        completed = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
-    except subprocess.CalledProcessError as error:
-        stdout_tail = [line for line in str(error.stdout or "").splitlines()[-20:] if str(line).strip()]
-        stderr_tail = [line for line in str(error.stderr or "").splitlines()[-80:] if str(line).strip()]
-        detail_parts: list[str] = [f"optimum-cli failed with exit code {error.returncode}"]
-        if stdout_tail:
-            detail_parts.append("stdout tail:\n" + "\n".join(stdout_tail))
-        if stderr_tail:
-            detail_parts.append("stderr tail:\n" + "\n".join(stderr_tail))
-        raise RuntimeError("\n\n".join(detail_parts)) from error
+        print(
+            "[arcsub-convert] Running Optimum OpenVINO export: "
+            + " ".join(str(part) for part in command),
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            completed = subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+        except subprocess.CalledProcessError as error:
+            stdout_tail = [line for line in str(error.stdout or "").splitlines()[-20:] if str(line).strip()]
+            stderr_tail = [line for line in str(error.stderr or "").splitlines()[-80:] if str(line).strip()]
+            detail_parts: list[str] = [f"optimum-cli failed with exit code {error.returncode}"]
+            if stdout_tail:
+                detail_parts.append("stdout tail:\n" + "\n".join(stdout_tail))
+            if stderr_tail:
+                detail_parts.append("stderr tail:\n" + "\n".join(stderr_tail))
+            raise RuntimeError("\n\n".join(detail_parts)) from error
     return {
         "mode": "optimum-export-openvino",
         "command": command,
+        "snapshotFiles": snapshot_files,
         "stdoutTail": str(completed.stdout or "").splitlines()[-20:],
         "stderrTail": str(completed.stderr or "").splitlines()[-20:],
     }
@@ -765,6 +848,7 @@ def main() -> int:
     args = parser.parse_args()
 
     output_dir = pathlib.Path(args.output_dir).resolve()
+    _assert_safe_output_dir(output_dir)
     if output_dir.exists():
         shutil.rmtree(output_dir, ignore_errors=True)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -776,6 +860,8 @@ def main() -> int:
             if args.conversion_method == "optimum-export-openvino":
                 if args.source_format in ("tensorflow", "keras"):
                     result = _export_transformers_from_tf(args.repo_id, output_dir, args.runtime_layout, trust_remote_code)
+                elif args.runtime_layout == "asr-whisper":
+                    result = _export_whisper_asr_with_ovmodel(args.repo_id, output_dir, trust_remote_code)
                 elif args.runtime_layout == "translate-vlm":
                     result = _export_visual_causal_lm(args.repo_id, output_dir, trust_remote_code)
                 else:
