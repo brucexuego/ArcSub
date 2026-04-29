@@ -22,7 +22,7 @@ async function requestDeepL(
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: payload.toString(),
     },
-    30000,
+    deps.resolveRequestTimeoutMs(30000, options.modelOptions?.timeoutMs ?? undefined),
     options.signal
   );
 

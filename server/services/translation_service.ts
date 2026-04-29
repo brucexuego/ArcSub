@@ -338,9 +338,24 @@ export class TranslationService {
     return fallback;
   }
 
-  private static sleep(ms: number, signal?: AbortSignal) {
+  private static getCloudTranslationRequestTimeoutMs() {
+    return Math.round(this.getEnvNumber('TRANSLATE_CLOUD_REQUEST_TIMEOUT_MS', 300000, 30000, 900000));
+  }
+
+  private static resolveCloudTranslationRequestTimeoutMs(providerTimeoutMs?: number, overrideTimeoutMs?: number) {
+    const configured = this.getCloudTranslationRequestTimeoutMs();
+    const providerTimeout = Number(providerTimeoutMs);
+    const overrideTimeout = Number(overrideTimeoutMs);
+    return Math.max(
+      configured,
+      Number.isFinite(providerTimeout) && providerTimeout > 0 ? Math.round(providerTimeout) : 0,
+      Number.isFinite(overrideTimeout) && overrideTimeout > 0 ? Math.round(overrideTimeout) : 0
+    );
+  }
+
+  private static sleep(ms: number, signal?: AbortSignal): Promise<void> {
     if (!signal) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
+      return new Promise<void>((resolve) => setTimeout(resolve, ms));
     }
     return new Promise<void>((resolve, reject) => {
       if (signal.aborted) {
@@ -1400,7 +1415,9 @@ export class TranslationService {
       charBudget: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_BATCH_CHAR_BUDGET', 2400, 200, 20000)),
       maxSplitDepth: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_SPLIT_DEPTH', 4, 0, 8)),
       maxOutputTokens: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_OUTPUT_TOKENS', 2048, 256, 16384)),
-      timeoutMs: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_TIMEOUT_MS', 300000, 30000, 900000)),
+      timeoutMs: Math.round(
+        this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_TIMEOUT_MS', this.getCloudTranslationRequestTimeoutMs(), 30000, 900000)
+      ),
       stream: this.getEnvBoolean('TRANSLATE_NVIDIA_CLOUD_STREAM', false),
     };
   }
@@ -3204,13 +3221,14 @@ export class TranslationService {
     return text;
   }
 
-  private static async fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 120000, signal?: AbortSignal) {
+  private static async fetchWithTimeout(url: string, init: RequestInit, timeoutMs?: number, signal?: AbortSignal) {
+    const effectiveTimeoutMs = this.resolveCloudTranslationRequestTimeoutMs(undefined, timeoutMs);
     const controller = new AbortController();
     const combinedSignal =
       signal && typeof AbortSignal.any === 'function'
         ? AbortSignal.any([signal, controller.signal])
         : signal || controller.signal;
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), effectiveTimeoutMs);
     try {
       return await fetch(url, {
         ...init,
@@ -3364,6 +3382,7 @@ export class TranslationService {
     const adapter = getCloudTranslateAdapter(provider);
     const deps: CloudTranslateAdapterDeps = {
       throwIfAborted: this.throwIfAborted.bind(this),
+      resolveRequestTimeoutMs: this.resolveCloudTranslationRequestTimeoutMs.bind(this),
       fetchWithTimeout: this.fetchWithTimeout.bind(this),
       parseRetryAfterMs: this.parseRetryAfterMs.bind(this),
       extractErrorMessage: this.extractErrorMessage.bind(this),

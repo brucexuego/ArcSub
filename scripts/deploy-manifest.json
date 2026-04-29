@@ -36,6 +36,15 @@
         "category": "speaker_embedding"
       }
     ],
+    "optional": [
+      {
+        "id": "ten-vad",
+        "targetRelativePath": "ten-vad.onnx",
+        "sourceUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/ten-vad.onnx",
+        "category": "ten_vad",
+        "note": "Optional Ten VAD ONNX model. Downloaded automatically when VAD_ENGINE=ten, auto, or compare."
+      }
+    ],
     "conditional": [
       {
         "id": "pyannote-community-1",

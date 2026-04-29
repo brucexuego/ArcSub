@@ -372,7 +372,7 @@ export async function runLocalTranslationOrchestrator(
         sourceLang: input.sourceLang,
         modelStrategy,
         promptStyle: localTranslationProfile.effectivePromptStyle,
-      }),
+      }) ?? undefined,
       maxNewTokens,
       generation: deps.buildLocalGenerationOptions({
         localModel,
@@ -437,7 +437,7 @@ export async function runLocalTranslationOrchestrator(
           sourceLang: input.sourceLang,
           modelStrategy,
           promptStyle: localTranslationProfile.effectivePromptStyle,
-        }),
+        }) ?? undefined,
         maxNewTokens: deps.estimateLocalMaxNewTokens({
           text: sourceLine,
           lineCount: 1,
@@ -805,7 +805,7 @@ export async function runLocalTranslationOrchestrator(
             sourceLang: input.sourceLang,
             modelStrategy,
             promptStyle: localTranslationProfile.effectivePromptStyle,
-          }),
+          }) ?? undefined,
           maxNewTokens: deps.estimateLocalMaxNewTokens({
             text: retryContext,
             lineCount: 3,
@@ -1020,6 +1020,7 @@ export async function runLocalTranslationOrchestrator(
   const finalQualityWarnings = finalQualityIssues
     .map((issue) => qualityIssueToWarningCode(issue))
     .filter(Boolean) as string[];
+  const localBatchingDebugSnapshot = localBatchingDebug as LocalTranslationBatchDebugInfo | null;
 
   return {
     translatedText: output,
@@ -1068,11 +1069,11 @@ export async function runLocalTranslationOrchestrator(
         localBaselineConfidence: localProfile.baseline.baselineConfidence,
         localBaselineTaskFamily: localProfile.baseline.taskFamily,
         localFallbackBaseline: localProfile.usedFallbackBaseline,
-        localBatching: localBatchingDebug,
-        localBatchingMode: localBatchingDebug?.mode ?? null,
-        localBatchCount: localBatchingDebug?.batchCount ?? null,
-        localBatchLineCounts: localBatchingDebug?.lineCounts ?? [],
-        localBatchPromptTokens: localBatchingDebug?.promptTokens ?? [],
+        localBatching: localBatchingDebugSnapshot,
+        localBatchingMode: localBatchingDebugSnapshot?.mode ?? null,
+        localBatchCount: localBatchingDebugSnapshot?.batchCount ?? null,
+        localBatchLineCounts: localBatchingDebugSnapshot?.lineCounts ?? [],
+        localBatchPromptTokens: localBatchingDebugSnapshot?.promptTokens ?? [],
       },
       quality: {
         lineCountMatch: sourceLineCount <= 1 ? true : output.split('\n').length >= sourceLineCount,

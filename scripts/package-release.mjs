@@ -25,6 +25,7 @@ const runtimeDependencyNames = [
   'openvino-genai-node',
   'openvino-node',
   'pinyin-pro',
+  'sherpa-onnx',
   'unzipper',
 ];
 

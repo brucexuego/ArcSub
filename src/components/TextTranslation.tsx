@@ -153,8 +153,10 @@ interface TranslationPipelineDebug {
   runtime?: {
     modelId?: string;
     modelPath?: string;
+    cacheDir?: string;
     pipelineKind?: string;
     vlmRuntimeMode?: string | null;
+    promptLookupEnabled?: boolean;
     requestedDevice?: string;
     pipelineDevice?: string | null;
     schedulerConfig?: {
