@@ -270,7 +270,7 @@ class OpenVinoAsrHelperClient {
       const text = chunk.toString('utf8').trim();
       if (!text) return;
       console.warn('[openvino-asr-helper]', text);
-      for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+      for (const line of text.split(/\r?\n/).map((item: string) => item.trim()).filter(Boolean)) {
         this.stderrTail.push(line);
       }
       if (this.stderrTail.length > 40) {
@@ -561,7 +561,8 @@ class OpenVinoTranslateHelperClient {
 
   private static async requestNow(method: string, params: Record<string, unknown>, timeoutMs: number) {
     const child = this.ensureHelper();
-    if (!child.stdin || child.stdin.destroyed) {
+    const stdin = child.stdin;
+    if (!stdin || stdin.destroyed) {
       this.terminateHelper('Translate helper stdin is unavailable.');
       throw new Error('Translate helper stdin is unavailable.');
     }
@@ -582,7 +583,7 @@ class OpenVinoTranslateHelperClient {
       });
 
       try {
-        child.stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8');
+        stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8');
       } catch (error: any) {
         clearTimeout(timeout);
         this.pending.delete(requestId);
@@ -593,7 +594,7 @@ class OpenVinoTranslateHelperClient {
 
   private static async enqueueRequest<T>(fn: () => Promise<T>) {
     const previous = this.requestQueue;
-    let release: (() => void) | null = null;
+    let release = () => {};
     this.requestQueue = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -601,7 +602,7 @@ class OpenVinoTranslateHelperClient {
     try {
       return await fn();
     } finally {
-      release?.();
+      release();
     }
   }
 
@@ -793,7 +794,8 @@ class OpenVinoGenaiTranslateHelperClient {
 
   private static async requestNow(method: string, params: Record<string, unknown>, timeoutMs: number) {
     const child = this.ensureHelper();
-    if (!child.stdin || child.stdin.destroyed) {
+    const stdin = child.stdin;
+    if (!stdin || stdin.destroyed) {
       this.terminateHelper('OpenVINO GenAI translate helper stdin is unavailable.');
       throw new Error('OpenVINO GenAI translate helper stdin is unavailable.');
     }
@@ -814,7 +816,7 @@ class OpenVinoGenaiTranslateHelperClient {
       });
 
       try {
-        child.stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8');
+        stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8');
       } catch (error: any) {
         clearTimeout(timeout);
         this.pending.delete(requestId);
@@ -825,7 +827,7 @@ class OpenVinoGenaiTranslateHelperClient {
 
   private static async enqueueRequest<T>(fn: () => Promise<T>) {
     const previous = this.requestQueue;
-    let release: (() => void) | null = null;
+    let release = () => {};
     this.requestQueue = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -833,7 +835,7 @@ class OpenVinoGenaiTranslateHelperClient {
     try {
       return await fn();
     } finally {
-      release?.();
+      release();
     }
   }
 
@@ -1517,7 +1519,8 @@ export class OpenvinoRuntimeManager {
 
     const request = (method: string, params: Record<string, unknown>, timeoutMs: number) =>
       new Promise<any>((resolve, reject) => {
-        if (!child.stdin || child.stdin.destroyed) {
+        const stdin = child.stdin;
+        if (!stdin || stdin.destroyed) {
           reject(new Error('OpenVINO GenAI translate helper stdin is unavailable.'));
           return;
         }
@@ -1527,7 +1530,7 @@ export class OpenvinoRuntimeManager {
           reject(new Error(`OpenVINO GenAI translate helper request timed out after ${timeoutMs} ms (${method}).`));
         }, timeoutMs);
         pending.set(requestId, { resolve, reject, timeout });
-        child.stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8', (error) => {
+        stdin.write(`${JSON.stringify({ requestId, method, params })}\n`, 'utf8', (error) => {
           if (!error) return;
           clearTimeout(timeout);
           pending.delete(requestId);
@@ -1774,7 +1777,7 @@ export class OpenvinoRuntimeManager {
     return text;
   }
 
-  private static normalizeLocalAsrText(raw: unknown) {
+  private static normalizeLocalAsrText(raw: unknown): string {
     if (Array.isArray(raw)) {
       return raw
         .map((item) => this.normalizeLocalAsrText(item))
@@ -1785,7 +1788,7 @@ export class OpenvinoRuntimeManager {
 
     if (raw && typeof raw === 'object') {
       const candidateObject = raw as Record<string, unknown>;
-      const directCandidates = [
+      const directCandidates: unknown[] = [
         candidateObject.text,
         candidateObject.transcript,
         candidateObject.transcription,

@@ -11,7 +11,7 @@ export type LocalTranslatePromptStyle =
 
 export type LocalTranslateGenerationStyle = 'generic' | 'qwen' | 'qwen3' | 'deepseek_r1';
 
-export interface LocalTranslateStructuredMessage {
+export interface LocalTranslateStructuredMessage extends Record<string, unknown> {
   role: string;
   content: Array<Record<string, unknown>> | string;
 }

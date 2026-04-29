@@ -168,7 +168,9 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
       localFallbackBaseline: input.localProfile?.baseProfile.usedFallbackBaseline ?? false,
     },
     quality: {
-      timestampReliability: input.providerMeta?.rawHasTimestamps
+      timestampReliability: input.providerMeta?.geminiTimestampSource === 'vad_window'
+        ? 'vad_window'
+        : input.providerMeta?.rawHasTimestamps
         ? 'native'
         : input.alignmentDiagnostics?.applied
           ? 'forced'

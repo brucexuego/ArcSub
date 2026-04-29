@@ -65,6 +65,8 @@ export type RuntimeReadinessSnapshot = {
   };
   vad_ready: boolean;
   vad: FileReadiness;
+  ten_vad_ready: boolean;
+  ten_vad: FileReadiness;
   speaker_embedding_ready: boolean;
   speaker_embedding: FileReadiness;
   pyannote_ready: boolean;
@@ -322,6 +324,7 @@ export class RuntimeReadinessService {
     const ffmpeg = getToolReadiness('ffmpeg');
     const ytDlp = getToolReadiness('yt-dlp');
     const vad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'silero_vad.onnx'));
+    const tenVad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ten-vad.onnx'));
     const speakerEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ecapa-tdnn.onnx'));
     const pyannoteSegmentation = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'segmentation', 'model.xml'));
     const pyannoteEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'embedding', 'model.xml'));
@@ -374,6 +377,8 @@ export class RuntimeReadinessService {
       },
       vad_ready: vad.exists,
       vad,
+      ten_vad_ready: tenVad.exists,
+      ten_vad: tenVad,
       speaker_embedding_ready: speakerEmbedding.exists,
       speaker_embedding: speakerEmbedding,
       pyannote_ready: pyannoteReady,

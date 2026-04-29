@@ -873,7 +873,10 @@ export default function Settings({ project }: { project: Project | null }) {
 
   const applyLocalModelsResponse = React.useCallback((data: LocalModelsResponse) => {
     setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-    setLocalSelection(data.selection || { asrSelectedId: '', translateSelectedId: '' });
+    setLocalSelection({
+      asrSelectedId: data.selection?.asrSelectedId || '',
+      translateSelectedId: data.selection?.translateSelectedId || '',
+    });
     if (Array.isArray(data.installs)) {
       setLocalInstallStatuses(data.installs);
     } else if (data.install) {
@@ -890,9 +893,7 @@ export default function Settings({ project }: { project: Project | null }) {
 
     const loadSeq = settingsLoadSeqRef.current + 1;
     settingsLoadSeqRef.current = loadSeq;
-    let requestTask: Promise<void>;
-
-    requestTask = (async () => {
+    const requestTask = (async () => {
       settingsAbortRef.current?.abort();
       const controller = new AbortController();
       settingsAbortRef.current = controller;
@@ -920,7 +921,7 @@ export default function Settings({ project }: { project: Project | null }) {
         if (settingsAbortRef.current === controller) {
           settingsAbortRef.current = null;
         }
-        if (settingsRequestRef.current === requestTask) {
+        if (settingsLoadSeqRef.current === loadSeq) {
           settingsRequestRef.current = null;
         }
       }
@@ -941,9 +942,7 @@ export default function Settings({ project }: { project: Project | null }) {
 
     const loadSeq = localModelsLoadSeqRef.current + 1;
     localModelsLoadSeqRef.current = loadSeq;
-    let requestTask: Promise<void>;
-
-    requestTask = (async () => {
+    const requestTask = (async () => {
       localStatusAbortRef.current?.abort();
       localCatalogAbortRef.current?.abort();
       const statusController = new AbortController();
@@ -956,7 +955,7 @@ export default function Settings({ project }: { project: Project | null }) {
         if (!mountedRef.current) return;
         setLocalStatusLoading(false);
         setLocalCatalogLoading(false);
-        if (localModelsRequestRef.current === requestTask) {
+        if (localModelsLoadSeqRef.current === loadSeq) {
           localModelsRequestRef.current = null;
         }
       }, 20_000);
@@ -1029,7 +1028,7 @@ export default function Settings({ project }: { project: Project | null }) {
         await Promise.allSettled([statusTask, modelsTask]);
       } finally {
         window.clearTimeout(loadingSafeguard);
-        if (localModelsRequestRef.current === requestTask) {
+        if (localModelsLoadSeqRef.current === loadSeq) {
           localModelsRequestRef.current = null;
         }
       }
@@ -2124,6 +2123,16 @@ function parseModelOptions(raw: string): {
   }
 }
 
+function getDefaultProviderModelId(modelType: 'asr' | 'translate', url?: string) {
+  if (modelType === 'translate') return 'gpt-4o-mini';
+  const normalizedUrl = String(url || '').toLowerCase();
+  if (normalizedUrl.includes('models.github.ai') || normalizedUrl.includes('/inference/chat/completions')) return 'microsoft/Phi-4-multimodal-instruct';
+  if (normalizedUrl.includes('generativelanguage.googleapis.com') || normalizedUrl.includes(':generatecontent')) return 'gemini-2.5-flash';
+  if (normalizedUrl.includes('speech.googleapis.com') || normalizedUrl.includes('/recognizers/')) return 'chirp_3';
+  if (normalizedUrl.includes('elevenlabs.io') || normalizedUrl.includes('/speech-to-text')) return 'scribe_v2';
+  return 'whisper-1';
+}
+
 const ModelItem: React.FC<{ 
   model: ApiConfig, 
   modelType: 'asr' | 'translate',
@@ -2276,7 +2285,7 @@ const ModelItem: React.FC<{
               <div className="mt-1 truncate text-base font-bold text-secondary">{model.name}</div>
             </div>
             <div className="inline-flex w-fit items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-bold text-outline">
-              {model.model || (modelType === 'asr' ? 'whisper-1' : 'gpt-4o-mini')}
+              {model.model || getDefaultProviderModelId(modelType, model.url)}
             </div>
           </div>
 
@@ -2295,7 +2304,7 @@ const ModelItem: React.FC<{
             <div className="rounded-xl border border-white/5 bg-surface-container-high px-4 py-3">
               <div className="text-[10px] font-bold uppercase tracking-widest text-outline">{t('settings.modelId')}</div>
               <div className="mt-1 truncate text-sm text-secondary">
-                {model.model || (modelType === 'asr' ? 'whisper-1' : 'gpt-4o-mini')}
+                {model.model || getDefaultProviderModelId(modelType, model.url)}
               </div>
             </div>
             {modelType === 'translate' && model.options && (
@@ -2400,7 +2409,7 @@ const ModelItem: React.FC<{
               setEditedModel({...editedModel, url: e.target.value});
               if (errors.url) setErrors({...errors, url: undefined});
             }}
-            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions' : 'https://api.openai.com/v1/chat/completions'}
+            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions, https://api.elevenlabs.io/v1/speech-to-text, https://models.github.ai/inference/chat/completions, https://generativelanguage.googleapis.com, or https://us-speech.googleapis.com/v2/projects/PROJECT/locations/us/recognizers/_:recognize' : 'https://api.openai.com/v1/chat/completions'}
             className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
               errors.url ? 'border-error/50' : 'border-white/10'
             }`}
@@ -2429,7 +2438,7 @@ const ModelItem: React.FC<{
             type="text" 
             value={editedModel.model || ''} 
             onChange={e => setEditedModel({...editedModel, model: e.target.value})}
-            placeholder={modelType === 'asr' ? 'whisper-1' : 'gpt-4o-mini'}
+            placeholder={modelType === 'asr' ? 'whisper-1 / scribe_v2 / microsoft/Phi-4-multimodal-instruct / gemini-2.5-flash / chirp_3' : 'gpt-4o-mini'}
             className="w-full bg-surface-container-lowest border border-white/10 rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30"
           />
           <p className="text-[10px] text-outline/50 mt-1">{t('settings.modelIdHint')}</p>

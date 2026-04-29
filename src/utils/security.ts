@@ -26,7 +26,7 @@ export function isValidProjectName(name: string): boolean {
 
 export function isValidApiKey(key: string): boolean {
   if (!key) return true;
-  return key.length >= 8 && key.length <= 256;
+  return key.length >= 8 && key.length <= 4096;
 }
 
 export function isMaskedApiKey(key: string): boolean {

@@ -1,5 +1,6 @@
 import * as ort from "onnxruntime-node";
 import { spawn } from "child_process";
+import { createRequire } from "module";
 import path from "path";
 import fs from "fs-extra";
 import { PathManager } from "./path_manager.js";
@@ -12,11 +13,17 @@ export interface SpeechSegment {
   end: number;
 }
 
+type VadEngine = "silero" | "ten" | "auto" | "compare";
+
+const require = createRequire(import.meta.url);
+
 export class VadService {
   private static compiledModel: any | null = null;
   private static session: ort.InferenceSession | null = null;
-  private static backend: "openvino" | "onnxruntime" | null = null;
+  private static tenVadModule: any | null = null;
+  private static backend: "openvino" | "onnxruntime" | "ten-onnx" | null = null;
   private static modelPath = path.join(PathManager.getModelsPath(), "silero_vad.onnx");
+  private static tenModelPath = path.join(PathManager.getModelsPath(), "ten-vad.onnx");
   private static readonly sampleRate = 16000;
   private static readonly adaptivePauseHistoryMax = 50;
 
@@ -63,6 +70,12 @@ export class VadService {
     };
   }
 
+  private static getEngine(): VadEngine {
+    const raw = String(process.env.VAD_ENGINE ?? "silero").trim().toLowerCase();
+    if (raw === "ten" || raw === "auto" || raw === "compare") return raw;
+    return "silero";
+  }
+
   private static getFfmpegBinary() {
     return resolveToolCommand("ffmpeg");
   }
@@ -101,6 +114,38 @@ export class VadService {
     const xmlCandidate = this.modelPath.replace(/\.onnx$/i, ".xml");
     if (xmlCandidate !== this.modelPath && (await fs.pathExists(xmlCandidate))) {
       return xmlCandidate;
+    }
+
+    return null;
+  }
+
+  private static async getTenModelPath(downloadIfMissing: boolean) {
+    const envPath = process.env.TEN_VAD_MODEL_PATH?.trim();
+    const resolved = envPath
+      ? (path.isAbsolute(envPath) ? envPath : path.resolve(PathManager.getRoot(), envPath))
+      : this.tenModelPath;
+
+    if (await fs.pathExists(resolved)) {
+      return resolved;
+    }
+
+    if (!downloadIfMissing) {
+      return null;
+    }
+
+    try {
+      await ResourceManager.ensureBaselineAsset("ten-vad");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[VAD] Could not download Ten VAD model: ${message}`);
+    }
+
+    if (await fs.pathExists(resolved)) {
+      return resolved;
+    }
+
+    if (resolved !== this.tenModelPath && (await fs.pathExists(this.tenModelPath))) {
+      return this.tenModelPath;
     }
 
     return null;
@@ -428,7 +473,7 @@ export class VadService {
     };
   }
 
-  static async init() {
+  private static async initSilero() {
     if (this.compiledModel || this.session) return;
     let openvinoModelPath = await this.getOpenvinoModelPath();
     if (!openvinoModelPath && !(await fs.pathExists(this.modelPath))) {
@@ -484,8 +529,8 @@ export class VadService {
     throw new Error(`[VAD] Failed to initialize OpenVINO and ONNX Runtime backends. OpenVINO error: ${detail}`);
   }
 
-  static async detectSpeech(filePath: string): Promise<SpeechSegment[]> {
-    await this.init();
+  private static async detectSpeechWithSilero(filePath: string): Promise<SpeechSegment[]> {
+    await this.initSilero();
     if (!this.compiledModel && !this.session) throw new Error("VAD runtime missing");
 
     const config = this.getConfig();
@@ -514,6 +559,9 @@ export class VadService {
           "state"
         )
       : (this.session?.inputNames.find((name) => name.toLowerCase().includes("state")) ?? "state");
+    const stateInputIndex = !this.compiledModel && this.session ? this.session.inputNames.indexOf(stateName) : -1;
+    const stateMetadata = stateInputIndex >= 0 ? this.session?.inputMetadata[stateInputIndex] : undefined;
+    const stateDimFromMetadata = stateMetadata?.isTensor ? Number(stateMetadata.shape?.[2]) : 128;
     const stateDim = this.compiledModel
       ? Number(
           (
@@ -521,7 +569,7 @@ export class VadService {
             [2, 1, 128]
           ).at(-1)
         ) || 128
-      : Number(this.session?.inputMetadata[stateName]?.dims?.[2]) || 128;
+      : stateDimFromMetadata || 128;
     const probName = this.compiledModel
       ? OpenvinoBackend.getPortName(
           outputPorts.find((port: any) => {
@@ -651,6 +699,166 @@ export class VadService {
       console.error("[VAD] detection failed:", message);
       return [];
     }
+  }
+
+  private static getTenConfig(baseConfig: ReturnType<typeof VadService.getConfig>) {
+    const windowSizeRaw = Math.round(this.getEnvNumber("TEN_VAD_WINDOW_SIZE", 256, 160, 512));
+    // TEN_VAD_* values are optional overrides; otherwise Ten follows shared VAD_* semantics.
+    return {
+      windowSize: windowSizeRaw,
+      threshold: this.getEnvNumber("TEN_VAD_THRESHOLD", baseConfig.startThreshold, 0.05, 0.95),
+      minSilenceDuration: this.getEnvNumber(
+        "TEN_VAD_MIN_SILENCE_MS",
+        baseConfig.initialSilenceMs,
+        30,
+        5000
+      ) / 1000,
+      minSpeechDuration: this.getEnvNumber("TEN_VAD_MIN_SPEECH_MS", baseConfig.minSpeechMs, 30, 30000) / 1000,
+      maxSpeechDuration: this.getEnvNumber("TEN_VAD_MAX_SPEECH_SEC", 20, 1, 1200),
+    };
+  }
+
+  private static loadSherpaOnnx() {
+    if (!this.tenVadModule) {
+      this.tenVadModule = require("sherpa-onnx");
+    }
+    return this.tenVadModule;
+  }
+
+  private static postProcessExternalSegments(
+    segments: SpeechSegment[],
+    totalSec: number,
+    config: ReturnType<typeof VadService.getConfig>
+  ) {
+    const normalized: SpeechSegment[] = [];
+    const minSpeechSec = config.minSpeechMs / 1000;
+    const padSec = config.padMs / 1000;
+    for (const segment of segments) {
+      this.pushSegment(
+        normalized,
+        this.clamp(segment.start, 0, totalSec),
+        this.clamp(segment.end, 0, totalSec),
+        totalSec,
+        minSpeechSec,
+        padSec
+      );
+    }
+    return this.mergeAdjacentSegments(normalized, config.mergeGapMs / 1000);
+  }
+
+  private static async detectSpeechWithTen(filePath: string, downloadIfMissing: boolean): Promise<SpeechSegment[]> {
+    const config = this.getConfig();
+    const modelPath = await this.getTenModelPath(downloadIfMissing);
+    if (!modelPath) {
+      throw new Error(`[VAD] Ten VAD model not found: ${this.tenModelPath}`);
+    }
+
+    const rawSamples = await this.extractAudioForVad(filePath);
+    const normalizedAudio = this.normalizeSamplesForVad(rawSamples);
+    const samples = normalizedAudio.samples;
+    const totalSec = samples.length / this.sampleRate;
+    const tenConfig = this.getTenConfig(config);
+    const sherpa = this.loadSherpaOnnx();
+    const vad = sherpa.createVad({
+      tenVad: {
+        model: modelPath,
+        threshold: tenConfig.threshold,
+        minSilenceDuration: tenConfig.minSilenceDuration,
+        minSpeechDuration: tenConfig.minSpeechDuration,
+        maxSpeechDuration: tenConfig.maxSpeechDuration,
+        windowSize: tenConfig.windowSize,
+      },
+      sileroVad: {
+        model: "",
+        threshold: config.startThreshold,
+        minSilenceDuration: config.initialSilenceMs / 1000,
+        minSpeechDuration: config.minSpeechMs / 1000,
+        maxSpeechDuration: tenConfig.maxSpeechDuration,
+        windowSize: config.frameSize,
+      },
+      sampleRate: this.sampleRate,
+      numThreads: 1,
+      provider: "cpu",
+      debug: 0,
+      bufferSizeInSeconds: Math.max(30, Math.ceil(totalSec) + 1),
+    });
+
+    try {
+      const chunkSize = tenConfig.windowSize;
+      for (let offset = 0; offset < samples.length; offset += chunkSize) {
+        vad.acceptWaveform(samples.subarray(offset, Math.min(samples.length, offset + chunkSize)));
+      }
+      vad.flush();
+
+      const rawSegments: SpeechSegment[] = [];
+      while (!vad.isEmpty()) {
+        const segment = vad.front();
+        const start = Number(segment?.start || 0) / this.sampleRate;
+        const end = (Number(segment?.start || 0) + Number(segment?.samples?.length || 0)) / this.sampleRate;
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+          rawSegments.push({ start, end });
+        }
+        vad.pop();
+      }
+
+      const merged = this.postProcessExternalSegments(rawSegments, totalSec, config);
+      if (config.logStats) {
+        console.log(
+          `[VAD] backend=ten-onnx, segments=${merged.length}, rawSegments=${rawSegments.length}, windowSize=${tenConfig.windowSize}, threshold=${tenConfig.threshold}, silence=${tenConfig.minSilenceDuration.toFixed(2)}s, gain=${normalizedAudio.gain.toFixed(2)}, peak=${normalizedAudio.peak.toFixed(4)}`
+        );
+      }
+      this.backend = "ten-onnx";
+      return merged;
+    } finally {
+      vad.free();
+    }
+  }
+
+  private static summarizeSegments(segments: SpeechSegment[]) {
+    const totalSec = segments.reduce((sum, segment) => sum + Math.max(0, segment.end - segment.start), 0);
+    return {
+      count: segments.length,
+      totalSec: Number(totalSec.toFixed(3)),
+      avgSec: segments.length > 0 ? Number((totalSec / segments.length).toFixed(3)) : 0,
+    };
+  }
+
+  static async detectSpeech(filePath: string): Promise<SpeechSegment[]> {
+    const engine = this.getEngine();
+    if (engine === "ten") {
+      return this.detectSpeechWithTen(filePath, true);
+    }
+
+    if (engine === "auto") {
+      try {
+        const tenSegments = await this.detectSpeechWithTen(filePath, true);
+        if (tenSegments.length > 0) {
+          return tenSegments;
+        }
+        console.warn("[VAD] Ten VAD returned no speech segments, falling back to Silero.");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[VAD] Ten VAD unavailable, falling back to Silero: ${message}`);
+      }
+      return this.detectSpeechWithSilero(filePath);
+    }
+
+    if (engine === "compare") {
+      const [silero, ten] = await Promise.all([
+        this.detectSpeechWithSilero(filePath),
+        this.detectSpeechWithTen(filePath, true).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[VAD] Ten VAD compare failed: ${message}`);
+          return [] as SpeechSegment[];
+        }),
+      ]);
+      console.log(
+        `[VAD] compare silero=${JSON.stringify(this.summarizeSegments(silero))} ten=${JSON.stringify(this.summarizeSegments(ten))}`
+      );
+      return ten.length > 0 ? ten : silero;
+    }
+
+    return this.detectSpeechWithSilero(filePath);
   }
 
   private static async extractAudioForVad(filePath: string): Promise<Float32Array> {

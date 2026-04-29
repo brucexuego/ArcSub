@@ -46,6 +46,7 @@ export interface CloudTranslateProviderError extends Error {
 
 export interface CloudTranslateAdapterDeps {
   throwIfAborted(signal?: AbortSignal): void;
+  resolveRequestTimeoutMs(providerTimeoutMs?: number, overrideTimeoutMs?: number): number;
   fetchWithTimeout(url: string, init: RequestInit, timeoutMs?: number, signal?: AbortSignal): Promise<Response>;
   parseRetryAfterMs(response: Response): number | null;
   extractErrorMessage(rawText: string, fallback: string): string;
@@ -312,8 +313,7 @@ async function executeLlmAdapterRequest(input: {
     requestHeaders.Accept = 'text/event-stream';
   }
   const timeoutOverride = toFiniteNumber(input.options.modelOptions?.timeoutMs);
-  const effectiveTimeoutMs =
-    timeoutOverride && timeoutOverride > 0 ? timeoutOverride : providerRequest.timeoutMs ?? 120000;
+  const effectiveTimeoutMs = input.deps.resolveRequestTimeoutMs(providerRequest.timeoutMs, timeoutOverride);
 
   const response = await input.deps.fetchWithTimeout(
     providerRequest.url,

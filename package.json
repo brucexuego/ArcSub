@@ -65,6 +65,7 @@
     "pinyin-pro": "^3.28.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "sherpa-onnx": "^1.12.37",
     "unzipper": "^0.12.3",
     "vite": "^6.2.0"
   },
@@ -72,6 +73,8 @@
     "@types/express": "^4.17.21",
     "@types/multer": "^2.1.0",
     "@types/node": "^22.19.17",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

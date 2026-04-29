@@ -12,7 +12,7 @@ import { AlignmentService } from '../alignment_service.js';
 import { getSegmenterLocale, isNoSpaceLanguage as isPolicyNoSpaceLanguage } from '../language/resolver.js';
 import { LanguageAlignmentRegistry } from '../language_alignment/registry.js';
 import { genericFallbackSegmentNoSpaceLexicalUnits, normalizeNoSpaceAlignmentText } from '../language_alignment/shared/no_space_utils.js';
-import { requestCloudAsr } from './cloud_asr_adapter.js';
+import { buildCloudAsrRequestHeaders, requestCloudAsr, requestGeminiCloudAsrBatch } from './cloud_asr_adapter.js';
 import { resolveCloudAsrProvider } from './cloud_asr_provider.js';
 import { extractErrorMessage, hasAuthFailureHint, hasPayloadValidationHint } from '../http/text_utils.js';
 import { buildAsrDebugInfo, buildAsrWarningCodes } from './local_asr/debug.js';
@@ -90,10 +90,21 @@ type AsrWindowScheduleStats = {
   concurrency: number;
   maxRetries: number;
   taskCount: number;
+  providerRequestCount?: number;
+  geminiMultiAudioBatchSize?: number;
   attemptedCount: number;
   succeededCount: number;
   skippedCount: number;
   retries: number;
+};
+
+type AsrCloudChunkingPolicy = {
+  initialChunkSec?: number;
+  minChunkSec?: number;
+  maxChunks?: number;
+  audioFormat?: 'wav' | 'mp3';
+  audioBitrate?: string;
+  reason?: string;
 };
 
 export class AsrService {
@@ -195,6 +206,13 @@ export class AsrService {
     return fallback;
   }
 
+  private static getEnvTrimmedString(name: string, fallback: string) {
+    const raw = process.env[name];
+    if (typeof raw !== 'string') return fallback;
+    const trimmed = raw.trim();
+    return trimmed || fallback;
+  }
+
   private static resolvePipelineMode(rawMode?: string): AsrPipelineMode {
     const requested = String(rawMode || process.env.ASR_PIPELINE_MODE || '')
       .trim()
@@ -279,6 +297,10 @@ export class AsrService {
     );
   }
 
+  private static getGeminiMultiAudioBatchSize() {
+    return 50;
+  }
+
   private static getVadWindowConcurrency(mode: AsrPipelineMode, useLocalProvider: boolean) {
     const defaultConcurrency = useLocalProvider ? 1 : mode === 'throughput' ? 4 : 1;
     return Math.round(
@@ -304,6 +326,72 @@ export class AsrService {
         bucket,
       } satisfies AsrVadWindowTask;
     });
+  }
+
+  private static collapseTranscriptToVadWindow(
+    transcript: AsrStructuredTranscript,
+    durationSec: number,
+    language?: string
+  ): AsrStructuredTranscript {
+    const text = this.buildVadWindowTranscriptText(transcript, language);
+    if (!text) {
+      return {
+        text: '',
+        chunks: [],
+        segments: [],
+        word_segments: [],
+      };
+    }
+
+    const endTs = Number(Math.max(0.1, durationSec).toFixed(3));
+    const segment = {
+      text,
+      start_ts: 0,
+      end_ts: endTs,
+    } satisfies AsrStructuredSegment;
+    return {
+      text,
+      chunks: [{
+        text,
+        start_ts: 0,
+        end_ts: endTs,
+        source_segment_indices: [0],
+      }],
+      segments: [segment],
+      word_segments: [],
+    };
+  }
+
+  private static buildVadWindowTranscriptText(transcript: AsrStructuredTranscript, language?: string) {
+    const candidates = [
+      this.normalizeVadWindowText((transcript.chunks || []).map((chunk) => chunk?.text || '').filter(Boolean).join(' ')),
+      this.normalizeVadWindowText((transcript.segments || []).map((segment) => segment?.text || '').filter(Boolean).join(' ')),
+      this.normalizeVadWindowText(transcript.text || ''),
+      this.buildTranscriptTextFromChunks(transcript.chunks || [], language),
+    ].filter(Boolean);
+
+    if (candidates.length === 0) return '';
+    return candidates
+      .map((text, index) => ({ text, index, score: this.scoreVadWindowTextCandidate(text) }))
+      .sort((a, b) => b.score - a.score || a.index - b.index)[0].text;
+  }
+
+  private static normalizeVadWindowText(value: string) {
+    const cleaned = this.normalizeChunkText(value);
+    if (!cleaned) return '';
+    return cleaned
+      .replace(/\s+/g, ' ')
+      .replace(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])\s+([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])/gu, '$1$2')
+      .replace(/\s+([,.;:!?%。、！？])/g, '$1')
+      .replace(/([\(\[\{¿¡])\s+/g, '$1')
+      .trim();
+  }
+
+  private static scoreVadWindowTextCandidate(text: string) {
+    const latinWordSpaces = text.match(/[A-Za-z]{2,}\s+[A-Za-z]{2,}/g)?.length ?? 0;
+    const latinCamelJoints = text.match(/[a-z][A-Z]/g)?.length ?? 0;
+    const longLatinRuns = text.match(/[A-Za-z]{14,}/g)?.length ?? 0;
+    return latinWordSpaces * 10 - latinCamelJoints * 3 - longLatinRuns * 2;
   }
 
   private static chunkTasksByBatchSize(tasks: AsrVadWindowTask[], batchSize: number) {
@@ -473,7 +561,28 @@ export class AsrService {
     return Math.round(this.getEnvNumber('ASR_FILE_LIMIT_BYTES', defaultBytes, 1024 * 1024));
   }
 
-  private static buildVadWindows(segments: Array<{ start: number; end: number }>) {
+  private static sanitizeAudioBitrate(value: string, fallback = '32k') {
+    const normalized = String(value || '').trim().toLowerCase();
+    return /^\d{2,3}k$/.test(normalized) ? normalized : fallback;
+  }
+
+  private static getPhi4CloudChunkingPolicy(): AsrCloudChunkingPolicy {
+    const initialChunkSec = Math.round(this.getEnvNumber('ASR_PHI4_FILE_LIMIT_CHUNK_SEC', 5, 2, 60));
+    const minChunkSec = Math.round(this.getEnvNumber('ASR_PHI4_FILE_LIMIT_MIN_CHUNK_SEC', 2, 1, 30));
+    return {
+      initialChunkSec,
+      minChunkSec: Math.min(initialChunkSec, minChunkSec),
+      maxChunks: Math.round(this.getEnvNumber('ASR_PHI4_FILE_LIMIT_MAX_CHUNKS', 2000, 1, 10000)),
+      audioFormat: 'mp3',
+      audioBitrate: this.sanitizeAudioBitrate(this.getEnvTrimmedString('ASR_PHI4_AUDIO_BITRATE', '16k'), '16k'),
+      reason: 'github_phi4_8000_token_limit',
+    };
+  }
+
+  private static buildVadWindows(
+    segments: Array<{ start: number; end: number }>,
+    options: { overflowMode?: 'collapse' | 'rebalance' } = {}
+  ) {
     const sorted = segments
       .map((s) => ({
         start: this.toFiniteNumber(s?.start, 0),
@@ -484,8 +593,10 @@ export class AsrService {
 
     if (sorted.length === 0) return [];
 
-    const minSegmentSec = this.getEnvNumber('VAD_TRANSCRIBE_MIN_SEGMENT_SEC', 0.2, 0.05, 10);
-    const mergeGapSec = this.getEnvNumber('VAD_TRANSCRIBE_MERGE_GAP_SEC', 0.35, 0, 10);
+    const defaultMinSegmentSec = this.getEnvNumber('VAD_MIN_SPEECH_MS', 1000, 30, 30000) / 1000;
+    const defaultMergeGapSec = this.getEnvNumber('VAD_MERGE_GAP_MS', 250, 0, 3000) / 1000;
+    const minSegmentSec = this.getEnvNumber('VAD_TRANSCRIBE_MIN_SEGMENT_SEC', defaultMinSegmentSec, 0.05, 10);
+    const mergeGapSec = this.getEnvNumber('VAD_TRANSCRIBE_MERGE_GAP_SEC', defaultMergeGapSec, 0, 10);
     const maxWindowSec = this.getEnvNumber('VAD_TRANSCRIBE_MAX_WINDOW_SEC', 120, 5, 1200);
     const maxWindows = Math.round(this.getEnvNumber('VAD_TRANSCRIBE_MAX_WINDOWS', 80, 1, 1000));
 
@@ -534,6 +645,10 @@ export class AsrService {
 
     if (current) windows.push(current);
 
+    if (windows.length > maxWindows && options.overflowMode === 'rebalance') {
+      return this.rebalanceVadWindows(windows, maxWindows);
+    }
+
     if (windows.length > maxWindows) {
       return [{ start: windows[0].start, end: windows[windows.length - 1].end }];
     }
@@ -541,16 +656,49 @@ export class AsrService {
     return windows;
   }
 
-  private static async extractAudioWindow(sourcePath: string, startSec: number, endSec: number, suffix: string) {
-    const outputPath = path.join(path.dirname(sourcePath), `vad_window_${suffix}_${Date.now()}.wav`);
+  private static rebalanceVadWindows(windows: Array<{ start: number; end: number }>, maxWindows: number) {
+    if (windows.length <= maxWindows) return windows;
+    const groupSize = Math.max(1, Math.ceil(windows.length / Math.max(1, maxWindows)));
+    const rebalanced: Array<{ start: number; end: number }> = [];
+    for (let index = 0; index < windows.length; index += groupSize) {
+      const group = windows.slice(index, index + groupSize);
+      const first = group[0];
+      const last = group[group.length - 1];
+      if (first && last && last.end > first.start) {
+        rebalanced.push({ start: first.start, end: last.end });
+      }
+    }
+    return rebalanced.length > 0 ? rebalanced : [{ start: windows[0].start, end: windows[windows.length - 1].end }];
+  }
+
+  private static async extractAudioWindow(
+    sourcePath: string,
+    startSec: number,
+    endSec: number,
+    suffix: string,
+    options: { audioFormat?: 'wav' | 'mp3'; audioBitrate?: string } = {}
+  ) {
+    const audioFormat = options.audioFormat === 'mp3' ? 'mp3' : 'wav';
+    const outputPath = path.join(path.dirname(sourcePath), `vad_window_${suffix}_${Date.now()}.${audioFormat}`);
+    const audioArgs =
+      audioFormat === 'mp3'
+        ? [
+            '-ac', '1',
+            '-ar', '16000',
+            '-c:a', 'libmp3lame',
+            '-b:a', this.sanitizeAudioBitrate(options.audioBitrate || '32k'),
+          ]
+        : [
+            '-ac', '1',
+            '-ar', '16000',
+            '-c:a', 'pcm_s16le',
+          ];
     const args = [
       '-i', sourcePath,
       '-ss', startSec.toFixed(3),
       '-to', endSec.toFixed(3),
       '-vn',
-      '-ac', '1',
-      '-ar', '16000',
-      '-c:a', 'pcm_s16le',
+      ...audioArgs,
       '-y',
       outputPath,
     ];
@@ -594,6 +742,9 @@ export class AsrService {
       acc[key] = metaList.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.timing?.[key], 0), 0);
       return acc;
     }, {});
+    const geminiBatchingItems = metaList
+      .map((item: any) => item?.geminiMultiAudioBatching)
+      .filter((item: any) => item && typeof item === 'object');
     return {
       ...first,
       callCount,
@@ -603,6 +754,19 @@ export class AsrService {
       autoLanguageFallbackUsed: metaList.some((m: any) => Boolean(m?.autoLanguageFallbackUsed)),
       fileLimitFallbackUsed: metaList.some((m: any) => Boolean(m?.fileLimitFallbackUsed)),
       fileLimitChunkCount: metaList.reduce((sum: number, m: any) => sum + this.toFiniteNumber(m?.fileLimitChunkCount, 0), 0),
+      geminiMultiAudioBatching: geminiBatchingItems.length > 0
+        ? {
+            enabled: true,
+            batchCount: geminiBatchingItems.length,
+            requestCount: geminiBatchingItems.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.requestCount, 0), 0),
+            inputCount: geminiBatchingItems.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.inputCount, 0), 0),
+            totalDurationSec: Number(geminiBatchingItems.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.totalDurationSec, 0), 0).toFixed(3)),
+            rawItemCount: geminiBatchingItems.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.rawItemCount, 0), 0),
+            missingItemCount: geminiBatchingItems.reduce((sum: number, item: any) => sum + this.toFiniteNumber(item?.missingItemCount, 0), 0),
+            recoveredFromXml: geminiBatchingItems.some((item: any) => Boolean(item?.recoveredFromXml)),
+            maxBatchSize: Math.max(...geminiBatchingItems.map((item: any) => this.toFiniteNumber(item?.maxBatchSize, 0))),
+          }
+        : first?.geminiMultiAudioBatching,
       timing: {
         ...mergedTiming,
         audioDecodeCacheHit: metaList.some((item: any) => Boolean(item?.timing?.audioDecodeCacheHit)),
@@ -637,7 +801,27 @@ export class AsrService {
     });
   }
 
-  private static hasUsableChunkTimestamps(chunks: Array<{ start_ts: number; end_ts?: number; text: string }>) {
+  private static async assertElevenLabsSpeechToTextLimits(filePath: string) {
+    const maxFileBytes = 3 * 1024 * 1024 * 1024;
+    const maxDurationSec = 10 * 60 * 60;
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat?.isFile() && stat.size >= maxFileBytes) {
+      const sizeGb = stat.size / (1024 * 1024 * 1024);
+      throw new Error(
+        `ElevenLabs Speech to Text accepts files under 3GB. Current file is ${sizeGb.toFixed(2)}GB; please split or compress it before using ElevenLabs ASR.`
+      );
+    }
+
+    const durationSec = await this.getAudioDurationSeconds(filePath).catch(() => null);
+    if (Number.isFinite(durationSec || Number.NaN) && Number(durationSec) > maxDurationSec) {
+      const durationHours = Number(durationSec) / 3600;
+      throw new Error(
+        `ElevenLabs Speech to Text standard mode accepts audio up to 10 hours. Current audio is ${durationHours.toFixed(2)} hours; please split it before using ElevenLabs ASR.`
+      );
+    }
+  }
+
+  private static hasUsableChunkTimestamps(chunks: unknown[]): boolean {
     if (!Array.isArray(chunks) || chunks.length === 0) return false;
 
     let prevStart: number | null = null;
@@ -726,6 +910,29 @@ export class AsrService {
     return /Audio window is empty/i.test(message);
   }
 
+  private static isCloudAsrEmptyTranscriptError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || '');
+    return /Cloud ASR response does not contain transcript text/i.test(message);
+  }
+
+  private static applyChunkWindowFallbackBounds(transcript: AsrStructuredTranscript, fallbackEndSec: number) {
+    const applyEnd = <T extends { start_ts: number; end_ts?: number }>(item: T): T => {
+      const start = this.toFiniteNumber(item.start_ts, 0);
+      const end = this.toFiniteNumber(item.end_ts, Number.NaN);
+      if (Number.isFinite(end) && end > start) return item;
+      return {
+        ...item,
+        end_ts: Number(Math.max(start + 0.1, fallbackEndSec).toFixed(3)),
+      };
+    };
+
+    return {
+      ...transcript,
+      chunks: (transcript.chunks || []).map((chunk) => applyEnd(chunk)),
+      segments: (transcript.segments || []).map((segment) => applyEnd(segment)),
+    };
+  }
+
   private static async transcribeCloudChunked(
     filePath: string,
     config: any,
@@ -736,14 +943,26 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
     onProgress: (msg: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    chunkingPolicy: AsrCloudChunkingPolicy = {}
   ) {
-    const initialChunkSec = Math.round(this.getEnvNumber('ASR_FILE_LIMIT_CHUNK_SEC', 480, 30, 3600));
-    const minChunkSec = Math.round(this.getEnvNumber('ASR_FILE_LIMIT_MIN_CHUNK_SEC', 60, 10, 1800));
-    const maxChunks = Math.round(this.getEnvNumber('ASR_FILE_LIMIT_MAX_CHUNKS', 200, 1, 2000));
+    const initialChunkSec = Math.round(
+      chunkingPolicy.initialChunkSec ?? this.getEnvNumber('ASR_FILE_LIMIT_CHUNK_SEC', 480, 30, 3600)
+    );
+    const minChunkSec = Math.round(
+      chunkingPolicy.minChunkSec ?? this.getEnvNumber('ASR_FILE_LIMIT_MIN_CHUNK_SEC', 60, 10, 1800)
+    );
+    const maxChunks = Math.round(
+      chunkingPolicy.maxChunks ?? this.getEnvNumber('ASR_FILE_LIMIT_MAX_CHUNKS', 200, 1, 2000)
+    );
+    const audioFormat = chunkingPolicy.audioFormat === 'mp3' ? 'mp3' : 'wav';
+    const audioBitrate = this.sanitizeAudioBitrate(chunkingPolicy.audioBitrate || '32k');
+    const sourceDurationSec = await this.getAudioDurationSeconds(filePath).catch(() => null);
+    const hasKnownDuration = Number.isFinite(sourceDurationSec || Number.NaN) && Number(sourceDurationSec) > 0;
     let chunkSec = Math.max(minChunkSec, initialChunkSec);
 
     while (true) {
@@ -761,12 +980,20 @@ export class AsrService {
       for (let i = 0; i < maxChunks; i += 1) {
         this.throwIfAborted(signal);
         const startSec = i * chunkSec;
-        const endSec = startSec + chunkSec;
+        if (hasKnownDuration && startSec >= Number(sourceDurationSec) - 0.05) {
+          break;
+        }
+        const endSec = hasKnownDuration
+          ? Math.min(startSec + chunkSec, Number(sourceDurationSec))
+          : startSec + chunkSec;
         const label = `file_limit_${chunkSec}s_${i + 1}`;
         let chunkPath: string | null = null;
 
         try {
-          chunkPath = await this.extractAudioWindow(filePath, startSec, endSec, label);
+          chunkPath = await this.extractAudioWindow(filePath, startSec, endSec, label, {
+            audioFormat,
+            audioBitrate,
+          });
         } catch (extractErr) {
           if (this.isEmptyAudioWindowError(extractErr)) {
             break;
@@ -776,17 +1003,31 @@ export class AsrService {
 
         try {
           onProgress(`Calling ASR provider (file-limit chunk ${i + 1})...`);
-          const cloudResult = await this.transcribeCloud(chunkPath, config, options, signal);
+          const cloudResult = await this.transcribeCloud(
+            chunkPath,
+            config,
+            { ...options, audioDurationSec: Math.max(0, endSec - startSec) },
+            signal
+          );
           providerMetaList.push(cloudResult.meta);
           producedChunkCount += 1;
           const shifted = this.offsetStructuredTranscript(cloudResult, startSec);
-          mergedTranscript.chunks.push(...shifted.chunks);
-          mergedTranscript.segments.push(...shifted.segments);
-          mergedTranscript.word_segments.push(...shifted.word_segments);
+          const bounded = chunkingPolicy.reason === 'github_phi4_8000_token_limit'
+            ? this.applyChunkWindowFallbackBounds(shifted, endSec)
+            : shifted;
+          mergedTranscript.chunks.push(...bounded.chunks);
+          mergedTranscript.segments.push(...bounded.segments);
+          mergedTranscript.word_segments.push(...bounded.word_segments);
         } catch (chunkErr) {
           if (this.isCloudAsrFileLimitError(chunkErr) && chunkSec > minChunkSec) {
             shouldRetryWithSmallerChunks = true;
             break;
+          }
+          if (
+            chunkingPolicy.reason === 'github_phi4_8000_token_limit' &&
+            this.isCloudAsrEmptyTranscriptError(chunkErr)
+          ) {
+            continue;
           }
           throw chunkErr;
         } finally {
@@ -822,6 +1063,8 @@ export class AsrService {
           fileLimitFallbackUsed: true,
           fileLimitChunkCount: producedChunkCount,
           fileLimitChunkSec: chunkSec,
+          fileLimitAudioFormat: audioFormat,
+          fileLimitReason: chunkingPolicy.reason || null,
         },
       };
     }
@@ -837,23 +1080,52 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
     onProgress: (msg: string) => void,
     signal?: AbortSignal
   ) {
     this.throwIfAborted(signal);
-    try {
-      const stat = await fs.stat(filePath);
-      const preemptiveThresholdBytes = this.getCloudAsrPreemptiveChunkThresholdBytes();
-      if (stat.isFile() && stat.size > preemptiveThresholdBytes) {
-        const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
-        const thresholdMb = (preemptiveThresholdBytes / (1024 * 1024)).toFixed(0);
-        onProgress(`Audio file is ${sizeMb}MB (> ${thresholdMb}MB), using chunked upload proactively...`);
-        return this.transcribeCloudChunked(filePath, config, options, onProgress, signal);
+    const resolvedProvider = resolveCloudAsrProvider({
+      url: String(config?.url || ''),
+      modelName: String(config?.name || ''),
+      model: String(config?.model || ''),
+    });
+    const phi4ChunkingPolicy =
+      resolvedProvider.provider === 'github-models-phi4-multimodal'
+        ? this.getPhi4CloudChunkingPolicy()
+        : null;
+    const isElevenLabsScribe = resolvedProvider.provider === 'elevenlabs-scribe';
+
+    if (isElevenLabsScribe) {
+      await this.assertElevenLabsSpeechToTextLimits(filePath);
+    }
+
+    if (phi4ChunkingPolicy) {
+      const proactiveChunkSec = Math.max(
+        phi4ChunkingPolicy.minChunkSec || 10,
+        phi4ChunkingPolicy.initialChunkSec || 30
+      );
+      onProgress(
+        `Phi-4 ASR uses ${proactiveChunkSec}s ${String(phi4ChunkingPolicy.audioFormat || 'mp3').toUpperCase()} chunks to stay under the provider token limit...`
+      );
+      return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy);
+    }
+
+    if (!isElevenLabsScribe) {
+      try {
+        const stat = await fs.stat(filePath);
+        const preemptiveThresholdBytes = this.getCloudAsrPreemptiveChunkThresholdBytes();
+        if (stat.isFile() && stat.size > preemptiveThresholdBytes) {
+          const sizeMb = (stat.size / (1024 * 1024)).toFixed(1);
+          const thresholdMb = (preemptiveThresholdBytes / (1024 * 1024)).toFixed(0);
+          onProgress(`Audio file is ${sizeMb}MB (> ${thresholdMb}MB), using chunked upload proactively...`);
+          return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy || {});
+        }
+      } catch {
+        // Non-fatal. If file stat fails, keep existing request-first fallback behavior.
       }
-    } catch {
-      // Non-fatal. If file stat fails, keep existing request-first fallback behavior.
     }
 
     try {
@@ -863,7 +1135,7 @@ export class AsrService {
         throw err;
       }
       onProgress('Provider rejected audio size/duration limit, retrying with chunked upload...');
-      return this.transcribeCloudChunked(filePath, config, options, onProgress, signal);
+      return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy || {});
     }
   }
 
@@ -882,6 +1154,7 @@ export class AsrService {
         wordAlignment?: boolean;
         vad?: boolean;
         diarization?: boolean;
+        audioDurationSec?: number | null;
         decodePolicy?: AsrDecodePolicy;
       };
       onProgress: (msg: string) => void;
@@ -960,7 +1233,6 @@ export class AsrService {
     const effectiveSegmentation = Boolean(segmentation) || Boolean(diarization);
     const requestedWordAlignment = wordAlignment !== false;
     const effectiveWordAlignment = effectiveSegmentation && requestedWordAlignment;
-    const effectiveVad = Boolean(vad) || Boolean(diarization);
     const pipelineMode = this.resolvePipelineMode(requestedPipelineMode);
     const decodePolicy = this.buildDecodePolicy({
       mode: pipelineMode,
@@ -1002,12 +1274,29 @@ export class AsrService {
     const modelConfig = useLocalProvider
       ? null
       : settings.asrModels.find((m: any) => m.id === modelId) || settings.asrModels[0];
-    if (!useLocalProvider && !modelConfig) {
-      throw new Error('No ASR model configured. Please configure one in Settings.');
+    if (!useLocalProvider) {
+      if (!modelConfig) {
+        throw new Error('No ASR model configured. Please configure one in Settings.');
+      }
+      if (!modelConfig.url) {
+        throw new Error('ASR model URL is missing.');
+      }
     }
-    if (!useLocalProvider && !modelConfig.url) {
-      throw new Error('ASR model URL is missing.');
-    }
+    const resolvedCloudProvider = !useLocalProvider && modelConfig
+      ? resolveCloudAsrProvider({
+          url: String(modelConfig?.url || ''),
+          modelName: String(modelConfig?.name || ''),
+          model: String(modelConfig?.model || ''),
+        })
+      : null;
+    const isGeminiCloudAsr = resolvedCloudProvider?.provider === 'google-gemini-audio';
+    const isElevenLabsCloudAsr = resolvedCloudProvider?.provider === 'elevenlabs-scribe';
+    const effectiveVad = isElevenLabsCloudAsr
+      ? false
+      : Boolean(vad) || Boolean(diarization);
+    const geminiVadTimestampingRequested = Boolean(isGeminiCloudAsr && effectiveSegmentation);
+    const shouldRunVadPipeline = effectiveVad || geminiVadTimestampingRequested;
+    const shouldUseVadWindowedTranscription = allowVadWindowedTranscription || geminiVadTimestampingRequested;
     if (useLocalProvider) {
       onProgress(`Loading local ASR model (${localModel!.displayName})...`);
     }
@@ -1027,7 +1316,7 @@ export class AsrService {
     let alignmentWallMs = 0;
     let diarizationMs = 0;
     const windowScheduleStats: AsrWindowScheduleStats = {
-      enabled: effectiveVad,
+      enabled: shouldRunVadPipeline,
       schedulerEnabled,
       mode: pipelineMode,
       batchSize: vadWindowBatchSize,
@@ -1040,21 +1329,27 @@ export class AsrService {
       retries: 0,
     };
 
-    if (effectiveVad) {
+    if (shouldRunVadPipeline) {
       const vadStartedAt = Date.now();
       this.throwIfAborted(signal);
-      onProgress('Running voice activity detection...');
+      onProgress(
+        geminiVadTimestampingRequested && !effectiveVad
+          ? 'Running voice activity detection for Gemini timestamp windows...'
+          : 'Running voice activity detection...'
+      );
       try {
         speechSegments = await VadService.detectSpeech(audioPath);
 
         if (speechSegments.length > 0) {
-          vadWindows = this.buildVadWindows(speechSegments);
+          vadWindows = this.buildVadWindows(speechSegments, {
+            overflowMode: geminiVadTimestampingRequested ? 'rebalance' : 'collapse',
+          });
           const windowTasks = this.buildVadWindowTasks(vadWindows);
           windowScheduleStats.taskCount = windowTasks.length;
           onProgress(`VAD detected ${speechSegments.length} speech segments (${vadWindows.length} windows).`);
 
-          if (!allowVadWindowedTranscription) {
-            onProgress('Local Whisper ASR keeps full-audio transcription; VAD windows are used only for diagnostics/diarization.');
+          if (!shouldUseVadWindowedTranscription) {
+            onProgress('VAD windows are used only for diagnostics/diarization; ASR keeps full-audio transcription.');
           }
 
           const mergedWindowTranscript: AsrStructuredTranscript = {
@@ -1066,92 +1361,201 @@ export class AsrService {
           const providerMetaList: any[] = [];
           const skippedWindowErrors: string[] = [];
 
-          if (allowVadWindowedTranscription) {
-            const batches = schedulerEnabled
-              ? this.chunkTasksByBatchSize(windowTasks, vadWindowBatchSize)
-              : windowTasks.map((task) => [task]);
+          if (shouldUseVadWindowedTranscription) {
+            if (geminiVadTimestampingRequested && !useLocalProvider && modelConfig) {
+              const geminiBatchSize = this.getGeminiMultiAudioBatchSize();
+              const batches: AsrVadWindowTask[][] = [];
+              for (let index = 0; index < windowTasks.length; index += geminiBatchSize) {
+                batches.push(windowTasks.slice(index, index + geminiBatchSize));
+              }
+              windowScheduleStats.batchSize = geminiBatchSize;
+              windowScheduleStats.concurrency = 1;
+              windowScheduleStats.geminiMultiAudioBatchSize = geminiBatchSize;
+              windowScheduleStats.providerRequestCount = 0;
 
-            for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
-              this.throwIfAborted(signal);
-              const batch = batches[batchIndex];
-              const label = schedulerEnabled
-                ? `batch ${batchIndex + 1}/${batches.length}`
-                : `window group ${batchIndex + 1}/${batches.length}`;
-              onProgress(`Calling ASR provider (${label}, ${batch.length} windows)...`);
+              for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+                this.throwIfAborted(signal);
+                const batch = batches[batchIndex];
+                onProgress(`Calling Gemini ASR provider (batch ${batchIndex + 1}/${batches.length}, ${batch.length} audio windows)...`);
 
-              const results = await this.runTaskPool(
-                batch,
-                schedulerEnabled ? vadWindowConcurrency : 1,
-                async (task) => {
-                  this.throwIfAborted(signal);
-                  let attempts = 0;
-                  while (true) {
-                    attempts += 1;
-                    windowScheduleStats.attemptedCount += 1;
-                    const windowLabel = `${task.index + 1}_${Math.round(task.start * 1000)}_${Math.round(task.end * 1000)}`;
-                    const windowAudioPath = await this.extractAudioWindow(audioPath, task.start, task.end, windowLabel);
-                    try {
-                      const providerStartedAt = Date.now();
-                      const providerResult = await this.transcribeWithProvider(windowAudioPath, {
-                        useLocalProvider,
-                        localModelId: localModel?.id,
-                        localModelRuntime: localModel?.runtime,
-                        localModelPath,
-                        cloudModelConfig: modelConfig,
-                        options: {
-                          language,
-                          prompt: effectivePrompt,
-                          segmentation: effectiveSegmentation,
-                          wordAlignment: effectiveWordAlignment,
-                          vad: effectiveVad,
-                          diarization,
-                          decodePolicy,
-                        },
-                        onProgress,
-                        signal,
+                let attempts = 0;
+                while (true) {
+                  attempts += 1;
+                  windowScheduleStats.attemptedCount += batch.length;
+                  const providerRequestCountBefore: number = windowScheduleStats.providerRequestCount || 0;
+                  windowScheduleStats.providerRequestCount = providerRequestCountBefore + 1;
+                  const extractedInputs: Array<{ task: AsrVadWindowTask; audioPath: string }> = [];
+
+                  try {
+                    for (const task of batch) {
+                      const windowLabel = `${task.index + 1}_${Math.round(task.start * 1000)}_${Math.round(task.end * 1000)}`;
+                      extractedInputs.push({
+                        task,
+                        audioPath: await this.extractAudioWindow(audioPath, task.start, task.end, windowLabel),
                       });
-                      providerWallMs += Math.max(0, Date.now() - providerStartedAt);
-                      windowScheduleStats.succeededCount += 1;
-                      return {
-                        task,
-                        ok: true as const,
-                        providerResult,
-                      };
-                    } catch (windowErr) {
-                      if (this.isAbortError(windowErr)) {
-                        throw windowErr;
-                      }
-                      const message = windowErr instanceof Error ? windowErr.message : String(windowErr);
-                      if (attempts <= vadWindowMaxRetries) {
-                        windowScheduleStats.retries += 1;
-                        onProgress(
-                          `VAD window ${task.index + 1}/${vadWindows.length} failed (${message}), retrying (${attempts}/${vadWindowMaxRetries})...`
-                        );
-                        continue;
-                      }
-                      windowScheduleStats.skippedCount += 1;
-                      return {
-                        task,
-                        ok: false as const,
-                        message,
-                      };
-                    } finally {
-                      await fs.remove(windowAudioPath).catch(() => {});
                     }
+
+                    const providerStartedAt = Date.now();
+                    const batchResult = await this.transcribeGeminiCloudWindowBatchAdaptive(
+                      extractedInputs,
+                      modelConfig,
+                      {
+                        language,
+                        prompt: effectivePrompt,
+                        segmentation: effectiveSegmentation,
+                        wordAlignment: effectiveWordAlignment,
+                        vad: effectiveVad,
+                        diarization,
+                        decodePolicy,
+                      },
+                      onProgress,
+                      signal
+                    );
+                    providerWallMs += Math.max(0, Date.now() - providerStartedAt);
+                    providerMetaList.push(batchResult.meta);
+                    const actualProviderRequests = this.toFiniteNumber(
+                      batchResult.meta?.geminiMultiAudioBatching?.requestCount,
+                      1
+                    );
+                    windowScheduleStats.providerRequestCount =
+                      providerRequestCountBefore + Math.max(1, actualProviderRequests);
+
+                    const resultByInputIndex = new Map(
+                      batchResult.results.map((item) => [item.input.index, item.result] as const)
+                    );
+                    for (const task of batch) {
+                      const providerResult = resultByInputIndex.get(task.index);
+                      if (providerResult && providerResult.chunks.length > 0) {
+                        const shifted = this.offsetStructuredTranscript(providerResult, task.start);
+                        windowScheduleStats.succeededCount += 1;
+                        mergedWindowTranscript.chunks.push(...shifted.chunks);
+                        mergedWindowTranscript.segments.push(...shifted.segments);
+                        mergedWindowTranscript.word_segments.push(...shifted.word_segments);
+                      } else {
+                        windowScheduleStats.skippedCount += 1;
+                        skippedWindowErrors.push(`window_${task.index + 1}: Gemini batch returned empty transcript item`);
+                      }
+                    }
+                    break;
+                  } catch (windowErr) {
+                    if (this.isAbortError(windowErr)) {
+                      throw windowErr;
+                    }
+                    const message = windowErr instanceof Error ? windowErr.message : String(windowErr);
+                    if (attempts <= vadWindowMaxRetries) {
+                      windowScheduleStats.retries += 1;
+                      onProgress(
+                        `Gemini ASR batch ${batchIndex + 1}/${batches.length} failed (${message}), retrying (${attempts}/${vadWindowMaxRetries})...`
+                      );
+                      continue;
+                    }
+                    windowScheduleStats.skippedCount += batch.length;
+                    for (const task of batch) {
+                      skippedWindowErrors.push(`window_${task.index + 1}: ${message}`);
+                    }
+                    console.warn(`[ASR] Gemini ASR batch ${batchIndex + 1}/${batches.length} skipped: ${message}`);
+                    break;
+                  } finally {
+                    await Promise.all(extractedInputs.map((input) => fs.remove(input.audioPath).catch(() => {})));
                   }
                 }
-              );
+              }
+            } else {
+              const batches = schedulerEnabled
+                ? this.chunkTasksByBatchSize(windowTasks, vadWindowBatchSize)
+                : windowTasks.map((task) => [task]);
 
-              for (const item of results) {
-                if (item.ok) {
-                  const shifted = this.offsetStructuredTranscript(item.providerResult, item.task.start);
-                  providerMetaList.push(item.providerResult.meta);
-                  mergedWindowTranscript.chunks.push(...shifted.chunks);
-                  mergedWindowTranscript.segments.push(...shifted.segments);
-                  mergedWindowTranscript.word_segments.push(...shifted.word_segments);
-                } else {
-                  skippedWindowErrors.push(`window_${item.task.index + 1}: ${item.message}`);
-                  console.warn(`[ASR] VAD window ${item.task.index + 1}/${vadWindows.length} skipped: ${item.message}`);
+              for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
+                this.throwIfAborted(signal);
+                const batch = batches[batchIndex];
+                const label = schedulerEnabled
+                  ? `batch ${batchIndex + 1}/${batches.length}`
+                  : `window group ${batchIndex + 1}/${batches.length}`;
+                onProgress(`Calling ASR provider (${label}, ${batch.length} windows)...`);
+
+                const results = await this.runTaskPool(
+                  batch,
+                  schedulerEnabled ? vadWindowConcurrency : 1,
+                  async (task) => {
+                    this.throwIfAborted(signal);
+                    let attempts = 0;
+                    while (true) {
+                      attempts += 1;
+                      windowScheduleStats.attemptedCount += 1;
+                      windowScheduleStats.providerRequestCount = (windowScheduleStats.providerRequestCount || 0) + 1;
+                      const windowLabel = `${task.index + 1}_${Math.round(task.start * 1000)}_${Math.round(task.end * 1000)}`;
+                      const windowAudioPath = await this.extractAudioWindow(audioPath, task.start, task.end, windowLabel);
+                      try {
+                        const providerStartedAt = Date.now();
+                        const providerResult = await this.transcribeWithProvider(windowAudioPath, {
+                          useLocalProvider,
+                          localModelId: localModel?.id,
+                          localModelRuntime: localModel?.runtime,
+                          localModelPath,
+                          cloudModelConfig: modelConfig,
+                          options: {
+                            language,
+                            prompt: effectivePrompt,
+                            segmentation: effectiveSegmentation,
+                            wordAlignment: effectiveWordAlignment,
+                            vad: effectiveVad,
+                            diarization,
+                            audioDurationSec: task.durationSec,
+                            decodePolicy,
+                          },
+                          onProgress,
+                          signal,
+                        });
+                        providerWallMs += Math.max(0, Date.now() - providerStartedAt);
+                        const resolvedProviderResult =
+                          geminiVadTimestampingRequested
+                            ? {
+                                ...this.collapseTranscriptToVadWindow(providerResult, task.durationSec, language),
+                                meta: providerResult.meta,
+                              }
+                            : providerResult;
+                        windowScheduleStats.succeededCount += 1;
+                        return {
+                          task,
+                          ok: true as const,
+                          providerResult: resolvedProviderResult,
+                        };
+                      } catch (windowErr) {
+                        if (this.isAbortError(windowErr)) {
+                          throw windowErr;
+                        }
+                        const message = windowErr instanceof Error ? windowErr.message : String(windowErr);
+                        if (attempts <= vadWindowMaxRetries) {
+                          windowScheduleStats.retries += 1;
+                          onProgress(
+                            `VAD window ${task.index + 1}/${vadWindows.length} failed (${message}), retrying (${attempts}/${vadWindowMaxRetries})...`
+                          );
+                          continue;
+                        }
+                        windowScheduleStats.skippedCount += 1;
+                        return {
+                          task,
+                          ok: false as const,
+                          message,
+                        };
+                      } finally {
+                        await fs.remove(windowAudioPath).catch(() => {});
+                      }
+                    }
+                  }
+                );
+
+                for (const item of results) {
+                  if (item.ok) {
+                    const shifted = this.offsetStructuredTranscript(item.providerResult, item.task.start);
+                    providerMetaList.push(item.providerResult.meta);
+                    mergedWindowTranscript.chunks.push(...shifted.chunks);
+                    mergedWindowTranscript.segments.push(...shifted.segments);
+                    mergedWindowTranscript.word_segments.push(...shifted.word_segments);
+                  } else {
+                    skippedWindowErrors.push(`window_${item.task.index + 1}: ${item.message}`);
+                    console.warn(`[ASR] VAD window ${item.task.index + 1}/${vadWindows.length} skipped: ${item.message}`);
+                  }
                 }
               }
             }
@@ -1161,7 +1565,7 @@ export class AsrService {
             vadError = skippedWindowErrors.join(' | ');
           }
 
-          if (allowVadWindowedTranscription && mergedWindowTranscript.chunks.length > 0) {
+          if (shouldUseVadWindowedTranscription && mergedWindowTranscript.chunks.length > 0) {
             windowedTranscript = this.reconcileWindowedTranscript({
               text: mergedWindowTranscript.chunks.map((chunk) => chunk.text).filter(Boolean).join(' ').trim(),
               chunks: mergedWindowTranscript.chunks.sort((a, b) => a.start_ts - b.start_ts),
@@ -1169,8 +1573,9 @@ export class AsrService {
               word_segments: mergedWindowTranscript.word_segments.sort((a, b) => a.start_ts - b.start_ts),
             }, language);
             providerMetaFromWindows = this.mergeProviderMeta(providerMetaList);
+            const providerRequestCount = windowScheduleStats.providerRequestCount || windowScheduleStats.succeededCount;
             onProgress(
-              `ASR provider completed (${windowScheduleStats.succeededCount}/${vadWindows.length} VAD windows, skipped ${windowScheduleStats.skippedCount}).`
+              `ASR provider completed (${windowScheduleStats.succeededCount}/${vadWindows.length} VAD windows, ${providerRequestCount} provider requests, skipped ${windowScheduleStats.skippedCount}).`
             );
           } else {
             onProgress('VAD windows produced no transcript text, falling back to full-audio request.');
@@ -1230,6 +1635,51 @@ export class AsrService {
         ...windowScheduleStats,
       },
     };
+    if (isElevenLabsCloudAsr) {
+      providerMeta = {
+        ...providerMeta,
+        elevenLabsNativeAdvancedFeatures: {
+          enabled: true,
+          vadRequested: Boolean(vad),
+          localVadBypassed: Boolean(vad) || Boolean(diarization),
+          wordAlignmentRequested: effectiveWordAlignment,
+          localForcedAlignmentBypassed: effectiveWordAlignment && Boolean(providerMeta?.nativeWordTimestamps),
+          diarizationRequested: Boolean(diarization),
+          localDiarizationBypassed: Boolean(diarization),
+        },
+      };
+    }
+    const geminiVadTimestampingApplied = Boolean(
+      isGeminiCloudAsr &&
+      geminiVadTimestampingRequested &&
+      windowedTranscript &&
+      windowedTranscript.chunks.length > 0
+    );
+    if (isGeminiCloudAsr) {
+      providerMeta = {
+        ...providerMeta,
+        geminiTimestampSource: geminiVadTimestampingApplied ? 'vad_window' : 'provider',
+        geminiVadTimestamping: {
+          applied: geminiVadTimestampingApplied,
+          requestedBecause: geminiVadTimestampingRequested ? 'segmentation' : null,
+          forcedByProvider: geminiVadTimestampingRequested && !effectiveVad,
+          requestedVad: Boolean(vad),
+          detectedSpeechSegments: speechSegments.length,
+          vadWindowCount: vadWindows.length,
+          windowOverflowMode: geminiVadTimestampingRequested ? 'rebalance' : null,
+          multiAudioBatching: providerMeta.geminiMultiAudioBatching || null,
+          windowedTranscription: Boolean(geminiVadTimestampingApplied),
+          fallbackReason:
+            geminiVadTimestampingRequested && !geminiVadTimestampingApplied
+              ? vadError
+                ? 'vad_failed'
+                : speechSegments.length === 0
+                  ? 'no_speech_segments'
+                  : 'windowed_transcript_unavailable'
+              : null,
+        },
+      };
+    }
 
     let timestampsSynthesized = false;
     const allowSyntheticSegmentationTimestamps =
@@ -1263,7 +1713,31 @@ export class AsrService {
       ? AlignmentService.resolveForcedAlignmentLanguage(language, alignmentSampleText)
       : null;
     const hasProviderNativeAlignment = Boolean(providerMeta?.forcedAlignment);
-    if (effectiveWordAlignment && !resolvedAlignmentLanguage && !hasProviderNativeAlignment) {
+    const useElevenLabsNativeWordAlignment = Boolean(
+      effectiveWordAlignment &&
+      providerMeta?.isElevenLabsScribe &&
+      providerMeta?.nativeWordTimestamps &&
+      Array.isArray(result.word_segments) &&
+      result.word_segments.length > 0
+    );
+    if (useElevenLabsNativeWordAlignment) {
+      alignmentDiagnostics = {
+        applied: true,
+        profileId: 'elevenlabs-scribe-native',
+        backend: 'native',
+        modelId: String(providerMeta?.effectiveModel || 'scribe'),
+        language: String(providerMeta?.detectedLanguage || language || '').trim() || null,
+        attemptedSegmentCount: Array.isArray(result.segments) ? result.segments.length : 0,
+        alignedSegmentCount: Array.isArray(result.segments) ? result.segments.length : 0,
+        skippedSegments: 0,
+        failureCount: 0,
+        alignedWordCount: result.word_segments.length,
+        avgConfidence: null,
+        elapsedMs: 0,
+        providerNativeProvider: 'elevenlabs',
+      };
+      onProgress('Using ElevenLabs provider-native word timestamps.');
+    } else if (effectiveWordAlignment && !resolvedAlignmentLanguage && !hasProviderNativeAlignment) {
       alignmentDiagnostics = {
         applied: false,
         profileId: 'unresolved',
@@ -1281,7 +1755,7 @@ export class AsrService {
       };
       onProgress('Forced alignment unavailable for current language/profile, keeping provider timestamps.');
     }
-    if (
+    else if (
       effectiveWordAlignment &&
       (resolvedAlignmentLanguage || hasProviderNativeAlignment) &&
       Array.isArray(result.segments) &&
@@ -1355,7 +1829,22 @@ export class AsrService {
     }
 
     let diarizationDiagnostics: any = null;
-    if (diarization && Array.isArray(result.chunks) && result.chunks.length > 0) {
+    const useElevenLabsNativeDiarization = Boolean(
+      diarization &&
+      providerMeta?.isElevenLabsScribe
+    );
+    if (useElevenLabsNativeDiarization) {
+      if (providerMeta?.providerNativeDiarization && this.hasProviderSpeakerTags(result)) {
+        this.applyProviderNativeSpeakerAssignments(result);
+        diarizationApplied = true;
+      }
+      diarizationDiagnostics = this.buildProviderNativeDiarizationDiagnostics(result, speechSegments, vadWindows);
+      onProgress(
+        diarizationApplied
+          ? 'Using ElevenLabs provider-native speaker labels.'
+          : 'ElevenLabs did not return speaker labels; local diarization fallback is skipped for this provider.'
+      );
+    } else if (diarization && Array.isArray(result.chunks) && result.chunks.length > 0) {
       this.throwIfAborted(signal);
       onProgress('Running speaker diarization...');
       const diarizationStartedAt = Date.now();
@@ -1469,6 +1958,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
     signal?: AbortSignal
@@ -1478,6 +1968,16 @@ export class AsrService {
       modelName: String(config?.name || ''),
       model: String(config?.model || ''),
     });
+    const cloudOptions = { ...options };
+    if (
+      (resolvedProvider.provider === 'google-gemini-audio' || resolvedProvider.provider === 'elevenlabs-scribe') &&
+      !(Number.isFinite(Number(cloudOptions.audioDurationSec)) && Number(cloudOptions.audioDurationSec) > 0)
+    ) {
+      const audioDurationSec = await this.getAudioDurationSeconds(filePath).catch(() => null);
+      if (Number.isFinite(audioDurationSec || Number.NaN) && Number(audioDurationSec) > 0) {
+        cloudOptions.audioDurationSec = Number(audioDurationSec);
+      }
+    }
 
     const result = await requestCloudAsr(
       filePath,
@@ -1487,7 +1987,7 @@ export class AsrService {
         url: resolvedProvider.endpointUrl,
         model: resolvedProvider.provider === 'openai-whisper' ? resolvedProvider.effectiveModel : config?.model,
       },
-      options,
+      cloudOptions,
       {
         createAbortSignalWithTimeout: this.createAbortSignalWithTimeout.bind(this),
         extractStructuredTranscript: (transcript, transcriptLanguage, extractOptions = {}) =>
@@ -1505,8 +2005,134 @@ export class AsrService {
       meta: {
         ...result.meta,
         isWhisperCppInference: resolvedProvider.provider === 'whispercpp-inference',
+        isElevenLabsScribe: resolvedProvider.provider === 'elevenlabs-scribe',
+        isGithubModelsPhi4Multimodal: resolvedProvider.provider === 'github-models-phi4-multimodal',
+        isGoogleCloudChirp3: resolvedProvider.provider === 'google-cloud-chirp3',
+        isGoogleGeminiAudio: resolvedProvider.provider === 'google-gemini-audio',
       },
     };
+  }
+
+  private static async transcribeGeminiCloudWindowBatch(
+    inputs: Array<{ task: AsrVadWindowTask; audioPath: string }>,
+    config: any,
+    options: {
+      language?: string;
+      prompt?: string;
+      segmentation?: boolean;
+      wordAlignment?: boolean;
+      vad?: boolean;
+      diarization?: boolean;
+      decodePolicy?: AsrDecodePolicy;
+    },
+    signal?: AbortSignal
+  ) {
+    const resolvedProvider = resolveCloudAsrProvider({
+      url: String(config?.url || ''),
+      modelName: String(config?.name || ''),
+      model: String(config?.model || ''),
+    });
+    const totalDurationSec = inputs.reduce((sum, input) => sum + Math.max(0, input.task.durationSec), 0);
+    return requestGeminiCloudAsrBatch(
+      inputs.map((input) => ({
+        filePath: input.audioPath,
+        index: input.task.index,
+        audioDurationSec: input.task.durationSec,
+      })),
+      resolvedProvider,
+      {
+        ...config,
+        url: resolvedProvider.endpointUrl,
+        model: config?.model,
+      },
+      {
+        ...options,
+        audioDurationSec: totalDurationSec,
+      },
+      {
+        createAbortSignalWithTimeout: this.createAbortSignalWithTimeout.bind(this),
+      },
+      signal
+    );
+  }
+
+  private static mergeGeminiCloudWindowBatchResponses(
+    responses: Array<Awaited<ReturnType<typeof requestGeminiCloudAsrBatch>>>
+  ) {
+    const meta = this.mergeProviderMeta(responses.map((response) => response.meta));
+    const batching = meta.geminiMultiAudioBatching || {};
+    return {
+      results: responses
+        .flatMap((response) => response.results)
+        .sort((a, b) => this.toFiniteNumber(a.input.index, 0) - this.toFiniteNumber(b.input.index, 0)),
+      meta: {
+        ...meta,
+        geminiMultiAudioBatching: {
+          ...batching,
+          enabled: true,
+          adaptiveSplit: true,
+          leafBatchCount: responses.length,
+        },
+      },
+    };
+  }
+
+  private static async transcribeGeminiCloudWindowBatchAdaptive(
+    inputs: Array<{ task: AsrVadWindowTask; audioPath: string }>,
+    config: any,
+    options: {
+      language?: string;
+      prompt?: string;
+      segmentation?: boolean;
+      wordAlignment?: boolean;
+      vad?: boolean;
+      diarization?: boolean;
+      decodePolicy?: AsrDecodePolicy;
+    },
+    onProgress: (msg: string) => void,
+    signal?: AbortSignal,
+    depth = 0
+  ): Promise<Awaited<ReturnType<typeof requestGeminiCloudAsrBatch>>> {
+    const result = await this.transcribeGeminiCloudWindowBatch(inputs, config, options, signal);
+    const batching = result.meta?.geminiMultiAudioBatching || {};
+    const missingItemCount = this.toFiniteNumber(batching.missingItemCount, 0);
+    const rawItemCount = this.toFiniteNumber(batching.rawItemCount, result.results.length);
+    const incomplete = missingItemCount > 0 || rawItemCount < inputs.length;
+
+    if (!incomplete || inputs.length <= 1) {
+      return result;
+    }
+
+    const midpoint = Math.ceil(inputs.length / 2);
+    const left = inputs.slice(0, midpoint);
+    const right = inputs.slice(midpoint);
+    onProgress(
+      `Gemini batch returned ${rawItemCount}/${inputs.length} mapped items; splitting into ${left.length}+${right.length} windows for accuracy...`
+    );
+
+    const responses = [];
+    responses.push(await this.transcribeGeminiCloudWindowBatchAdaptive(left, config, options, onProgress, signal, depth + 1));
+    if (right.length > 0) {
+      responses.push(await this.transcribeGeminiCloudWindowBatchAdaptive(right, config, options, onProgress, signal, depth + 1));
+    }
+    const merged = this.mergeGeminiCloudWindowBatchResponses(responses);
+    const discardedRequestCount = this.toFiniteNumber(result.meta?.geminiMultiAudioBatching?.requestCount, 1);
+    const mergedRequestCount = this.toFiniteNumber(merged.meta.geminiMultiAudioBatching?.requestCount, 0);
+    merged.meta.callCount = this.toFiniteNumber(merged.meta.callCount, 0) + discardedRequestCount;
+    merged.meta.geminiMultiAudioBatching = {
+      ...(merged.meta.geminiMultiAudioBatching || {}),
+      adaptiveSplit: true,
+      adaptiveSplitDepth: Math.max(
+        depth + 1,
+        this.toFiniteNumber(merged.meta.geminiMultiAudioBatching?.adaptiveSplitDepth, 0)
+      ),
+      requestCount: mergedRequestCount + discardedRequestCount,
+      discardedRequestCount:
+        this.toFiniteNumber(merged.meta.geminiMultiAudioBatching?.discardedRequestCount, 0) + discardedRequestCount,
+      firstIncompleteRawItemCount: rawItemCount,
+      firstIncompleteExpectedItemCount: inputs.length,
+    };
+    return merged;
   }
 
   static async testConnection(input: { url: string; key?: string; model?: string; name?: string }) {
@@ -1516,16 +2142,57 @@ export class AsrService {
       model: String(input.model || '').trim(),
     });
 
-    const headers: Record<string, string> = {};
-    if (input.key) {
-      headers.Authorization = `Bearer ${String(input.key).trim()}`;
+    const headers = buildCloudAsrRequestHeaders(resolvedProvider.provider, input.key);
+    const isGithubModelsProvider = resolvedProvider.provider === 'github-models-phi4-multimodal';
+    const isGoogleCloudChirp3Provider = resolvedProvider.provider === 'google-cloud-chirp3';
+    const isGoogleGeminiAudioProvider = resolvedProvider.provider === 'google-gemini-audio';
+    const testHeaders = (isGithubModelsProvider || isGoogleCloudChirp3Provider || isGoogleGeminiAudioProvider)
+      ? { ...headers, 'Content-Type': 'application/json' }
+      : headers;
+    let testBody: string | undefined;
+    if (isGithubModelsProvider) {
+      testBody = JSON.stringify({
+          model: resolvedProvider.effectiveModel,
+          messages: [{ role: 'user', content: 'Reply with OK.' }],
+          temperature: 0,
+          top_p: 1,
+          max_tokens: 8,
+          stream: false,
+        });
+    } else if (isGoogleCloudChirp3Provider) {
+      testBody = JSON.stringify({
+        config: {
+          autoDecodingConfig: {},
+          languageCodes: ['auto'],
+          model: resolvedProvider.effectiveModel,
+          features: {
+            enableWordTimeOffsets: false,
+            enableAutomaticPunctuation: true,
+          },
+        },
+        content: '',
+      });
+    } else if (isGoogleGeminiAudioProvider) {
+      testBody = JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: 'Reply with OK.' }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 8,
+        },
+      });
     }
 
     const request = this.createAbortSignalWithTimeout(8000);
     try {
       const response = await fetch(resolvedProvider.endpointUrl, {
         method: 'POST',
-        headers,
+        headers: testHeaders,
+        body: testBody,
         signal: request.signal,
         redirect: 'error',
       });
@@ -1536,18 +2203,24 @@ export class AsrService {
       const pathLower = new URL(resolvedProvider.endpointUrl).pathname.toLowerCase();
       const isOpenAiAsrEndpoint = pathLower.includes('/audio/transcriptions');
       const isWhisperCppInferenceEndpoint = pathLower.includes('/inference');
+      const isElevenLabsScribeEndpoint = resolvedProvider.provider === 'elevenlabs-scribe' || pathLower.includes('/speech-to-text');
+      const isGithubModelsEndpoint = resolvedProvider.provider === 'github-models-phi4-multimodal' || pathLower.includes('/inference/chat/completions');
+      const isGoogleCloudChirp3Endpoint = resolvedProvider.provider === 'google-cloud-chirp3' || pathLower.includes('/recognizers/');
+      const isGoogleGeminiAudioEndpoint = resolvedProvider.provider === 'google-gemini-audio' || pathLower.includes(':generatecontent');
       const authFailed = hasAuthFailureHint(detail);
       const payloadValidationFailed = hasPayloadValidationHint(detail);
+      const googlePayloadValidationFailed =
+        payloadValidationFailed || /audio|content|recognize|recognition|config/i.test(detail || '');
+
+      if (response.status >= 200 && response.status < 300) {
+        return { success: true, message: 'Connection succeeded.' };
+      }
 
       if (response.status === 401 || response.status === 403 || authFailed) {
         return {
           success: false,
           error: detail || `Authentication failed (${response.status}).`,
         };
-      }
-
-      if (response.status >= 200 && response.status < 300) {
-        return { success: true, message: 'Connection succeeded.' };
       }
 
       if (response.status === 404) {
@@ -1587,6 +2260,54 @@ export class AsrService {
           response.status === 422 ||
           (isWhisperCppInferenceEndpoint && response.status === 500)
         )
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isElevenLabsScribeEndpoint &&
+        payloadValidationFailed &&
+        (
+          response.status === 400 ||
+          response.status === 415 ||
+          response.status === 422
+        )
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isGithubModelsEndpoint &&
+        payloadValidationFailed &&
+        (response.status === 400 || response.status === 415 || response.status === 422)
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isGoogleCloudChirp3Endpoint &&
+        googlePayloadValidationFailed &&
+        (response.status === 400 || response.status === 415 || response.status === 422)
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isGoogleGeminiAudioEndpoint &&
+        payloadValidationFailed &&
+        (response.status === 400 || response.status === 415 || response.status === 422)
       ) {
         return {
           success: true,
@@ -2794,6 +3515,7 @@ export class AsrService {
                     text: normalizedWord,
                     start_ts: wordStart,
                     end_ts: Number.isFinite(wordEndNum) ? wordEndNum : undefined,
+                    speaker: this.firstString([word?.speaker, word?.speaker_id]) ?? undefined,
                     probability: Number.isFinite(Number(word?.probability)) ? Number(word?.probability) : undefined,
                     source_segment_index: segmentIndex,
                     token_index: 0,
@@ -2884,6 +3606,7 @@ export class AsrService {
             start_ts: start,
             end_ts: end,
             text: resolvedText,
+            speaker: this.firstString([s?.speaker, s?.speaker_id, words.find((word) => word.speaker)?.speaker]) ?? undefined,
             words: words.length > 0 ? words : undefined,
           } satisfies AsrStructuredSegment;
           const splitSegments = alignmentFirstNoSpace ? [baseSegment] : this.splitNoSpaceSegmentByWords(baseSegment, language);
@@ -3024,6 +3747,91 @@ export class AsrService {
         return overlappingChunk?.speaker ? { ...segment, speaker: overlappingChunk.speaker } : segment;
       });
     }
+  }
+
+  private static getDominantSpeaker(items: Array<{ speaker?: string }>) {
+    const countedSpeakers = new Map<string, number>();
+    for (const item of items) {
+      const speaker = typeof item?.speaker === 'string' && item.speaker.trim() ? item.speaker.trim() : '';
+      if (!speaker) continue;
+      countedSpeakers.set(speaker, (countedSpeakers.get(speaker) || 0) + 1);
+    }
+    return Array.from(countedSpeakers.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+  }
+
+  private static collectTranscriptSpeakers(result: AsrStructuredTranscript) {
+    const speakers = new Set<string>();
+    for (const item of [
+      ...(result.chunks || []),
+      ...(result.segments || []),
+      ...(result.word_segments || []),
+    ]) {
+      const speaker = typeof item?.speaker === 'string' && item.speaker.trim() ? item.speaker.trim() : '';
+      if (speaker) speakers.add(speaker);
+    }
+    return speakers;
+  }
+
+  private static hasProviderSpeakerTags(result: AsrStructuredTranscript) {
+    return this.collectTranscriptSpeakers(result).size > 0;
+  }
+
+  private static applyProviderNativeSpeakerAssignments(result: AsrStructuredTranscript) {
+    if (!Array.isArray(result?.chunks) || result.chunks.length === 0) return;
+    const words = Array.isArray(result.word_segments) ? result.word_segments : [];
+    const segments = Array.isArray(result.segments) ? result.segments : [];
+
+    result.chunks = result.chunks.map((chunk) => {
+      const existingSpeaker = typeof chunk?.speaker === 'string' && chunk.speaker.trim() ? chunk.speaker.trim() : '';
+      if (existingSpeaker) return chunk;
+
+      const startIndex = this.toFiniteNumber(chunk.word_start_index, Number.NaN);
+      const endIndex = this.toFiniteNumber(chunk.word_end_index, Number.NaN);
+      const wordsByIndex =
+        Number.isFinite(startIndex) && Number.isFinite(endIndex) && endIndex >= startIndex
+          ? words.slice(Math.max(0, Math.floor(startIndex)), Math.floor(endIndex) + 1)
+          : [];
+      const chunkStart = this.toFiniteNumber(chunk.start_ts, 0);
+      const chunkEnd = this.toFiniteNumber(chunk.end_ts, chunkStart);
+      const wordsByOverlap = wordsByIndex.length > 0
+        ? wordsByIndex
+        : words.filter((word) => {
+            const wordStart = this.toFiniteNumber(word.start_ts, 0);
+            const wordEnd = this.getWordEnd(word);
+            return wordEnd >= chunkStart - 0.02 && wordStart <= chunkEnd + 0.02;
+          });
+      const segmentSpeakers = segments.filter((segment) => {
+        const segmentStart = this.toFiniteNumber(segment.start_ts, 0);
+        const segmentEnd = this.toFiniteNumber(segment.end_ts, segmentStart);
+        return segmentEnd >= chunkStart - 0.02 && segmentStart <= chunkEnd + 0.02;
+      });
+      const speaker = this.getDominantSpeaker(wordsByOverlap) || this.getDominantSpeaker(segmentSpeakers);
+      return speaker ? { ...chunk, speaker } : chunk;
+    });
+
+    this.applySpeakerAssignments(result);
+  }
+
+  private static buildProviderNativeDiarizationDiagnostics(
+    result: AsrStructuredTranscript,
+    speechSegments: Array<{ start: number; end: number }>,
+    vadWindows: Array<{ start: number; end: number }>
+  ) {
+    const speakers = this.collectTranscriptSpeakers(result);
+    return {
+      provider: 'acoustic',
+      selectedSource: 'chunk',
+      speechSegmentCount: speechSegments.length,
+      vadWindowCount: vadWindows.length,
+      providerNative: true,
+      providerNativeProvider: 'elevenlabs',
+      selectedPass: {
+        source: 'provider_native',
+        regionCount: Array.isArray(result.chunks) ? result.chunks.length : 0,
+        uniqueSpeakerCount: speakers.size,
+        threshold: 1,
+      },
+    };
   }
 
   private static disableWordAlignment(transcript: AsrStructuredTranscript, language?: string): AsrStructuredTranscript {

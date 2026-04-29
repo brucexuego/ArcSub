@@ -43,6 +43,14 @@ export class ResourceManager {
       category: 'speaker_embedding',
     },
   ];
+  private static readonly DEFAULT_OPTIONAL_ASSETS = [
+    {
+      id: 'ten-vad',
+      targetRelativePath: 'ten-vad.onnx',
+      sourceUrl: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/ten-vad.onnx',
+      category: 'ten_vad',
+    },
+  ];
   private static deployManifestCache: any | null = null;
   private static ensureToolsTask: Promise<void> | null = null;
   private static ensureToolsFailure: { message: string; until: number } | null = null;
@@ -57,12 +65,20 @@ export class ResourceManager {
     return this.deployManifestCache;
   }
 
-  private static async getRequiredBaselineAssets(manifestOverride?: any) {
+  private static async getBaselineAssets(manifestOverride?: any, includeOptional = false) {
     const manifest = manifestOverride ?? (await this.getDeployManifest());
     const manifestAssets = Array.isArray(manifest?.assets?.required) ? manifest.assets.required : [];
+    const optionalManifestAssets = includeOptional && Array.isArray(manifest?.assets?.optional)
+      ? manifest.assets.optional
+      : [];
     const byId = new Map<string, BaselineAssetDefinition>();
 
-    for (const rawAsset of [...this.DEFAULT_REQUIRED_ASSETS, ...manifestAssets]) {
+    for (const rawAsset of [
+      ...this.DEFAULT_REQUIRED_ASSETS,
+      ...manifestAssets,
+      ...(includeOptional ? this.DEFAULT_OPTIONAL_ASSETS : []),
+      ...optionalManifestAssets,
+    ]) {
       const id = String(rawAsset?.id || '').trim();
       const targetRelativePath = String(rawAsset?.targetRelativePath || '').trim();
       const sourceUrl = String(rawAsset?.sourceUrl || '').trim();
@@ -74,9 +90,13 @@ export class ResourceManager {
     return [...byId.values()];
   }
 
+  private static async getRequiredBaselineAssets(manifestOverride?: any) {
+    return this.getBaselineAssets(manifestOverride, false);
+  }
+
   private static async getRequiredBaselineAsset(identifier: string, manifestOverride?: any) {
     const normalized = String(identifier || '').trim();
-    const assets = await this.getRequiredBaselineAssets(manifestOverride);
+    const assets = await this.getBaselineAssets(manifestOverride, true);
     const asset = assets.find(
       (candidate) =>
         candidate.id === normalized ||

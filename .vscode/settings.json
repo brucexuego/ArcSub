@@ -2,6 +2,7 @@
   "files.encoding": "utf8",
   "files.autoGuessEncoding": false,
   "files.eol": "\n",
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
   "terminal.integrated.defaultProfile.windows": "PowerShell UTF-8",
   "terminal.integrated.profiles.windows": {
     "PowerShell UTF-8": {

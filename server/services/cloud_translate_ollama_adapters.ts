@@ -38,7 +38,7 @@ async function requestOllamaChat(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     },
-    120000,
+    deps.resolveRequestTimeoutMs(120000, options.modelOptions?.timeoutMs ?? undefined),
     options.signal
   );
   const rawText = await response.text();
@@ -93,7 +93,7 @@ async function requestOllamaGenerate(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     },
-    120000,
+    deps.resolveRequestTimeoutMs(120000, options.modelOptions?.timeoutMs ?? undefined),
     options.signal
   );
   const rawText = await response.text();
