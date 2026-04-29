@@ -10,6 +10,12 @@ export interface CloudAsrAdapterRequestOptions {
   wordAlignment?: boolean;
   vad?: boolean;
   diarization?: boolean;
+  diarizationOptions?: {
+    mode?: 'auto' | 'fixed' | 'range' | 'many';
+    exactSpeakerCount?: number;
+    minSpeakers?: number;
+    maxSpeakers?: number;
+  } | null;
   audioDurationSec?: number | null;
   decodePolicy?: {
     pipelineMode?: 'stable' | 'throughput';
@@ -97,9 +103,11 @@ interface CloudAsrAdapterBuildFormInput {
 export interface CloudAsrAdapter {
   provider: CloudAsrProvider;
   getPreferredResponseFormats(options: CloudAsrAdapterRequestOptions): string[];
+  buildRequestUrl?(endpointUrl: string, input: CloudAsrAdapterBuildFormInput): string;
   buildFormData?(input: CloudAsrAdapterBuildFormInput): FormData;
+  buildRawBody?(input: CloudAsrAdapterBuildFormInput): BodyInit;
   buildJsonBody?(input: CloudAsrAdapterBuildFormInput): Record<string, unknown>;
-  getRequestHeaders?(): Record<string, string>;
+  getRequestHeaders?(input: CloudAsrAdapterBuildFormInput): Record<string, string>;
   normalizeResponse?(data: any): any;
 }
 
@@ -318,6 +326,12 @@ export function buildCloudAsrRequestHeaders(provider: CloudAsrProvider, key?: st
   if (provider === 'elevenlabs-scribe') {
     return { 'xi-api-key': trimmed };
   }
+  if (provider === 'deepgram-listen') {
+    return { Authorization: `Token ${trimmed}` };
+  }
+  if (provider === 'gladia-pre-recorded') {
+    return { 'x-gladia-key': trimmed };
+  }
   if (provider === 'github-models-phi4-multimodal') {
     return {
       Accept: 'application/vnd.github+json',
@@ -347,6 +361,19 @@ function getEnvNumber(name: string, fallback: number, min = Number.NEGATIVE_INFI
 
 function getCloudAsrRequestTimeoutMs(resolvedProvider: ResolvedCloudAsrProvider, options: CloudAsrAdapterRequestOptions) {
   const sharedTimeoutMs = Math.round(getEnvNumber('ASR_CLOUD_REQUEST_TIMEOUT_MS', 120000, 15000, 1800000));
+  if (resolvedProvider.provider === 'deepgram-listen') {
+    const deepgramFloorMs = Math.round(
+      getEnvNumber('ASR_DEEPGRAM_REQUEST_TIMEOUT_MS', 600000, 60000, 1200000)
+    );
+    return Math.max(sharedTimeoutMs, deepgramFloorMs);
+  }
+  if (resolvedProvider.provider === 'gladia-pre-recorded') {
+    const gladiaFloorMs = Math.round(
+      getEnvNumber('ASR_GLADIA_REQUEST_TIMEOUT_MS', 900000, 60000, 7200000)
+    );
+    return Math.max(sharedTimeoutMs, gladiaFloorMs);
+  }
+
   if (resolvedProvider.provider !== 'elevenlabs-scribe') {
     return sharedTimeoutMs;
   }
@@ -368,6 +395,23 @@ function normalizeElevenLabsLanguageCode(language: string) {
   if (normalized === 'jp') return 'ja';
   const primary = normalized.split('-')[0];
   return /^[a-z]{2,3}$/.test(primary) ? primary : '';
+}
+
+function getElevenLabsNumSpeakers(options: CloudAsrAdapterRequestOptions) {
+  if (!options.diarization) return null;
+  const diarizationOptions = options.diarizationOptions || {};
+  const mode = String(diarizationOptions.mode || '').trim();
+  const exactSpeakerCount = toFiniteNumber(diarizationOptions.exactSpeakerCount, Number.NaN);
+  const maxSpeakers = toFiniteNumber(diarizationOptions.maxSpeakers, Number.NaN);
+  const value =
+    mode === 'fixed' && Number.isFinite(exactSpeakerCount) && exactSpeakerCount > 0
+      ? exactSpeakerCount
+      : (mode === 'range' || mode === 'many') && Number.isFinite(maxSpeakers) && maxSpeakers > 0
+        ? maxSpeakers
+        : Number.NaN;
+
+  if (!Number.isFinite(value)) return null;
+  return Math.max(1, Math.min(32, Math.round(value)));
 }
 
 function normalizeElevenLabsSpeaker(value: unknown) {
@@ -453,6 +497,68 @@ function inferAudioMimeType(filePath: string) {
     webm: 'audio/webm',
   };
   return mimeByExt[ext] || 'audio/wav';
+}
+
+function normalizeDeepgramLanguageCode(language: string) {
+  const normalized = String(language || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized || normalized === 'auto' || normalized === 'detect') return '';
+  if (normalized === 'jp') return 'ja';
+  const primary = normalized.split('-')[0];
+  return /^[a-z]{2,3}$/.test(primary) ? primary : normalized;
+}
+
+function getDeepgramUtteranceSplitSec() {
+  const configured = Number(process.env.ASR_DEEPGRAM_UTT_SPLIT_SEC);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.max(0.1, Math.min(5, configured));
+  }
+  const fallbackSilenceMs = getEnvNumber(
+    'VAD_FIXED_SILENCE_MS',
+    getEnvNumber('VAD_MIN_SILENCE_MS', 500, 50, 5000),
+    50,
+    5000
+  );
+  return Number(Math.max(0.1, Math.min(5, fallbackSilenceMs / 1000)).toFixed(3));
+}
+
+function buildDeepgramListenUrl(endpointUrl: string, input: CloudAsrAdapterBuildFormInput) {
+  const { config, includeLanguage, options } = input;
+  const next = new URL(endpointUrl);
+  const setDefault = (key: string, value: string) => {
+    if (!next.searchParams.has(key)) next.searchParams.set(key, value);
+  };
+
+  const configuredModel = String(config?.model || '').trim();
+  if (configuredModel) {
+    next.searchParams.set('model', configuredModel);
+  } else {
+    setDefault('model', 'nova-3');
+  }
+
+  setDefault('smart_format', 'true');
+  setDefault('punctuate', 'true');
+  setDefault('paragraphs', 'true');
+
+  const wantsCloudUtterances = options.segmentation !== false || Boolean(options.vad) || Boolean(options.diarization);
+  if (wantsCloudUtterances) {
+    next.searchParams.set('utterances', 'true');
+    if (!next.searchParams.has('utt_split')) {
+      next.searchParams.set('utt_split', String(getDeepgramUtteranceSplitSec()));
+    }
+  }
+  if (options.diarization) {
+    next.searchParams.set('diarize', 'true');
+  }
+
+  const rawLanguage = typeof options.language === 'string' ? options.language.trim() : '';
+  const normalizedLanguage = normalizeDeepgramLanguageCode(rawLanguage);
+  if (includeLanguage && normalizedLanguage) {
+    next.searchParams.set('language', normalizedLanguage);
+  } else if (includeLanguage && rawLanguage.toLowerCase() === 'auto') {
+    setDefault('detect_language', 'true');
+  }
+
+  return next.toString();
 }
 
 function buildGithubPhi4AsrPrompt(options: CloudAsrAdapterRequestOptions) {
@@ -1038,6 +1144,334 @@ function buildGeminiBatchTranscriptFromItem(
   };
 }
 
+function normalizeDeepgramSpeaker(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return `spk${Math.max(0, Math.round(value))}`;
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const numeric = raw.match(/^(?:speaker[\s_-]*)?(\d+)$/i);
+  if (numeric) return `spk${Number(numeric[1])}`;
+  return raw;
+}
+
+function normalizeDeepgramWord(raw: any) {
+  const text = String(raw?.punctuated_word ?? raw?.word ?? raw?.text ?? '').trim();
+  if (!text) return null;
+  const start = toFiniteNumber(raw?.start ?? raw?.start_ts, Number.NaN);
+  if (!Number.isFinite(start)) return null;
+  const endRaw = toFiniteNumber(raw?.end ?? raw?.end_ts, Number.NaN);
+  const end = Number.isFinite(endRaw) && endRaw > start ? endRaw : undefined;
+  const probability = toFiniteNumber(raw?.confidence ?? raw?.probability, Number.NaN);
+  const speaker = normalizeDeepgramSpeaker(raw?.speaker ?? raw?.speaker_id);
+  return {
+    ...raw,
+    word: text,
+    text,
+    start,
+    start_ts: start,
+    end,
+    end_ts: end,
+    speaker,
+    speaker_id: speaker,
+    probability: Number.isFinite(probability) ? probability : undefined,
+  };
+}
+
+function getDeepgramAlternativeItems(data: any) {
+  const channels = Array.isArray(data?.results?.channels) ? data.results.channels : [];
+  return channels.flatMap((channel: any) =>
+    (Array.isArray(channel?.alternatives) ? channel.alternatives : []).map((alternative: any) => ({
+      channel,
+      alternative,
+    }))
+  );
+}
+
+function buildDeepgramSegmentsFromWords(words: ReturnType<typeof normalizeDeepgramWord>[]) {
+  const normalizedWords = words.filter(Boolean) as Array<NonNullable<ReturnType<typeof normalizeDeepgramWord>>>;
+  const segments: any[] = [];
+  let buffer: typeof normalizedWords = [];
+  const utteranceSplitSec = getDeepgramUtteranceSplitSec();
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    const first = buffer[0];
+    const last = buffer[buffer.length - 1];
+    segments.push({
+      text: joinElevenLabsWords(buffer),
+      transcript: joinElevenLabsWords(buffer),
+      start: first.start,
+      start_ts: first.start,
+      end: last.end,
+      end_ts: last.end,
+      speaker: first.speaker,
+      words: buffer,
+    });
+    buffer = [];
+  };
+
+  for (const word of normalizedWords) {
+    const previous = buffer[buffer.length - 1];
+    const gap = previous?.end != null ? word.start - previous.end : 0;
+    const speakerChanged = Boolean(previous?.speaker && word.speaker && previous.speaker !== word.speaker);
+    if (buffer.length > 0 && (speakerChanged || gap >= utteranceSplitSec)) {
+      flush();
+    }
+    buffer.push(word);
+
+    const first = buffer[0];
+    const end = word.end ?? word.start;
+    const duration = Math.max(0, end - first.start);
+    const currentText = joinElevenLabsWords(buffer);
+    if (
+      buffer.length > 0 &&
+      (
+        (duration >= 0.5 && isElevenLabsBoundaryText(word.text)) ||
+        duration >= 8 ||
+        currentText.length >= 90
+      )
+    ) {
+      flush();
+    }
+  }
+  flush();
+  return segments;
+}
+
+function normalizeDeepgramTranscript(data: any) {
+  const rawUtterances = Array.isArray(data?.results?.utterances) ? data.results.utterances : [];
+  const alternativeItems = getDeepgramAlternativeItems(data);
+  const transcriptTexts: string[] = [];
+  const speakerIds = new Set<string>();
+  let normalizedWordCount = 0;
+  let detectedLanguage = firstString([
+    data?.language_code,
+    data?.metadata?.detected_language,
+    alternativeItems.find((item: any) => typeof item?.channel?.detected_language === 'string')?.channel?.detected_language,
+  ]);
+
+  const segments = rawUtterances
+    .map((utterance: any) => {
+      const text = firstString([utterance?.transcript, utterance?.text]);
+      if (!text) return null;
+      const words = Array.isArray(utterance?.words)
+        ? utterance.words.map((word: any) => normalizeDeepgramWord(word)).filter(Boolean)
+        : [];
+      normalizedWordCount += words.length;
+      for (const word of words) {
+        if (word?.speaker) speakerIds.add(word.speaker);
+      }
+      const speaker = normalizeDeepgramSpeaker(utterance?.speaker);
+      if (speaker) speakerIds.add(speaker);
+      transcriptTexts.push(text);
+      return {
+        ...utterance,
+        text,
+        transcript: text,
+        start: toFiniteNumber(utterance?.start, 0),
+        start_ts: toFiniteNumber(utterance?.start, 0),
+        end: Number.isFinite(Number(utterance?.end)) ? toFiniteNumber(utterance?.end, 0) : undefined,
+        end_ts: Number.isFinite(Number(utterance?.end)) ? toFiniteNumber(utterance?.end, 0) : undefined,
+        speaker,
+        words: words.length > 0 ? words : undefined,
+      };
+    })
+    .filter(Boolean);
+
+  if (segments.length === 0) {
+    for (const { alternative, channel } of alternativeItems) {
+      const text = firstString([alternative?.transcript, alternative?.text]);
+      if (text) transcriptTexts.push(text);
+      if (!detectedLanguage && typeof channel?.detected_language === 'string') {
+        detectedLanguage = channel.detected_language.trim();
+      }
+      const words = Array.isArray(alternative?.words)
+        ? alternative.words.map((word: any) => normalizeDeepgramWord(word)).filter(Boolean)
+        : [];
+      normalizedWordCount += words.length;
+      for (const word of words) {
+        if (word?.speaker) speakerIds.add(word.speaker);
+      }
+      segments.push(...buildDeepgramSegmentsFromWords(words));
+    }
+  }
+
+  return {
+    ...data,
+    text: transcriptTexts.join('\n').trim() || data?.text,
+    language_code: detectedLanguage || data?.language_code,
+    segments: segments.length > 0 ? segments.sort((a: any, b: any) => toFiniteNumber(a.start, 0) - toFiniteNumber(b.start, 0)) : data?.segments,
+    deepgram_diarization_applied: speakerIds.size > 0,
+    deepgram_speaker_count: speakerIds.size,
+    deepgram_word_count: normalizedWordCount,
+    deepgram_utterance_count: rawUtterances.length,
+  };
+}
+
+function normalizeGladiaLanguageCode(language: string) {
+  const normalized = String(language || '').trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized || normalized === 'auto' || normalized === 'detect') return '';
+  if (normalized === 'jp') return 'ja';
+  const primary = normalized.split('-')[0];
+  return /^[a-z]{2,3}$/.test(primary) ? primary : normalized;
+}
+
+function normalizeGladiaSpeaker(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `spk${Math.max(0, Math.round(value))}`;
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  const numeric = raw.match(/^(?:speaker[\s_-]*)?(\d+)$/i);
+  if (numeric) return `spk${Math.max(0, Number(numeric[1]))}`;
+  return raw;
+}
+
+function normalizeGladiaWord(raw: any, fallbackSpeaker?: string) {
+  const text = String(raw?.word ?? raw?.text ?? '').trim();
+  if (!text) return null;
+  const start = toFiniteNumber(raw?.start ?? raw?.start_ts, Number.NaN);
+  if (!Number.isFinite(start)) return null;
+  const endRaw = toFiniteNumber(raw?.end ?? raw?.end_ts, Number.NaN);
+  const end = Number.isFinite(endRaw) && endRaw > start ? endRaw : undefined;
+  const probability = toFiniteNumber(raw?.confidence ?? raw?.probability, Number.NaN);
+  const speaker = normalizeGladiaSpeaker(raw?.speaker ?? raw?.speaker_id) || fallbackSpeaker;
+  return {
+    ...raw,
+    word: text,
+    text,
+    start,
+    start_ts: start,
+    end,
+    end_ts: end,
+    speaker,
+    speaker_id: speaker,
+    probability: Number.isFinite(probability) ? probability : undefined,
+  };
+}
+
+function parseSrtTimestampSeconds(raw: string) {
+  const matched = String(raw || '').trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
+  if (!matched) return Number.NaN;
+  const [, hours, minutes, seconds, millis] = matched;
+  return (
+    Number(hours) * 3600 +
+    Number(minutes) * 60 +
+    Number(seconds) +
+    Number(millis.padEnd(3, '0').slice(0, 3)) / 1000
+  );
+}
+
+function normalizeNoSpaceScriptDisplayText(text: string) {
+  return String(text || '')
+    .replace(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])\s+([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])/gu, '$1$2')
+    .replace(/\s+([,.;:!?%\u3001\u3002\uff0c\uff0e\uff01\uff1f\uff1a\uff1b])/gu, '$1')
+    .trim();
+}
+
+function parseGladiaSrtSegments(srtText: string, language?: string) {
+  const blocks = String(srtText || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const noSpaceLanguage = /^(zh|ja|jp|ko)(?:-|$)/i.test(String(language || ''));
+  const segments: any[] = [];
+  for (const block of blocks) {
+    const lines = block.split('\n').map((line) => line.trim()).filter(Boolean);
+    const timeIndex = lines.findIndex((line) => line.includes('-->'));
+    if (timeIndex < 0) continue;
+    const [rawStart, rawEnd] = lines[timeIndex].split('-->').map((part) => part.trim());
+    const start = parseSrtTimestampSeconds(rawStart);
+    const end = parseSrtTimestampSeconds(rawEnd);
+    if (!Number.isFinite(start)) continue;
+    const rawText = lines.slice(timeIndex + 1).join(' ').trim();
+    const text = noSpaceLanguage ? normalizeNoSpaceScriptDisplayText(rawText) : rawText;
+    if (!text) continue;
+    segments.push({
+      text,
+      transcript: text,
+      start,
+      start_ts: start,
+      end: Number.isFinite(end) ? end : undefined,
+      end_ts: Number.isFinite(end) ? end : undefined,
+    });
+  }
+  return segments;
+}
+
+function normalizeGladiaTranscript(data: any) {
+  const transcription = data?.result?.transcription || data?.transcription || {};
+  const transcriptionUtterances = Array.isArray(transcription?.utterances) ? transcription.utterances : [];
+  const diarizationUtterances = Array.isArray(data?.result?.diarization?.results) ? data.result.diarization.results : [];
+  const rawUtterances = transcriptionUtterances.length > 0 ? transcriptionUtterances : diarizationUtterances;
+  const languages = Array.isArray(transcription?.languages) ? transcription.languages : [];
+  const detectedLanguage = firstString([
+    data?.language_code,
+    transcription?.language,
+    languages.find((language: unknown) => typeof language === 'string'),
+  ]);
+  const transcriptTexts: string[] = [];
+  const speakerIds = new Set<string>();
+  let normalizedWordCount = 0;
+
+  const segments = rawUtterances
+    .map((utterance: any, utteranceIndex: number) => {
+      const text = firstString([utterance?.text, utterance?.transcript]);
+      if (!text) return null;
+      const pairedDiarizationUtterance = transcriptionUtterances.length > 0 ? diarizationUtterances[utteranceIndex] : null;
+      const speaker = normalizeGladiaSpeaker(
+        utterance?.speaker ??
+        utterance?.speaker_id ??
+        pairedDiarizationUtterance?.speaker ??
+        pairedDiarizationUtterance?.speaker_id
+      );
+      if (speaker) speakerIds.add(speaker);
+      const words = Array.isArray(utterance?.words)
+        ? utterance.words.map((word: any) => normalizeGladiaWord(word, speaker)).filter(Boolean)
+        : [];
+      normalizedWordCount += words.length;
+      for (const word of words) {
+        if (word?.speaker) speakerIds.add(word.speaker);
+      }
+      transcriptTexts.push(text);
+      return {
+        ...utterance,
+        text,
+        transcript: text,
+        start: toFiniteNumber(utterance?.start, 0),
+        start_ts: toFiniteNumber(utterance?.start, 0),
+        end: Number.isFinite(Number(utterance?.end)) ? toFiniteNumber(utterance?.end, 0) : undefined,
+        end_ts: Number.isFinite(Number(utterance?.end)) ? toFiniteNumber(utterance?.end, 0) : undefined,
+        speaker,
+        words: words.length > 0 ? words : undefined,
+      };
+    })
+    .filter(Boolean);
+
+  if (segments.length === 0) {
+    const subtitles = Array.isArray(transcription?.subtitles) ? transcription.subtitles : [];
+    const srt = firstString(
+      subtitles
+        .filter((item: any) => !item?.format || String(item.format).toLowerCase() === 'srt')
+        .map((item: any) => item?.subtitles)
+    ) || firstString(subtitles.map((item: any) => item?.subtitles));
+    segments.push(...parseGladiaSrtSegments(srt, detectedLanguage));
+    transcriptTexts.push(...segments.map((segment) => segment.text).filter(Boolean));
+  }
+
+  return {
+    ...data,
+    text: transcriptTexts.join('\n').trim() || transcription?.full_transcript || data?.text,
+    language_code: detectedLanguage || data?.language_code,
+    segments: segments.length > 0 ? segments.sort((a: any, b: any) => toFiniteNumber(a.start, 0) - toFiniteNumber(b.start, 0)) : data?.segments,
+    gladia_diarization_applied: speakerIds.size > 0,
+    gladia_speaker_count: speakerIds.size,
+    gladia_word_count: normalizedWordCount,
+    gladia_utterance_count: rawUtterances.length,
+  };
+}
+
 function normalizeElevenLabsTranscript(data: any) {
   const collectTranscripts = () => {
     if (Array.isArray(data?.transcripts)) return data.transcripts;
@@ -1210,6 +1644,10 @@ const cloudAsrAdapters: Record<CloudAsrProvider, CloudAsrAdapter> = {
         formData.append('language_code', normalizedLanguage);
       }
       formData.append('diarize', options.diarization ? 'true' : 'false');
+      const numSpeakers = getElevenLabsNumSpeakers(options);
+      if (numSpeakers != null) {
+        formData.append('num_speakers', String(numSpeakers));
+      }
       formData.append('tag_audio_events', 'false');
       if (options.segmentation === false && options.wordAlignment === false) {
         formData.append('timestamps_granularity', 'none');
@@ -1223,6 +1661,39 @@ const cloudAsrAdapters: Record<CloudAsrProvider, CloudAsrAdapter> = {
     },
     normalizeResponse(data) {
       return normalizeElevenLabsTranscript(data);
+    },
+  },
+  'deepgram-listen': {
+    provider: 'deepgram-listen',
+    getPreferredResponseFormats() {
+      return ['json'];
+    },
+    buildRequestUrl(endpointUrl, input) {
+      return buildDeepgramListenUrl(endpointUrl, input);
+    },
+    getRequestHeaders(input) {
+      return { Accept: 'application/json', 'Content-Type': inferAudioMimeType(input.filePath) };
+    },
+    buildRawBody(input) {
+      return new Blob([bufferToBlobPart(input.fileBuffer)], { type: inferAudioMimeType(input.filePath) });
+    },
+    normalizeResponse(data) {
+      return normalizeDeepgramTranscript(data);
+    },
+  },
+  'gladia-pre-recorded': {
+    provider: 'gladia-pre-recorded',
+    getPreferredResponseFormats() {
+      return ['json'];
+    },
+    getRequestHeaders() {
+      return { Accept: 'application/json', 'Content-Type': 'application/json' };
+    },
+    buildJsonBody() {
+      return {};
+    },
+    normalizeResponse(data) {
+      return normalizeGladiaTranscript(data);
     },
   },
   'github-models-phi4-multimodal': {
@@ -1461,7 +1932,8 @@ export async function requestGeminiCloudAsrBatch(
   );
   const headers = {
     ...buildCloudAsrRequestHeaders(resolvedProvider.provider, config.key),
-    ...(cloudAsrAdapters['google-gemini-audio'].getRequestHeaders?.() || {}),
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
   };
   const estimatedInputTokens = estimateGeminiBatchAudioAsrInputTokens(audioInputs);
   const cloudRequestTimeoutMs = getCloudAsrRequestTimeoutMs(resolvedProvider, options);
@@ -1576,6 +2048,285 @@ export async function requestGeminiCloudAsrBatch(
   };
 }
 
+function getGladiaPollIntervalMs() {
+  return Math.round(getEnvNumber('ASR_GLADIA_POLL_INTERVAL_MS', 2000, 500, 60000));
+}
+
+function buildGladiaUploadUrl(endpointUrl: string) {
+  const next = new URL(endpointUrl);
+  next.pathname = '/v2/upload';
+  next.search = '';
+  return next.toString();
+}
+
+function buildGladiaPollUrl(endpointUrl: string, job: any) {
+  const resultUrl = firstString([job?.result_url, job?.url]);
+  if (resultUrl) return resultUrl;
+  const id = firstString([job?.id, job?.transcription_id]);
+  if (!id) throw new Error('Gladia transcription job response did not include an id or result_url.');
+  const next = new URL(endpointUrl);
+  next.pathname = `/v2/pre-recorded/${encodeURIComponent(id)}`;
+  next.search = '';
+  return next.toString();
+}
+
+function buildGladiaLanguageConfig(language: string) {
+  const normalized = normalizeGladiaLanguageCode(language);
+  return {
+    languages: normalized ? [normalized] : [],
+    code_switching: false,
+  };
+}
+
+function buildGladiaDiarizationConfig(options: CloudAsrAdapterRequestOptions) {
+  const diarizationOptions = options.diarizationOptions || {};
+  const mode = String(diarizationOptions.mode || '').trim();
+  const exactSpeakerCount = toFiniteNumber(diarizationOptions.exactSpeakerCount, Number.NaN);
+  const minSpeakers = toFiniteNumber(diarizationOptions.minSpeakers, Number.NaN);
+  const maxSpeakers = toFiniteNumber(diarizationOptions.maxSpeakers, Number.NaN);
+  const config: Record<string, number> = {};
+
+  if (mode === 'fixed' && Number.isFinite(exactSpeakerCount) && exactSpeakerCount > 0) {
+    config.number_of_speakers = Math.round(exactSpeakerCount);
+  } else {
+    if ((mode === 'range' || mode === 'many') && Number.isFinite(minSpeakers) && minSpeakers > 0) {
+      config.min_speakers = Math.round(minSpeakers);
+    }
+    if ((mode === 'range' || mode === 'many') && Number.isFinite(maxSpeakers) && maxSpeakers > 0) {
+      config.max_speakers = Math.round(maxSpeakers);
+    }
+  }
+
+  return Object.keys(config).length > 0 ? config : null;
+}
+
+function buildGladiaPreRecordedPayload(audioUrl: string, options: CloudAsrAdapterRequestOptions) {
+  const payload: Record<string, unknown> = {
+    audio_url: audioUrl,
+    language_config: buildGladiaLanguageConfig(options.language || ''),
+    subtitles: true,
+    subtitles_config: {
+      formats: ['srt'],
+      minimum_duration: 1,
+      maximum_duration: 15.5,
+      maximum_characters_per_row: 80,
+      maximum_rows_per_caption: 2,
+      style: 'default',
+    },
+    sentences: true,
+    punctuation_enhanced: true,
+    diarization: Boolean(options.diarization),
+  };
+  const diarizationConfig = options.diarization ? buildGladiaDiarizationConfig(options) : null;
+  if (diarizationConfig) {
+    payload.diarization_config = diarizationConfig;
+  }
+  if (options.prompt && options.prompt.trim()) {
+    payload.context_prompt = options.prompt.trim();
+  }
+  return payload;
+}
+
+async function readGladiaJsonResponse(response: Response, fallback: string) {
+  const rawText = await response.text();
+  if (!response.ok) {
+    throw new Error(`Cloud ASR error (${response.status}): ${extractErrorMessage(rawText, fallback || response.statusText)}`);
+  }
+  try {
+    return rawText ? JSON.parse(rawText) : {};
+  } catch {
+    throw new Error(`Cloud ASR error (${response.status}): Invalid JSON response from Gladia.`);
+  }
+}
+
+async function fetchGladiaJson(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  deps: Pick<CloudAsrAdapterDeps, 'createAbortSignalWithTimeout'>,
+  signal?: AbortSignal
+) {
+  const request = deps.createAbortSignalWithTimeout(timeoutMs, signal);
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: request.signal,
+      redirect: 'error',
+    });
+    return response;
+  } finally {
+    request.dispose();
+  }
+}
+
+async function requestGladiaPreRecordedAsr(
+  filePath: string,
+  resolvedProvider: ResolvedCloudAsrProvider,
+  config: any,
+  options: CloudAsrAdapterRequestOptions,
+  deps: CloudAsrAdapterDeps,
+  signal?: AbortSignal
+): Promise<CloudAsrProviderResult> {
+  const rawLanguage = typeof options.language === 'string' ? options.language.trim() : '';
+  const fileBuffer = await fs.readFile(filePath);
+  const cloudRequestTimeoutMs = getCloudAsrRequestTimeoutMs(resolvedProvider, options);
+  const headers = buildCloudAsrRequestHeaders(resolvedProvider.provider, config.key);
+  const uploadForm = new FormData();
+  uploadForm.append(
+    'audio',
+    new Blob([bufferToBlobPart(fileBuffer)], { type: inferAudioMimeType(filePath) }),
+    path.basename(filePath)
+  );
+
+  const uploadResponse = await fetchGladiaJson(
+    buildGladiaUploadUrl(resolvedProvider.endpointUrl),
+    {
+      method: 'POST',
+      headers,
+      body: uploadForm,
+    },
+    cloudRequestTimeoutMs,
+    deps,
+    signal
+  );
+  const uploadData = await readGladiaJsonResponse(uploadResponse, 'Gladia upload failed.');
+  const audioUrl = firstString([uploadData?.audio_url]);
+  if (!audioUrl) {
+    throw new Error('Cloud ASR error (502): Gladia upload response did not include audio_url.');
+  }
+
+  const initResponse = await fetchGladiaJson(
+    resolvedProvider.endpointUrl,
+    {
+      method: 'POST',
+      headers: {
+        ...headers,
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildGladiaPreRecordedPayload(audioUrl, options)),
+    },
+    cloudRequestTimeoutMs,
+    deps,
+    signal
+  );
+  const jobData = await readGladiaJsonResponse(initResponse, 'Gladia transcription job creation failed.');
+  const pollUrl = buildGladiaPollUrl(resolvedProvider.endpointUrl, jobData);
+  const startedAt = Date.now();
+  const pollIntervalMs = getGladiaPollIntervalMs();
+  let pollCount = 0;
+  let transientRetryCount = 0;
+  let resultData: any = null;
+
+  while (true) {
+    if (signal?.aborted) {
+      const error = new Error('Aborted');
+      error.name = 'AbortError';
+      throw error;
+    }
+    if (Date.now() - startedAt > cloudRequestTimeoutMs) {
+      throw new Error(`Cloud ASR error (408): Gladia transcription timed out after ${cloudRequestTimeoutMs}ms.`);
+    }
+
+    if (pollCount > 0) {
+      await sleepWithAbort(pollIntervalMs, signal);
+    }
+    pollCount += 1;
+    const response = await fetchGladiaJson(
+      pollUrl,
+      {
+        method: 'GET',
+        headers: {
+          ...headers,
+          Accept: 'application/json',
+        },
+      },
+      cloudRequestTimeoutMs,
+      deps,
+      signal
+    );
+
+    if (shouldRetryTransientCloudAsrResponse(response)) {
+      transientRetryCount += 1;
+      await sleepWithAbort(parseRetryAfterMs(response) ?? getTransientRetryDelayMs(response, transientRetryCount), signal);
+      continue;
+    }
+
+    const data = await readGladiaJsonResponse(response, 'Gladia polling failed.');
+    const status = String(data?.status || '').trim().toLowerCase();
+    if (status === 'done' || status === 'completed' || status === 'success') {
+      resultData = data;
+      break;
+    }
+    if (status === 'error' || status === 'failed') {
+      const errorMessage = firstString([data?.error, data?.message, data?.error_message]) || `Gladia job failed${data?.error_code ? ` (${data.error_code})` : ''}.`;
+      throw new Error(`Cloud ASR error (${data?.error_code || 500}): ${errorMessage}`);
+    }
+  }
+
+  const normalizedData = normalizeGladiaTranscript(resultData);
+  const transcriptLanguage =
+    typeof normalizedData?.language_code === 'string' && normalizedData.language_code.trim()
+      ? normalizedData.language_code.trim()
+      : rawLanguage;
+  let transcript = deps.extractStructuredTranscript(normalizedData, transcriptLanguage);
+  if (options.wordAlignment === false && transcript.word_segments.length > 0) {
+    transcript = deps.disableWordAlignment(transcript, transcriptLanguage);
+  }
+  if (transcript.chunks.length === 0) {
+    throw new Error('Cloud ASR response does not contain transcript text.');
+  }
+  const rawSegments = Array.isArray(normalizedData?.segments)
+    ? normalizedData.segments
+    : Array.isArray(normalizedData?.chunks)
+      ? normalizedData.chunks
+      : [];
+  const rawHasTimestamps = rawSegments.some(
+    (s: any) => s?.start_ts != null || s?.start != null || s?.timestamp?.start != null
+  );
+
+  return {
+    ...transcript,
+    meta: {
+      provider: resolvedProvider.provider,
+      endpointUrl: resolvedProvider.endpointUrl,
+      effectiveModel: resolvedProvider.effectiveModel,
+      responseFormat: 'json',
+      rawHasTimestamps,
+      rawSegmentCount: rawSegments.length,
+      rawWordCount: transcript.word_segments.length,
+      requestedLanguage: rawLanguage || null,
+      sentLanguage: rawLanguage && rawLanguage.toLowerCase() !== 'auto' ? rawLanguage : null,
+      detectedLanguage: normalizedData?.language_code || null,
+      nativeWordTimestamps: transcript.word_segments.length > 0,
+      providerNativeDiarization: Boolean(normalizedData?.gladia_diarization_applied),
+      gladia: {
+        jobId: firstString([jobData?.id, resultData?.id]) || null,
+        pollUrl,
+        pollCount,
+        pollIntervalMs,
+        requestTimeoutMs: cloudRequestTimeoutMs,
+        uploadLimitMb: 1000,
+        maxAudioLengthMinutes: 135,
+        diarizationRequested: Boolean(options.diarization),
+        requestParamsDiarization: typeof resultData?.request_params?.diarization === 'boolean'
+          ? resultData.request_params.diarization
+          : null,
+        diarizationApplied: Boolean(normalizedData?.gladia_diarization_applied),
+        speakerCount: toFiniteNumber(normalizedData?.gladia_speaker_count, 0),
+        wordCount: toFiniteNumber(normalizedData?.gladia_word_count, transcript.word_segments.length),
+        utteranceCount: toFiniteNumber(normalizedData?.gladia_utterance_count, 0),
+        subtitlesRequested: true,
+        sentencesRequested: true,
+      },
+      autoLanguageFallbackUsed: false,
+      responseFormatFallbackUsed: false,
+      transientRetryCount,
+      cjkWordDiagnostics: transcript.debug?.cjkWordDiagnostics || null,
+    },
+  };
+}
+
 export async function requestCloudAsr(
   filePath: string,
   resolvedProvider: ResolvedCloudAsrProvider,
@@ -1584,6 +2335,10 @@ export async function requestCloudAsr(
   deps: CloudAsrAdapterDeps,
   signal?: AbortSignal
 ): Promise<CloudAsrProviderResult> {
+  if (resolvedProvider.provider === 'gladia-pre-recorded') {
+    return requestGladiaPreRecordedAsr(filePath, resolvedProvider, config, options, deps, signal);
+  }
+
   const { language, wordAlignment } = options;
   const rawLanguage = typeof language === 'string' ? language.trim() : '';
   const normalizedLanguage = rawLanguage.toLowerCase();
@@ -1608,19 +2363,24 @@ export async function requestCloudAsr(
     };
     const requestHeaders = {
       ...headers,
-      ...(adapter.getRequestHeaders ? adapter.getRequestHeaders() : {}),
+      ...(adapter.getRequestHeaders ? adapter.getRequestHeaders(bodyInput) : {}),
     };
     const body = adapter.buildJsonBody
       ? JSON.stringify(adapter.buildJsonBody(bodyInput))
+      : adapter.buildRawBody
+        ? adapter.buildRawBody(bodyInput)
       : adapter.buildFormData?.(bodyInput);
     if (!body) {
       throw new Error(`Cloud ASR adapter "${resolvedProvider.provider}" did not provide a request body.`);
     }
     await enforceGeminiFreeTierRateLimit(config, resolvedProvider, geminiEstimatedInputTokens, signal);
+    const requestUrl = adapter.buildRequestUrl
+      ? adapter.buildRequestUrl(resolvedProvider.endpointUrl, bodyInput)
+      : resolvedProvider.endpointUrl;
 
     const request = deps.createAbortSignalWithTimeout(cloudRequestTimeoutMs, signal);
     try {
-      const response = await fetch(resolvedProvider.endpointUrl, {
+      const response = await fetch(requestUrl, {
         method: 'POST',
         headers: requestHeaders,
         body,
@@ -1729,6 +2489,7 @@ export async function requestCloudAsr(
     (s: any) => s?.start_ts != null || s?.start != null || s?.timestamp?.start != null
   );
   const isElevenLabsScribe = resolvedProvider.provider === 'elevenlabs-scribe';
+  const isDeepgramListen = resolvedProvider.provider === 'deepgram-listen';
 
   return {
     ...transcript,
@@ -1749,6 +2510,7 @@ export async function requestCloudAsr(
           providerNativeDiarization: Boolean(normalizedData?.elevenlabs_diarization_applied),
           elevenLabs: {
             diarizationRequested: Boolean(options.diarization),
+            numSpeakersHint: getElevenLabsNumSpeakers(options),
             diarizationApplied: Boolean(normalizedData?.elevenlabs_diarization_applied),
             speakerCount: toFiniteNumber(normalizedData?.elevenlabs_speaker_count, 0),
             wordCount: toFiniteNumber(normalizedData?.elevenlabs_word_count, transcript.word_segments.length),
@@ -1756,6 +2518,24 @@ export async function requestCloudAsr(
             requestTimeoutMs: cloudRequestTimeoutMs,
             standardModeLimitHours: 10,
             uploadLimitGb: 3,
+          },
+        }
+        : {}),
+      ...(isDeepgramListen
+        ? {
+          nativeWordTimestamps: transcript.word_segments.length > 0,
+          providerNativeDiarization: Boolean(normalizedData?.deepgram_diarization_applied),
+          deepgram: {
+            diarizationRequested: Boolean(options.diarization),
+            diarizationApplied: Boolean(normalizedData?.deepgram_diarization_applied),
+            speakerCount: toFiniteNumber(normalizedData?.deepgram_speaker_count, 0),
+            wordCount: toFiniteNumber(normalizedData?.deepgram_word_count, transcript.word_segments.length),
+            utteranceCount: toFiniteNumber(normalizedData?.deepgram_utterance_count, 0),
+            utterancesRequested: options.segmentation !== false || Boolean(options.vad) || Boolean(options.diarization),
+            utteranceSplitSec: getDeepgramUtteranceSplitSec(),
+            requestTimeoutMs: cloudRequestTimeoutMs,
+            uploadLimitGb: 2,
+            maxProcessingTimeSec: String(resolvedProvider.effectiveModel || '').toLowerCase().includes('whisper') ? 1200 : 600,
           },
         }
         : {}),

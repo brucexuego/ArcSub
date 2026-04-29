@@ -23,5 +23,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist", "node_modules", "runtime"]
+  "exclude": ["dist", "build", "node_modules", "runtime"]
 }

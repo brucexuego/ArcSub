@@ -2130,6 +2130,8 @@ function getDefaultProviderModelId(modelType: 'asr' | 'translate', url?: string)
   if (normalizedUrl.includes('generativelanguage.googleapis.com') || normalizedUrl.includes(':generatecontent')) return 'gemini-2.5-flash';
   if (normalizedUrl.includes('speech.googleapis.com') || normalizedUrl.includes('/recognizers/')) return 'chirp_3';
   if (normalizedUrl.includes('elevenlabs.io') || normalizedUrl.includes('/speech-to-text')) return 'scribe_v2';
+  if (normalizedUrl.includes('deepgram.com') || normalizedUrl.includes('/listen')) return 'nova-3';
+  if (normalizedUrl.includes('gladia.io') || normalizedUrl.includes('/v2/pre-recorded') || normalizedUrl.includes('/v2/upload')) return 'gladia-v2';
   return 'whisper-1';
 }
 
@@ -2383,7 +2385,7 @@ const ModelItem: React.FC<{
         <h4 className="text-sm font-bold text-secondary">{isNew ? t('settings.addModel') : t('settings.editModel')}</h4>
       </div>
       
-      <div className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2">
         <div className="space-y-2">
           <label className="text-[10px] font-bold text-primary uppercase tracking-widest">{t('settings.modelName')} <span className="text-error">*</span></label>
           <input 
@@ -2401,6 +2403,16 @@ const ModelItem: React.FC<{
           {errors.name && <p className="text-[10px] text-error font-bold mt-1">{errors.name}</p>}
         </div>
         <div className="space-y-2">
+          <label className="text-[10px] font-bold text-primary uppercase tracking-widest">{t('settings.modelId')}</label>
+          <input
+            type="text"
+            value={editedModel.model || ''}
+            onChange={e => setEditedModel({...editedModel, model: e.target.value})}
+            placeholder={modelType === 'asr' ? 'whisper-1 / scribe_v2 / nova-3 / gladia-v2' : 'gpt-4o-mini'}
+            className="w-full bg-surface-container-lowest border border-white/10 rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30"
+          />
+        </div>
+        <div className="space-y-2 md:col-span-2">
           <label className="text-[10px] font-bold text-primary uppercase tracking-widest">{t('settings.apiUrl')} <span className="text-error">*</span></label>
           <input 
             type="text" 
@@ -2409,14 +2421,14 @@ const ModelItem: React.FC<{
               setEditedModel({...editedModel, url: e.target.value});
               if (errors.url) setErrors({...errors, url: undefined});
             }}
-            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions, https://api.elevenlabs.io/v1/speech-to-text, https://models.github.ai/inference/chat/completions, https://generativelanguage.googleapis.com, or https://us-speech.googleapis.com/v2/projects/PROJECT/locations/us/recognizers/_:recognize' : 'https://api.openai.com/v1/chat/completions'}
+            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions, https://api.elevenlabs.io/v1/speech-to-text, https://api.deepgram.com/v1/listen, https://api.gladia.io/v2/pre-recorded, https://models.github.ai/inference/chat/completions, https://generativelanguage.googleapis.com, or https://us-speech.googleapis.com/v2/projects/PROJECT/locations/us/recognizers/_:recognize' : 'https://api.openai.com/v1/chat/completions'}
             className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
               errors.url ? 'border-error/50' : 'border-white/10'
             }`}
           />
           {errors.url && <p className="text-[10px] text-error font-bold mt-1">{errors.url}</p>}
         </div>
-        <div className="space-y-2">
+        <div className="space-y-2 md:col-span-2">
           <label className="text-[10px] font-bold text-primary uppercase tracking-widest">{t('settings.apiKey')}</label>
           <input 
             type="password" 
@@ -2432,19 +2444,8 @@ const ModelItem: React.FC<{
           />
           {errors.key && <p className="text-[10px] text-error font-bold mt-1">{errors.key}</p>}
         </div>
-        <div className="space-y-2">
-          <label className="text-[10px] font-bold text-primary uppercase tracking-widest">{t('settings.modelId')}</label>
-          <input 
-            type="text" 
-            value={editedModel.model || ''} 
-            onChange={e => setEditedModel({...editedModel, model: e.target.value})}
-            placeholder={modelType === 'asr' ? 'whisper-1 / scribe_v2 / microsoft/Phi-4-multimodal-instruct / gemini-2.5-flash / chirp_3' : 'gpt-4o-mini'}
-            className="w-full bg-surface-container-lowest border border-white/10 rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30"
-          />
-          <p className="text-[10px] text-outline/50 mt-1">{t('settings.modelIdHint')}</p>
-        </div>
         {modelType === 'translate' && (
-          <div className="space-y-2 md:col-span-2 xl:col-span-4">
+          <div className="space-y-2 md:col-span-2">
             <label className="text-[10px] font-bold text-primary uppercase tracking-widest">
               {t('settings.advancedOptionsJsonTitle')}
             </label>
