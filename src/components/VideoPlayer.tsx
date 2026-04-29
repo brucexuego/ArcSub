@@ -697,7 +697,7 @@ function hasRequiredPlaybackMetadata(metadata: any, expectedUrl: string) {
     return false;
   }
 
-  const formats = Array.isArray(metadata?.formats) ? metadata.formats : [];
+  const formats: any[] = Array.isArray(metadata?.formats) ? metadata.formats : [];
   const hasPlayableFormats = formats.some((format) => isDirectPlayableFormat(format));
   return hasPlayableFormats;
 }
@@ -1470,7 +1470,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     });
 
     // Handle source switching back to React state
-    art.on('video:url', (url: string) => {
+    art.on('video:url' as any, (...args: unknown[]) => {
+      const url = typeof args[0] === 'string' ? args[0] : String(args[0] ?? '');
       const opt = videoSourceOptionsRef.current.find((o) => o.src === url);
       if (opt && opt.id !== selectedVideoSourceIdRef.current) {
         setSelectedVideoSourceId(opt.id);
