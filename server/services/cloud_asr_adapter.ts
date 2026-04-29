@@ -2052,11 +2052,20 @@ function getGladiaPollIntervalMs() {
   return Math.round(getEnvNumber('ASR_GLADIA_POLL_INTERVAL_MS', 2000, 500, 60000));
 }
 
-function buildGladiaUploadUrl(endpointUrl: string) {
+function buildGladiaEndpointPath(endpointUrl: string, targetPath: string) {
   const next = new URL(endpointUrl);
-  next.pathname = '/v2/upload';
+  const normalized = next.pathname.replace(/\/+$/, '');
+  const suffixes = ['/v2/pre-recorded', '/v2/upload', '/v2'];
+  const prefix = suffixes.reduce((current, suffix) => (
+    current.endsWith(suffix) ? current.slice(0, -suffix.length) : current
+  ), normalized);
+  next.pathname = `${prefix}${targetPath}`.replace(/\/{2,}/g, '/');
   next.search = '';
   return next.toString();
+}
+
+function buildGladiaUploadUrl(endpointUrl: string) {
+  return buildGladiaEndpointPath(endpointUrl, '/v2/upload');
 }
 
 function buildGladiaPollUrl(endpointUrl: string, job: any) {
@@ -2064,10 +2073,7 @@ function buildGladiaPollUrl(endpointUrl: string, job: any) {
   if (resultUrl) return resultUrl;
   const id = firstString([job?.id, job?.transcription_id]);
   if (!id) throw new Error('Gladia transcription job response did not include an id or result_url.');
-  const next = new URL(endpointUrl);
-  next.pathname = `/v2/pre-recorded/${encodeURIComponent(id)}`;
-  next.search = '';
-  return next.toString();
+  return buildGladiaEndpointPath(endpointUrl, `/v2/pre-recorded/${encodeURIComponent(id)}`);
 }
 
 function buildGladiaLanguageConfig(language: string) {

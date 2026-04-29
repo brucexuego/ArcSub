@@ -954,6 +954,16 @@ export class AsrService {
     return this.isCloudAsrFileLimitError(error);
   }
 
+  private static isCloudAsrChunkRetryError(error: unknown, chunkingPolicy: AsrCloudChunkingPolicy): boolean {
+    if (chunkingPolicy.reason === 'deepgram_upload_or_processing_limit') {
+      return this.isDeepgramChunkableError(error);
+    }
+    if (chunkingPolicy.reason === 'gladia_upload_or_duration_limit') {
+      return this.isGladiaChunkableError(error);
+    }
+    return this.isCloudAsrFileLimitError(error);
+  }
+
   private static async shouldChunkGladiaPreRecorded(filePath: string) {
     const maxSizeBytes = 1000 * 1024 * 1024;
     const proactiveSizeBytes = Math.floor(maxSizeBytes * 0.95);
@@ -1094,7 +1104,7 @@ export class AsrService {
           mergedTranscript.segments.push(...bounded.segments);
           mergedTranscript.word_segments.push(...bounded.word_segments);
         } catch (chunkErr) {
-          if (this.isCloudAsrFileLimitError(chunkErr) && chunkSec > minChunkSec) {
+          if (this.isCloudAsrChunkRetryError(chunkErr, chunkingPolicy) && chunkSec > minChunkSec) {
             shouldRetryWithSmallerChunks = true;
             break;
           }
@@ -1118,7 +1128,7 @@ export class AsrService {
           throw new Error(`Cloud ASR still rejects chunked upload at minimum chunk size (${chunkSec}s).`);
         }
         chunkSec = nextChunkSec;
-        onProgress(`Chunk uploads still exceed provider limit, reducing chunk size to ${chunkSec}s and retrying...`);
+        onProgress(`Chunk upload still exceeded provider limits or timed out, reducing chunk size to ${chunkSec}s and retrying...`);
         continue;
       }
 
