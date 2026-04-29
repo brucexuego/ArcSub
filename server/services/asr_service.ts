@@ -579,6 +579,32 @@ export class AsrService {
     };
   }
 
+  private static getDeepgramCloudChunkingPolicy(): AsrCloudChunkingPolicy {
+    const initialChunkSec = Math.round(this.getEnvNumber('ASR_DEEPGRAM_FILE_LIMIT_CHUNK_SEC', 480, 30, 1800));
+    const minChunkSec = Math.round(this.getEnvNumber('ASR_DEEPGRAM_FILE_LIMIT_MIN_CHUNK_SEC', 60, 10, 600));
+    return {
+      initialChunkSec,
+      minChunkSec: Math.min(initialChunkSec, minChunkSec),
+      maxChunks: Math.round(this.getEnvNumber('ASR_DEEPGRAM_FILE_LIMIT_MAX_CHUNKS', 200, 1, 2000)),
+      audioFormat: 'mp3',
+      audioBitrate: this.sanitizeAudioBitrate(this.getEnvTrimmedString('ASR_DEEPGRAM_AUDIO_BITRATE', '32k'), '32k'),
+      reason: 'deepgram_upload_or_processing_limit',
+    };
+  }
+
+  private static getGladiaCloudChunkingPolicy(): AsrCloudChunkingPolicy {
+    const initialChunkSec = Math.round(this.getEnvNumber('ASR_GLADIA_FILE_LIMIT_CHUNK_SEC', 3600, 600, 8100));
+    const minChunkSec = Math.round(this.getEnvNumber('ASR_GLADIA_FILE_LIMIT_MIN_CHUNK_SEC', 600, 60, 1800));
+    return {
+      initialChunkSec,
+      minChunkSec: Math.min(initialChunkSec, minChunkSec),
+      maxChunks: Math.round(this.getEnvNumber('ASR_GLADIA_FILE_LIMIT_MAX_CHUNKS', 200, 1, 2000)),
+      audioFormat: 'mp3',
+      audioBitrate: this.sanitizeAudioBitrate(this.getEnvTrimmedString('ASR_GLADIA_AUDIO_BITRATE', '32k'), '32k'),
+      reason: 'gladia_upload_or_duration_limit',
+    };
+  }
+
   private static buildVadWindows(
     segments: Array<{ start: number; end: number }>,
     options: { overflowMode?: 'collapse' | 'rebalance' } = {}
@@ -821,6 +847,17 @@ export class AsrService {
     }
   }
 
+  private static async assertDeepgramSpeechToTextLimits(filePath: string) {
+    const maxFileBytes = 2 * 1024 * 1024 * 1024;
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat?.isFile() && stat.size >= maxFileBytes) {
+      const sizeGb = stat.size / (1024 * 1024 * 1024);
+      throw new Error(
+        `Deepgram pre-recorded Speech to Text accepts files under 2GB. Current file is ${sizeGb.toFixed(2)}GB; please split or compress it before using Deepgram ASR.`
+      );
+    }
+  }
+
   private static hasUsableChunkTimestamps(chunks: unknown[]): boolean {
     if (!Array.isArray(chunks) || chunks.length === 0) return false;
 
@@ -905,6 +942,53 @@ export class AsrService {
     return fileLimitHint.test(message) && /cloud asr error/i.test(message);
   }
 
+  private static isDeepgramChunkableError(error: unknown): boolean {
+    const status = this.parseCloudAsrStatus(error);
+    if (status === 413 || status === 504) return true;
+    return this.isCloudAsrFileLimitError(error);
+  }
+
+  private static isGladiaChunkableError(error: unknown): boolean {
+    const status = this.parseCloudAsrStatus(error);
+    if (status === 408 || status === 413 || status === 504) return true;
+    return this.isCloudAsrFileLimitError(error);
+  }
+
+  private static isCloudAsrChunkRetryError(error: unknown, chunkingPolicy: AsrCloudChunkingPolicy): boolean {
+    if (chunkingPolicy.reason === 'deepgram_upload_or_processing_limit') {
+      return this.isDeepgramChunkableError(error);
+    }
+    if (chunkingPolicy.reason === 'gladia_upload_or_duration_limit') {
+      return this.isGladiaChunkableError(error);
+    }
+    return this.isCloudAsrFileLimitError(error);
+  }
+
+  private static async shouldChunkGladiaPreRecorded(filePath: string) {
+    const maxSizeBytes = 1000 * 1024 * 1024;
+    const proactiveSizeBytes = Math.floor(maxSizeBytes * 0.95);
+    const maxDurationSec = 135 * 60;
+    const proactiveDurationSec = 130 * 60;
+    const stat = await fs.stat(filePath).catch(() => null);
+    if (stat?.isFile() && stat.size >= proactiveSizeBytes) {
+      return {
+        shouldChunk: true,
+        reason: `file_size_${(stat.size / (1024 * 1024)).toFixed(1)}mb`,
+      };
+    }
+    const durationSec = await this.getAudioDurationSeconds(filePath).catch(() => null);
+    if (Number.isFinite(durationSec || Number.NaN) && Number(durationSec) >= proactiveDurationSec) {
+      return {
+        shouldChunk: true,
+        reason: `duration_${(Number(durationSec) / 60).toFixed(1)}min`,
+      };
+    }
+    return {
+      shouldChunk: false,
+      reason: `limits_${Math.round(maxSizeBytes / (1024 * 1024))}mb_${Math.round(maxDurationSec / 60)}min`,
+    };
+  }
+
   private static isEmptyAudioWindowError(error: unknown) {
     const message = error instanceof Error ? error.message : String(error || '');
     return /Audio window is empty/i.test(message);
@@ -943,6 +1027,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      diarizationOptions?: DiarizationOptions | null;
       audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
@@ -1019,7 +1104,7 @@ export class AsrService {
           mergedTranscript.segments.push(...bounded.segments);
           mergedTranscript.word_segments.push(...bounded.word_segments);
         } catch (chunkErr) {
-          if (this.isCloudAsrFileLimitError(chunkErr) && chunkSec > minChunkSec) {
+          if (this.isCloudAsrChunkRetryError(chunkErr, chunkingPolicy) && chunkSec > minChunkSec) {
             shouldRetryWithSmallerChunks = true;
             break;
           }
@@ -1043,7 +1128,7 @@ export class AsrService {
           throw new Error(`Cloud ASR still rejects chunked upload at minimum chunk size (${chunkSec}s).`);
         }
         chunkSec = nextChunkSec;
-        onProgress(`Chunk uploads still exceed provider limit, reducing chunk size to ${chunkSec}s and retrying...`);
+        onProgress(`Chunk upload still exceeded provider limits or timed out, reducing chunk size to ${chunkSec}s and retrying...`);
         continue;
       }
 
@@ -1080,6 +1165,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      diarizationOptions?: DiarizationOptions | null;
       audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
@@ -1096,10 +1182,23 @@ export class AsrService {
       resolvedProvider.provider === 'github-models-phi4-multimodal'
         ? this.getPhi4CloudChunkingPolicy()
         : null;
+    const deepgramChunkingPolicy =
+      resolvedProvider.provider === 'deepgram-listen'
+        ? this.getDeepgramCloudChunkingPolicy()
+        : null;
+    const gladiaChunkingPolicy =
+      resolvedProvider.provider === 'gladia-pre-recorded'
+        ? this.getGladiaCloudChunkingPolicy()
+        : null;
     const isElevenLabsScribe = resolvedProvider.provider === 'elevenlabs-scribe';
+    const isDeepgramListen = resolvedProvider.provider === 'deepgram-listen';
+    const isGladiaPreRecorded = resolvedProvider.provider === 'gladia-pre-recorded';
 
     if (isElevenLabsScribe) {
       await this.assertElevenLabsSpeechToTextLimits(filePath);
+    }
+    if (isDeepgramListen) {
+      await this.assertDeepgramSpeechToTextLimits(filePath);
     }
 
     if (phi4ChunkingPolicy) {
@@ -1113,7 +1212,21 @@ export class AsrService {
       return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy);
     }
 
-    if (!isElevenLabsScribe) {
+    if (isGladiaPreRecorded && gladiaChunkingPolicy) {
+      const preflight = await this.shouldChunkGladiaPreRecorded(filePath);
+      if (preflight.shouldChunk) {
+        const proactiveChunkSec = Math.max(
+          gladiaChunkingPolicy.minChunkSec || 600,
+          gladiaChunkingPolicy.initialChunkSec || 3600
+        );
+        onProgress(
+          `Gladia ASR input is near provider limits (${preflight.reason}); using ${Math.round(proactiveChunkSec / 60)} minute MP3 chunks...`
+        );
+        return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, gladiaChunkingPolicy);
+      }
+    }
+
+    if (!isElevenLabsScribe && !isDeepgramListen && !isGladiaPreRecorded) {
       try {
         const stat = await fs.stat(filePath);
         const preemptiveThresholdBytes = this.getCloudAsrPreemptiveChunkThresholdBytes();
@@ -1131,11 +1244,17 @@ export class AsrService {
     try {
       return await this.transcribeCloud(filePath, config, options, signal);
     } catch (err) {
-      if (!this.isCloudAsrFileLimitError(err)) {
+      const shouldChunk =
+        gladiaChunkingPolicy
+          ? this.isGladiaChunkableError(err)
+          : deepgramChunkingPolicy
+          ? this.isDeepgramChunkableError(err)
+          : this.isCloudAsrFileLimitError(err);
+      if (!shouldChunk) {
         throw err;
       }
       onProgress('Provider rejected audio size/duration limit, retrying with chunked upload...');
-      return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy || {});
+      return this.transcribeCloudChunked(filePath, config, options, onProgress, signal, phi4ChunkingPolicy || deepgramChunkingPolicy || gladiaChunkingPolicy || {});
     }
   }
 
@@ -1154,6 +1273,7 @@ export class AsrService {
         wordAlignment?: boolean;
         vad?: boolean;
         diarization?: boolean;
+        diarizationOptions?: DiarizationOptions | null;
         audioDurationSec?: number | null;
         decodePolicy?: AsrDecodePolicy;
       };
@@ -1291,7 +1411,10 @@ export class AsrService {
       : null;
     const isGeminiCloudAsr = resolvedCloudProvider?.provider === 'google-gemini-audio';
     const isElevenLabsCloudAsr = resolvedCloudProvider?.provider === 'elevenlabs-scribe';
-    const effectiveVad = isElevenLabsCloudAsr
+    const isDeepgramCloudAsr = resolvedCloudProvider?.provider === 'deepgram-listen';
+    const isGladiaCloudAsr = resolvedCloudProvider?.provider === 'gladia-pre-recorded';
+    const usesCloudNativeAdvancedAsr = isElevenLabsCloudAsr || isDeepgramCloudAsr || isGladiaCloudAsr;
+    const effectiveVad = usesCloudNativeAdvancedAsr
       ? false
       : Boolean(vad) || Boolean(diarization);
     const geminiVadTimestampingRequested = Boolean(isGeminiCloudAsr && effectiveSegmentation);
@@ -1406,6 +1529,7 @@ export class AsrService {
                         wordAlignment: effectiveWordAlignment,
                         vad: effectiveVad,
                         diarization,
+                        diarizationOptions,
                         decodePolicy,
                       },
                       onProgress,
@@ -1500,6 +1624,7 @@ export class AsrService {
                             wordAlignment: effectiveWordAlignment,
                             vad: effectiveVad,
                             diarization,
+                            diarizationOptions,
                             audioDurationSec: task.durationSec,
                             decodePolicy,
                           },
@@ -1613,6 +1738,7 @@ export class AsrService {
           wordAlignment: effectiveWordAlignment,
           vad: effectiveVad,
           diarization,
+          diarizationOptions,
           decodePolicy,
         },
         onProgress,
@@ -1635,18 +1761,59 @@ export class AsrService {
         ...windowScheduleStats,
       },
     };
-    if (isElevenLabsCloudAsr) {
+    if (usesCloudNativeAdvancedAsr) {
+      const nativeProviderLabel = isGladiaCloudAsr ? 'gladia' : isDeepgramCloudAsr ? 'deepgram' : 'elevenlabs';
       providerMeta = {
         ...providerMeta,
-        elevenLabsNativeAdvancedFeatures: {
+        cloudNativeAdvancedFeatures: {
           enabled: true,
+          provider: nativeProviderLabel,
           vadRequested: Boolean(vad),
           localVadBypassed: Boolean(vad) || Boolean(diarization),
           wordAlignmentRequested: effectiveWordAlignment,
-          localForcedAlignmentBypassed: effectiveWordAlignment && Boolean(providerMeta?.nativeWordTimestamps),
+          localForcedAlignmentBypassed: effectiveWordAlignment,
           diarizationRequested: Boolean(diarization),
           localDiarizationBypassed: Boolean(diarization),
         },
+        ...(isElevenLabsCloudAsr
+          ? {
+              elevenLabsNativeAdvancedFeatures: {
+                enabled: true,
+                vadRequested: Boolean(vad),
+                localVadBypassed: Boolean(vad) || Boolean(diarization),
+                wordAlignmentRequested: effectiveWordAlignment,
+                localForcedAlignmentBypassed: effectiveWordAlignment,
+                diarizationRequested: Boolean(diarization),
+                localDiarizationBypassed: Boolean(diarization),
+              },
+            }
+          : {}),
+        ...(isDeepgramCloudAsr
+          ? {
+              deepgramNativeAdvancedFeatures: {
+                enabled: true,
+                vadRequested: Boolean(vad),
+                localVadBypassed: Boolean(vad) || Boolean(diarization),
+                wordAlignmentRequested: effectiveWordAlignment,
+                localForcedAlignmentBypassed: effectiveWordAlignment,
+                diarizationRequested: Boolean(diarization),
+                localDiarizationBypassed: Boolean(diarization),
+              },
+            }
+          : {}),
+        ...(isGladiaCloudAsr
+          ? {
+              gladiaNativeAdvancedFeatures: {
+                enabled: true,
+                vadRequested: Boolean(vad),
+                localVadBypassed: Boolean(vad) || Boolean(diarization),
+                wordAlignmentRequested: effectiveWordAlignment,
+                localForcedAlignmentBypassed: effectiveWordAlignment,
+                diarizationRequested: Boolean(diarization),
+                localDiarizationBypassed: Boolean(diarization),
+              },
+            }
+          : {}),
       };
     }
     const geminiVadTimestampingApplied = Boolean(
@@ -1713,19 +1880,42 @@ export class AsrService {
       ? AlignmentService.resolveForcedAlignmentLanguage(language, alignmentSampleText)
       : null;
     const hasProviderNativeAlignment = Boolean(providerMeta?.forcedAlignment);
-    const useElevenLabsNativeWordAlignment = Boolean(
+    const nativeWordAlignmentProvider = providerMeta?.isElevenLabsScribe
+      ? 'elevenlabs'
+      : providerMeta?.isDeepgramListen
+        ? 'deepgram'
+        : providerMeta?.isGladiaPreRecorded
+          ? 'gladia'
+        : '';
+    const nativeWordAlignmentDisplay =
+      nativeWordAlignmentProvider === 'gladia'
+        ? 'Gladia'
+        : nativeWordAlignmentProvider === 'deepgram'
+          ? 'Deepgram'
+          : 'ElevenLabs';
+    const nativeWordAlignmentProfile =
+      nativeWordAlignmentProvider === 'gladia'
+        ? 'gladia-pre-recorded-native'
+        : nativeWordAlignmentProvider === 'deepgram'
+          ? 'deepgram-listen-native'
+          : 'elevenlabs-scribe-native';
+    const useProviderNativeWordAlignment = Boolean(
       effectiveWordAlignment &&
-      providerMeta?.isElevenLabsScribe &&
+      nativeWordAlignmentProvider &&
       providerMeta?.nativeWordTimestamps &&
       Array.isArray(result.word_segments) &&
       result.word_segments.length > 0
     );
-    if (useElevenLabsNativeWordAlignment) {
+    const shouldBypassLocalWordAlignmentForNativeProvider = Boolean(
+      effectiveWordAlignment &&
+      nativeWordAlignmentProvider
+    );
+    if (useProviderNativeWordAlignment) {
       alignmentDiagnostics = {
         applied: true,
-        profileId: 'elevenlabs-scribe-native',
+        profileId: nativeWordAlignmentProfile,
         backend: 'native',
-        modelId: String(providerMeta?.effectiveModel || 'scribe'),
+        modelId: String(providerMeta?.effectiveModel || nativeWordAlignmentProvider),
         language: String(providerMeta?.detectedLanguage || language || '').trim() || null,
         attemptedSegmentCount: Array.isArray(result.segments) ? result.segments.length : 0,
         alignedSegmentCount: Array.isArray(result.segments) ? result.segments.length : 0,
@@ -1734,9 +1924,28 @@ export class AsrService {
         alignedWordCount: result.word_segments.length,
         avgConfidence: null,
         elapsedMs: 0,
-        providerNativeProvider: 'elevenlabs',
+        providerNativeProvider: nativeWordAlignmentProvider,
       };
-      onProgress('Using ElevenLabs provider-native word timestamps.');
+      onProgress(`Using ${nativeWordAlignmentDisplay} provider-native word timestamps.`);
+    } else if (shouldBypassLocalWordAlignmentForNativeProvider) {
+      alignmentDiagnostics = {
+        applied: false,
+        profileId: nativeWordAlignmentProfile,
+        backend: 'native',
+        modelId: String(providerMeta?.effectiveModel || nativeWordAlignmentProvider),
+        language: String(providerMeta?.detectedLanguage || language || '').trim() || null,
+        attemptedSegmentCount: Array.isArray(result.segments) ? result.segments.length : 0,
+        alignedSegmentCount: 0,
+        skippedSegments: Array.isArray(result.segments) ? result.segments.length : 0,
+        failureCount: 0,
+        alignedWordCount: 0,
+        avgConfidence: null,
+        elapsedMs: 0,
+        providerNativeProvider: nativeWordAlignmentProvider,
+        reason: providerMeta?.nativeWordTimestamps ? 'empty_provider_word_segments' : 'provider_word_timestamps_unavailable',
+        localForcedAlignmentBypassed: true,
+      };
+      onProgress(`${nativeWordAlignmentDisplay} did not return usable provider-native word timestamps; local forced alignment is skipped for this provider.`);
     } else if (effectiveWordAlignment && !resolvedAlignmentLanguage && !hasProviderNativeAlignment) {
       alignmentDiagnostics = {
         applied: false,
@@ -1829,20 +2038,38 @@ export class AsrService {
     }
 
     let diarizationDiagnostics: any = null;
-    const useElevenLabsNativeDiarization = Boolean(
+    const nativeDiarizationProvider = providerMeta?.isElevenLabsScribe
+      ? 'elevenlabs'
+      : providerMeta?.isDeepgramListen
+        ? 'deepgram'
+        : providerMeta?.isGladiaPreRecorded
+          ? 'gladia'
+        : '';
+    const nativeDiarizationDisplay =
+      nativeDiarizationProvider === 'gladia'
+        ? 'Gladia'
+        : nativeDiarizationProvider === 'deepgram'
+          ? 'Deepgram'
+          : 'ElevenLabs';
+    const useProviderNativeDiarization = Boolean(
       diarization &&
-      providerMeta?.isElevenLabsScribe
+      nativeDiarizationProvider
     );
-    if (useElevenLabsNativeDiarization) {
+    if (useProviderNativeDiarization) {
       if (providerMeta?.providerNativeDiarization && this.hasProviderSpeakerTags(result)) {
         this.applyProviderNativeSpeakerAssignments(result);
         diarizationApplied = true;
       }
-      diarizationDiagnostics = this.buildProviderNativeDiarizationDiagnostics(result, speechSegments, vadWindows);
+      diarizationDiagnostics = this.buildProviderNativeDiarizationDiagnostics(
+        result,
+        speechSegments,
+        vadWindows,
+        nativeDiarizationProvider
+      );
       onProgress(
         diarizationApplied
-          ? 'Using ElevenLabs provider-native speaker labels.'
-          : 'ElevenLabs did not return speaker labels; local diarization fallback is skipped for this provider.'
+          ? `Using ${nativeDiarizationDisplay} provider-native speaker labels.`
+          : `${nativeDiarizationDisplay} did not return speaker labels; local diarization fallback is skipped for this provider.`
       );
     } else if (diarization && Array.isArray(result.chunks) && result.chunks.length > 0) {
       this.throwIfAborted(signal);
@@ -1958,6 +2185,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      diarizationOptions?: DiarizationOptions | null;
       audioDurationSec?: number | null;
       decodePolicy?: AsrDecodePolicy;
     },
@@ -1970,7 +2198,12 @@ export class AsrService {
     });
     const cloudOptions = { ...options };
     if (
-      (resolvedProvider.provider === 'google-gemini-audio' || resolvedProvider.provider === 'elevenlabs-scribe') &&
+      (
+        resolvedProvider.provider === 'google-gemini-audio' ||
+        resolvedProvider.provider === 'elevenlabs-scribe' ||
+        resolvedProvider.provider === 'deepgram-listen' ||
+        resolvedProvider.provider === 'gladia-pre-recorded'
+      ) &&
       !(Number.isFinite(Number(cloudOptions.audioDurationSec)) && Number(cloudOptions.audioDurationSec) > 0)
     ) {
       const audioDurationSec = await this.getAudioDurationSeconds(filePath).catch(() => null);
@@ -2006,6 +2239,8 @@ export class AsrService {
         ...result.meta,
         isWhisperCppInference: resolvedProvider.provider === 'whispercpp-inference',
         isElevenLabsScribe: resolvedProvider.provider === 'elevenlabs-scribe',
+        isDeepgramListen: resolvedProvider.provider === 'deepgram-listen',
+        isGladiaPreRecorded: resolvedProvider.provider === 'gladia-pre-recorded',
         isGithubModelsPhi4Multimodal: resolvedProvider.provider === 'github-models-phi4-multimodal',
         isGoogleCloudChirp3: resolvedProvider.provider === 'google-cloud-chirp3',
         isGoogleGeminiAudio: resolvedProvider.provider === 'google-gemini-audio',
@@ -2023,6 +2258,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      diarizationOptions?: DiarizationOptions | null;
       decodePolicy?: AsrDecodePolicy;
     },
     signal?: AbortSignal
@@ -2087,6 +2323,7 @@ export class AsrService {
       wordAlignment?: boolean;
       vad?: boolean;
       diarization?: boolean;
+      diarizationOptions?: DiarizationOptions | null;
       decodePolicy?: AsrDecodePolicy;
     },
     onProgress: (msg: string) => void,
@@ -2146,10 +2383,15 @@ export class AsrService {
     const isGithubModelsProvider = resolvedProvider.provider === 'github-models-phi4-multimodal';
     const isGoogleCloudChirp3Provider = resolvedProvider.provider === 'google-cloud-chirp3';
     const isGoogleGeminiAudioProvider = resolvedProvider.provider === 'google-gemini-audio';
-    const testHeaders = (isGithubModelsProvider || isGoogleCloudChirp3Provider || isGoogleGeminiAudioProvider)
+    const isDeepgramProvider = resolvedProvider.provider === 'deepgram-listen';
+    const isGladiaProvider = resolvedProvider.provider === 'gladia-pre-recorded';
+    const testHeaders = (isGithubModelsProvider || isGoogleCloudChirp3Provider || isGoogleGeminiAudioProvider || isGladiaProvider)
       ? { ...headers, 'Content-Type': 'application/json' }
+      : isDeepgramProvider
+        ? { ...headers, 'Content-Type': 'audio/wav', Accept: 'application/json' }
       : headers;
-    let testBody: string | undefined;
+    let testUrl = resolvedProvider.endpointUrl;
+    let testBody: BodyInit | undefined;
     if (isGithubModelsProvider) {
       testBody = JSON.stringify({
           model: resolvedProvider.effectiveModel,
@@ -2185,11 +2427,19 @@ export class AsrService {
           maxOutputTokens: 8,
         },
       });
+    } else if (isDeepgramProvider) {
+      const nextUrl = new URL(resolvedProvider.endpointUrl);
+      nextUrl.searchParams.set('model', resolvedProvider.effectiveModel);
+      nextUrl.searchParams.set('smart_format', 'true');
+      testUrl = nextUrl.toString();
+      testBody = new Blob([new Uint8Array(0)], { type: 'audio/wav' });
+    } else if (isGladiaProvider) {
+      testBody = JSON.stringify({});
     }
 
     const request = this.createAbortSignalWithTimeout(8000);
     try {
-      const response = await fetch(resolvedProvider.endpointUrl, {
+      const response = await fetch(testUrl, {
         method: 'POST',
         headers: testHeaders,
         body: testBody,
@@ -2207,10 +2457,16 @@ export class AsrService {
       const isGithubModelsEndpoint = resolvedProvider.provider === 'github-models-phi4-multimodal' || pathLower.includes('/inference/chat/completions');
       const isGoogleCloudChirp3Endpoint = resolvedProvider.provider === 'google-cloud-chirp3' || pathLower.includes('/recognizers/');
       const isGoogleGeminiAudioEndpoint = resolvedProvider.provider === 'google-gemini-audio' || pathLower.includes(':generatecontent');
+      const isDeepgramEndpoint = resolvedProvider.provider === 'deepgram-listen' || pathLower.includes('/listen');
+      const isGladiaEndpoint = resolvedProvider.provider === 'gladia-pre-recorded' || pathLower.includes('/v2/pre-recorded');
       const authFailed = hasAuthFailureHint(detail);
       const payloadValidationFailed = hasPayloadValidationHint(detail);
       const googlePayloadValidationFailed =
         payloadValidationFailed || /audio|content|recognize|recognition|config/i.test(detail || '');
+      const deepgramPayloadValidationFailed =
+        payloadValidationFailed || /audio|media|source|decode|encoding|listen/i.test(detail || '');
+      const gladiaPayloadValidationFailed =
+        payloadValidationFailed || /audio_url|audio|url|required|invalid|missing/i.test(detail || '');
 
       if (response.status >= 200 && response.status < 300) {
         return { success: true, message: 'Connection succeeded.' };
@@ -2307,6 +2563,28 @@ export class AsrService {
       if (
         isGoogleGeminiAudioEndpoint &&
         payloadValidationFailed &&
+        (response.status === 400 || response.status === 415 || response.status === 422)
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isDeepgramEndpoint &&
+        deepgramPayloadValidationFailed &&
+        (response.status === 400 || response.status === 415 || response.status === 422)
+      ) {
+        return {
+          success: true,
+          message: 'Endpoint reachable. Request payload validation failed as expected.',
+        };
+      }
+
+      if (
+        isGladiaEndpoint &&
+        gladiaPayloadValidationFailed &&
         (response.status === 400 || response.status === 415 || response.status === 422)
       ) {
         return {
@@ -2799,6 +3077,7 @@ export class AsrService {
           this.toFiniteNumber(slice[0]?.start_ts, this.toFiniteNumber(segment?.start_ts, 0)),
           this.getWordEnd(slice[slice.length - 1])
         ),
+        speaker: this.getDominantSpeaker(slice) || segment.speaker,
         words: slice.map((word) => ({ ...word })),
       });
     };
@@ -2813,7 +3092,9 @@ export class AsrService {
       const nextDuration = this.getWordEnd(current) - this.toFiniteNumber(words[bufferStart]?.start_ts, 0);
       const endedSentence = /[。！？!?]$/.test(candidateText);
       const endedClause = /[、，；：]$/.test(candidateText);
+      const speakerChanged = Boolean(previous?.speaker && current?.speaker && previous.speaker !== current.speaker);
       const shouldBreak =
+        speakerChanged ||
         gap >= strongPauseSec ||
         (endedSentence && candidateChars >= minCharsForBreak) ||
         (endedClause && gap >= clausePauseSec && candidateChars >= minCharsForBreak) ||
@@ -3032,6 +3313,7 @@ export class AsrService {
       word_start_index: this.toFiniteNumber(first.token_index, 0),
       word_end_index: this.toFiniteNumber(last.token_index, 0),
       source_segment_indices: sourceSegmentIndices.length > 0 ? sourceSegmentIndices : undefined,
+      speaker: this.getDominantSpeaker(words),
     };
   }
 
@@ -3068,8 +3350,10 @@ export class AsrService {
       const crossedSegmentBoundary =
         this.toFiniteNumber(current?.source_segment_index, Number.NaN) !==
         this.toFiniteNumber(previous?.source_segment_index, Number.NaN);
+      const speakerChanged = Boolean(previous?.speaker && current?.speaker && previous.speaker !== current.speaker);
 
       const shouldBreak =
+        speakerChanged ||
         gap >= strongPauseSec ||
         (endedBracketed && gap >= 0.04) ||
         (endedSentence && candidateChars >= minCharsForBreak) ||
@@ -3156,6 +3440,11 @@ export class AsrService {
 
       const previous = merged[merged.length - 1];
       const gap = this.toFiniteNumber(current.start_ts, 0) - this.toFiniteNumber(previous.end_ts, previous.start_ts);
+      const speakerChanged = Boolean(previous?.speaker && current?.speaker && previous.speaker !== current.speaker);
+      if (speakerChanged) {
+        merged.push(current);
+        continue;
+      }
       if (noSpaces) {
         const previousText = this.normalizeDisplayText(previous.text || '', language).replace(/\s+/g, '');
         const currentText = this.normalizeDisplayText(current.text || '', language).replace(/\s+/g, '');
@@ -3283,6 +3572,7 @@ export class AsrService {
       word_start_index: firstWord?.token_index,
       word_end_index: lastWord?.token_index,
       source_segment_indices: sourceSegmentIndices.length > 0 ? sourceSegmentIndices : undefined,
+      speaker: this.getDominantSpeaker(segments) || this.getDominantSpeaker(segments.flatMap((segment) => segment.words || [])),
     };
   }
 
@@ -3374,8 +3664,10 @@ export class AsrService {
       const endedClause = /[,;:、，；：]$/.test(normalizedCandidateText);
       const endedBracketed = noSpaces && this.endsWithClosingBracketToken(normalizedCandidateText);
       const meaningfulCjkBoundary = noSpaces && previousChars >= 4 && currentChars >= 4;
+      const speakerChanged = Boolean(previous?.speaker && current?.speaker && previous.speaker !== current.speaker);
 
       const shouldBreak =
+        speakerChanged ||
         gap >= strongPauseSec ||
         endedBracketed ||
         (endedSentence && (candidateChars >= minCharsForBreak || noSpaces)) ||
@@ -3620,19 +3912,21 @@ export class AsrService {
 
       if (mappedSegments.length > 0) {
         let tokenIndex = 0;
-        const wordSegments = mappedSegments.flatMap((segment, segmentIndex) =>
-          (segment.words || []).map((word) => ({
+        const indexedSegments = mappedSegments.map((segment, segmentIndex) => {
+          const words = (segment.words || []).map((word) => ({
             ...word,
             source_segment_index: segmentIndex,
             token_index: tokenIndex++,
-          }))
-        );
-        const chunks = this.buildDisplayChunksFromSegments(mappedSegments, language);
+          }));
+          return words.length > 0 ? { ...segment, words } : segment;
+        });
+        const wordSegments = indexedSegments.flatMap((segment) => segment.words || []);
+        const chunks = this.buildDisplayChunksFromSegments(indexedSegments, language);
         const transcriptText = this.buildTranscriptTextFromChunks(chunks, language);
         return {
           text: transcriptText,
-          chunks: chunks.length > 0 ? chunks : this.buildChunksFromSegments(mappedSegments),
-          segments: mappedSegments,
+          chunks: chunks.length > 0 ? chunks : this.buildChunksFromSegments(indexedSegments),
+          segments: indexedSegments,
           word_segments: wordSegments,
           debug: (cjkMergeApplied || cjkWordDiagnostics.alignmentFirstMode)
             ? {
@@ -3815,16 +4109,17 @@ export class AsrService {
   private static buildProviderNativeDiarizationDiagnostics(
     result: AsrStructuredTranscript,
     speechSegments: Array<{ start: number; end: number }>,
-    vadWindows: Array<{ start: number; end: number }>
+    vadWindows: Array<{ start: number; end: number }>,
+    providerName = 'provider'
   ) {
     const speakers = this.collectTranscriptSpeakers(result);
     return {
-      provider: 'acoustic',
-      selectedSource: 'chunk',
+      provider: 'provider_native',
+      selectedSource: 'provider_native',
       speechSegmentCount: speechSegments.length,
       vadWindowCount: vadWindows.length,
       providerNative: true,
-      providerNativeProvider: 'elevenlabs',
+      providerNativeProvider: providerName,
       selectedPass: {
         source: 'provider_native',
         regionCount: Array.isArray(result.chunks) ? result.chunks.length : 0,

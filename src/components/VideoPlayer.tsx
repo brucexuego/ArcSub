@@ -18,6 +18,16 @@ interface SubtitleCue {
   text: string;
 }
 
+interface SubtitleVideoFrameLayout {
+  leftPct: number;
+  topPct: number;
+  widthPct: number;
+  heightPct: number;
+  pixelWidth: number;
+  pixelHeight: number;
+  scale: number;
+}
+
 interface VideoSourceOption {
   id: string;
   label: string;
@@ -37,9 +47,134 @@ const SUBTITLE_HEIGHT_MIN_PCT = 6;
 const SUBTITLE_HEIGHT_MAX_PCT = 36;
 const SUBTITLE_POSITION_MIN_PCT = 5;
 const SUBTITLE_POSITION_MAX_PCT = 95;
+const SUBTITLE_FALLBACK_REFERENCE_WIDTH = 1280;
+
+const DEFAULT_SUBTITLE_VIDEO_FRAME: SubtitleVideoFrameLayout = {
+  leftPct: 0,
+  topPct: 0,
+  widthPct: 100,
+  heightPct: 100,
+  pixelWidth: SUBTITLE_FALLBACK_REFERENCE_WIDTH,
+  pixelHeight: 720,
+  scale: 1,
+};
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function isSubtitleFullscreenLike(container: HTMLElement, artInstance?: any | null) {
+  const playerEl = (artInstance?.template?.$player || null) as HTMLElement | null;
+  const fullscreenElement = document.fullscreenElement;
+  return (
+    Boolean(artInstance?.fullscreen) ||
+    Boolean(artInstance?.fullscreenWeb) ||
+    Boolean(playerEl?.classList.contains('art-fullscreen-web')) ||
+    Boolean(playerEl?.classList.contains('art-fullscreen')) ||
+    container.classList.contains('art-fullscreen-web') ||
+    container.classList.contains('art-fullscreen') ||
+    Boolean(
+      fullscreenElement &&
+      (
+        fullscreenElement === container ||
+        fullscreenElement === playerEl ||
+        container.contains(fullscreenElement) ||
+        fullscreenElement.contains(container) ||
+        Boolean(playerEl && (playerEl.contains(fullscreenElement) || fullscreenElement.contains(playerEl)))
+      )
+    )
+  );
+}
+
+function computeVideoContentRect(videoEl: HTMLVideoElement | null) {
+  if (!videoEl) return null;
+  const rect = videoEl.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || rect.width <= 0 || !Number.isFinite(rect.height) || rect.height <= 0) {
+    return null;
+  }
+
+  const videoWidth = Number(videoEl.videoWidth || 0);
+  const videoHeight = Number(videoEl.videoHeight || 0);
+  if (!Number.isFinite(videoWidth) || videoWidth <= 0 || !Number.isFinite(videoHeight) || videoHeight <= 0) {
+    return rect;
+  }
+
+  const videoAspect = videoWidth / videoHeight;
+  const elementAspect = rect.width / rect.height;
+  if (!Number.isFinite(videoAspect) || videoAspect <= 0 || !Number.isFinite(elementAspect) || elementAspect <= 0) {
+    return rect;
+  }
+
+  if (elementAspect > videoAspect) {
+    const width = rect.height * videoAspect;
+    return {
+      left: rect.left + (rect.width - width) / 2,
+      top: rect.top,
+      width,
+      height: rect.height,
+      right: rect.left + (rect.width + width) / 2,
+      bottom: rect.bottom,
+    };
+  }
+
+  const height = rect.width / videoAspect;
+  return {
+    left: rect.left,
+    top: rect.top + (rect.height - height) / 2,
+    width: rect.width,
+    height,
+    right: rect.right,
+    bottom: rect.top + (rect.height + height) / 2,
+  };
+}
+
+function computeSubtitleVideoFrameLayout(
+  container: HTMLElement | null,
+  videoEl: HTMLVideoElement | null,
+  baseFrame: { width: number; height: number } | null
+): SubtitleVideoFrameLayout {
+  if (!container) return DEFAULT_SUBTITLE_VIDEO_FRAME;
+  const containerRect = container.getBoundingClientRect();
+  if (
+    !Number.isFinite(containerRect.width) ||
+    containerRect.width <= 0 ||
+    !Number.isFinite(containerRect.height) ||
+    containerRect.height <= 0
+  ) {
+    return DEFAULT_SUBTITLE_VIDEO_FRAME;
+  }
+
+  const contentRect = computeVideoContentRect(videoEl) || containerRect;
+  const left = clamp(contentRect.left - containerRect.left, 0, containerRect.width);
+  const top = clamp(contentRect.top - containerRect.top, 0, containerRect.height);
+  const width = clamp(contentRect.width, 1, containerRect.width);
+  const height = clamp(contentRect.height, 1, containerRect.height);
+  const referenceWidth =
+    baseFrame && Number.isFinite(baseFrame.width) && baseFrame.width > 0
+      ? baseFrame.width
+      : SUBTITLE_FALLBACK_REFERENCE_WIDTH;
+
+  return {
+    leftPct: (left / containerRect.width) * 100,
+    topPct: (top / containerRect.height) * 100,
+    widthPct: (width / containerRect.width) * 100,
+    heightPct: (height / containerRect.height) * 100,
+    pixelWidth: width,
+    pixelHeight: height,
+    scale: Math.max(1, width / referenceWidth),
+  };
+}
+
+function isSameSubtitleVideoFrame(a: SubtitleVideoFrameLayout, b: SubtitleVideoFrameLayout) {
+  return (
+    Math.abs(a.leftPct - b.leftPct) < 0.05 &&
+    Math.abs(a.topPct - b.topPct) < 0.05 &&
+    Math.abs(a.widthPct - b.widthPct) < 0.05 &&
+    Math.abs(a.heightPct - b.heightPct) < 0.05 &&
+    Math.abs(a.pixelWidth - b.pixelWidth) < 0.5 &&
+    Math.abs(a.pixelHeight - b.pixelHeight) < 0.5 &&
+    Math.abs(a.scale - b.scale) < 0.01
+  );
 }
 
 function formatVttTime(time: number) {
@@ -279,7 +414,9 @@ function parseBracketTimedText(raw: string) {
     if (!timeTag) return;
     const start = parseTimestamp(timeTag);
     if (start == null) return;
-    rows.push({ start, text: cleanSubtitleText(matched[2]) });
+    const preservedTags = tags.filter((tag) => tag !== timeTag).map((tag) => `[${tag}]`);
+    const text = cleanSubtitleText([...preservedTags, matched[2]].filter(Boolean).join(' '));
+    rows.push({ start, text });
   });
 
   if (rows.length === 0) return [] as SubtitleCue[];
@@ -405,14 +542,6 @@ function parseSubtitleContent(fileName: string, rawContent: string) {
   const bracketParsed = parseBracketTimedText(normalized);
   if (bracketParsed.length > 0) return bracketParsed;
   return [];
-}
-
-function getCueAtTime(cues: SubtitleCue[], time: number) {
-  for (let i = 0; i < cues.length; i += 1) {
-    const cue = cues[i];
-    if (time >= cue.start && time < cue.end) return cue;
-  }
-  return null;
 }
 
 function ArcFallbackIcon() {
@@ -568,7 +697,7 @@ function hasRequiredPlaybackMetadata(metadata: any, expectedUrl: string) {
     return false;
   }
 
-  const formats = Array.isArray(metadata?.formats) ? metadata.formats : [];
+  const formats: any[] = Array.isArray(metadata?.formats) ? metadata.formats : [];
   const hasPlayableFormats = formats.some((format) => isDirectPlayableFormat(format));
   return hasPlayableFormats;
 }
@@ -608,6 +737,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   const pendingSwitchPlaybackRef = React.useRef(false);
   const pendingSwitchSourceRef = React.useRef('');
   const isSwitchingSourceRef = React.useRef(false);
+  const subtitleBaseVideoFrameRef = React.useRef<{ width: number; height: number } | null>(null);
+  const subtitleVideoFrameRef = React.useRef<SubtitleVideoFrameLayout>(DEFAULT_SUBTITLE_VIDEO_FRAME);
   const subtitleInteractionRef = React.useRef({
     mode: 'none' as SubtitleInteractionMode,
     pointerId: null as number | null,
@@ -667,6 +798,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   const [subtitleBackgroundOpacityPct, setSubtitleBackgroundOpacityPct] = React.useState(0);
   const [subtitleDelayMs, setSubtitleDelayMs] = React.useState(0);
   const [subtitleInteractionMode, setSubtitleInteractionMode] = React.useState<SubtitleInteractionMode>('none');
+  const [subtitleVideoFrame, setSubtitleVideoFrame] = React.useState<SubtitleVideoFrameLayout>(DEFAULT_SUBTITLE_VIDEO_FRAME);
 
   const destroyArtplayer = React.useCallback(() => {
     if (currentSubtitleBlobUrlRef.current) {
@@ -682,6 +814,33 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
       }
       artPlayerRef.current = null;
     }
+  }, []);
+
+  const refreshSubtitleVideoFrame = React.useCallback((artInstance?: any | null) => {
+    const art = artInstance || artPlayerRef.current;
+    const playerEl = (art?.template?.$player || null) as HTMLElement | null;
+    const container = playerEl || playerContainerRef.current;
+    const videoEl = (art?.template?.$video || null) as HTMLVideoElement | null;
+    if (!container) return DEFAULT_SUBTITLE_VIDEO_FRAME;
+
+    const fullscreenLike = isSubtitleFullscreenLike(container, art);
+    let nextFrame = computeSubtitleVideoFrameLayout(
+      container,
+      videoEl,
+      fullscreenLike ? subtitleBaseVideoFrameRef.current : null
+    );
+
+    if (!fullscreenLike && nextFrame.pixelWidth > 0 && nextFrame.pixelHeight > 0) {
+      subtitleBaseVideoFrameRef.current = {
+        width: nextFrame.pixelWidth,
+        height: nextFrame.pixelHeight,
+      };
+      nextFrame = { ...nextFrame, scale: 1 };
+    }
+
+    subtitleVideoFrameRef.current = nextFrame;
+    setSubtitleVideoFrame((previous) => (isSameSubtitleVideoFrame(previous, nextFrame) ? previous : nextFrame));
+    return nextFrame;
   }, []);
 
   const applySubtitleTrackToArt = React.useCallback((artInstance?: any | null) => {
@@ -709,6 +868,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
   const applySubtitleStyleToArt = React.useCallback((artInstance?: any | null) => {
     const art = artInstance || artPlayerRef.current;
     if (!art) return;
+    const frame = refreshSubtitleVideoFrame(art);
 
     const {
       subtitleColor,
@@ -720,30 +880,82 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
       subtitleHeightPct,
     } = subtitleStyleStateRef.current;
     const subtitleBackgroundRgba = toRgbaFromHex(subtitleBackgroundColor, subtitleBackgroundOpacityPct);
+    const renderedFontSizePx = Math.round(subtitleFontSizePx * frame.scale * 10) / 10;
+    const renderedRadiusRem = Math.round(0.45 * frame.scale * 100) / 100;
+    const subtitleBoxHeightPct = (frame.heightPct * subtitleHeightPct) / 100;
+    const renderedFontSize = `${renderedFontSizePx}px`;
+    const subtitleContentPadding = subtitleBackgroundOpacityPct > 0 ? '0.08em 0.55em' : '0';
     art.subtitle.style({
       color: subtitleColor,
-      fontSize: `${subtitleFontSizePx}px`,
+      fontSize: renderedFontSize,
       backgroundColor: subtitleBackgroundRgba,
     });
 
     const subtitleEl = art.template?.$subtitle;
     if (!subtitleEl) return;
 
-    subtitleEl.style.width = `${subtitleWidthPct}%`;
-    subtitleEl.style.minHeight = `${subtitleHeightPct}%`;
+    const playerEl = art.template?.$player;
+    if (playerEl) {
+      playerEl.style.setProperty('--art-subtitle-font-size', renderedFontSize);
+      playerEl.style.setProperty('--art-subtitle-gap', '0px');
+      playerEl.style.setProperty('--art-subtitle-bottom', '0px');
+    }
+
+    subtitleEl.style.position = 'absolute';
+    subtitleEl.style.width = `${(frame.widthPct * subtitleWidthPct) / 100}%`;
     subtitleEl.style.height = 'auto';
-    subtitleEl.style.left = `${subtitlePosition.xPct}%`;
-    subtitleEl.style.top = `${subtitlePosition.yPct}%`;
+    subtitleEl.style.minHeight = `${subtitleBoxHeightPct}%`;
+    subtitleEl.style.maxHeight = '';
+    subtitleEl.style.left = `${frame.leftPct + (frame.widthPct * subtitlePosition.xPct) / 100}%`;
+    subtitleEl.style.top = `${frame.topPct + (frame.heightPct * subtitlePosition.yPct) / 100}%`;
     subtitleEl.style.bottom = 'auto';
     subtitleEl.style.transform = 'translate(-50%, -50%)';
     subtitleEl.style.display = 'flex';
+    subtitleEl.style.flexDirection = 'column';
+    subtitleEl.style.pointerEvents = 'none';
     subtitleEl.style.alignItems = 'center';
     subtitleEl.style.justifyContent = 'center';
     subtitleEl.style.boxSizing = 'border-box';
+    subtitleEl.style.overflow = 'visible';
+    subtitleEl.style.lineHeight = 'normal';
+    subtitleEl.style.wordBreak = 'break-word';
+    subtitleEl.style.whiteSpace = 'pre-line';
+    subtitleEl.style.textAlign = 'center';
+    subtitleEl.style.fontWeight = '600';
+    subtitleEl.style.zIndex = '60';
+    subtitleEl.style.color = subtitleColor;
+    subtitleEl.style.fontSize = renderedFontSize;
     subtitleEl.style.backgroundColor = subtitleBackgroundRgba;
-    subtitleEl.style.padding = subtitleBackgroundOpacityPct > 0 ? '0.08em 0.55em' : '0';
-    subtitleEl.style.borderRadius = subtitleBackgroundOpacityPct > 0 ? '0.45rem' : '0';
-  }, []);
+    subtitleEl.style.padding = subtitleContentPadding;
+    subtitleEl.style.borderRadius = subtitleBackgroundOpacityPct > 0 ? `${renderedRadiusRem}rem` : '0';
+    subtitleEl.style.textShadow = subtitleBackgroundOpacityPct > 0 ? 'none' : '0 2px 5px rgba(0,0,0,0.88)';
+
+    Array.from(subtitleEl.querySelectorAll('.arcsub-art-subtitle-content')).forEach((contentNode) => {
+      const contentEl = contentNode as HTMLElement;
+      Array.from(contentEl.children).forEach((child) => subtitleEl.appendChild(child));
+      contentEl.remove();
+    });
+
+    Array.from(subtitleEl.querySelectorAll('.art-subtitle-line')).forEach((lineNode) => {
+      const lineEl = lineNode as HTMLElement;
+      lineEl.style.setProperty('font-size', renderedFontSize, 'important');
+      lineEl.style.setProperty('color', subtitleColor, 'important');
+      lineEl.style.setProperty('font-weight', '600', 'important');
+      lineEl.style.setProperty('text-align', 'center', 'important');
+      lineEl.style.setProperty('white-space', 'pre-line', 'important');
+      lineEl.style.setProperty('word-break', 'break-word', 'important');
+      lineEl.style.setProperty('max-width', '100%', 'important');
+      lineEl.style.setProperty('background-color', 'transparent', 'important');
+      lineEl.style.setProperty('text-shadow', subtitleEl.style.textShadow || 'none', 'important');
+      lineEl.style.removeProperty('display');
+      lineEl.style.removeProperty('align-items');
+      lineEl.style.removeProperty('justify-content');
+      lineEl.style.removeProperty('line-height');
+      lineEl.style.removeProperty('min-height');
+      lineEl.style.removeProperty('padding');
+      lineEl.style.removeProperty('width');
+    });
+  }, [refreshSubtitleVideoFrame]);
 
   const endSubtitleInteraction = React.useCallback(() => {
     subtitleInteractionRef.current.mode = 'none';
@@ -773,8 +985,9 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
       subtitleInteractionRef.current.startPosition = { ...subtitlePosition };
       subtitleInteractionRef.current.startWidthPct = subtitleWidthPct;
       subtitleInteractionRef.current.startHeightPct = subtitleHeightPct;
-      subtitleInteractionRef.current.containerWidth = rect.width;
-      subtitleInteractionRef.current.containerHeight = rect.height;
+      const subtitleFrame = subtitleVideoFrameRef.current;
+      subtitleInteractionRef.current.containerWidth = subtitleFrame.pixelWidth > 0 ? subtitleFrame.pixelWidth : rect.width;
+      subtitleInteractionRef.current.containerHeight = subtitleFrame.pixelHeight > 0 ? subtitleFrame.pixelHeight : rect.height;
       setSubtitleInteractionMode(mode);
     },
     [subtitleHeightPct, subtitlePosition, subtitleWidthPct]
@@ -1016,15 +1229,23 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     [selectedVideoSourceId, videoSourceOptions]
   );
   const showSubtitleDragOverlay = Boolean(selectedVideoSourceOption) && subtitleMode !== 'none';
+  const subtitleLayoutStyle = React.useMemo(() => {
+    const frame = subtitleVideoFrame;
+    return {
+      width: `${(frame.widthPct * subtitleWidthPct) / 100}%`,
+      minHeight: `${(frame.heightPct * subtitleHeightPct) / 100}%`,
+      left: `${frame.leftPct + (frame.widthPct * subtitlePosition.xPct) / 100}%`,
+      top: `${frame.topPct + (frame.heightPct * subtitlePosition.yPct) / 100}%`,
+      transform: 'translate(-50%, -50%)',
+    };
+  }, [subtitleHeightPct, subtitlePosition, subtitleVideoFrame, subtitleWidthPct]);
   const subtitleDragOverlayStyle = React.useMemo(
     () => ({
-      width: `${subtitleWidthPct}%`,
-      height: `${subtitleHeightPct}%`,
-      left: `${subtitlePosition.xPct}%`,
-      top: `${subtitlePosition.yPct}%`,
-      transform: 'translate(-50%, -50%)',
+      ...subtitleLayoutStyle,
+      height: subtitleLayoutStyle.minHeight,
+      minHeight: undefined,
     }),
-    [subtitleHeightPct, subtitlePosition, subtitleWidthPct]
+    [subtitleLayoutStyle]
   );
   const subtitleResizeHandleVisibilityClass = subtitleInteractionMode === 'none'
     ? 'opacity-0 pointer-events-none group-hover/subtitle-frame:opacity-100 group-hover/subtitle-frame:pointer-events-auto'
@@ -1113,12 +1334,6 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     return [];
   }, [aiCues, originalCues, projectCues, subtitleMode]);
 
-  const delayedSubtitleTime = currentTime - subtitleDelayMs / 1000;
-  const activeSubtitleCue = React.useMemo(
-    () => getCueAtTime(activeCues, delayedSubtitleTime),
-    [activeCues, delayedSubtitleTime]
-  );
-  const currentSubtitle = activeSubtitleCue?.text || '';
   React.useEffect(() => {
     setCurrentTime(0);
     setDuration(0);
@@ -1144,7 +1359,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
       subtitleDelayMs,
     };
     applySubtitleTrackToArt();
-  }, [activeCues, applySubtitleTrackToArt, subtitleDelayMs, subtitleMode]);
+    applySubtitleStyleToArt();
+  }, [activeCues, applySubtitleStyleToArt, applySubtitleTrackToArt, subtitleDelayMs, subtitleMode]);
 
   React.useEffect(() => {
     subtitleStyleStateRef.current = {
@@ -1167,6 +1383,34 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     subtitlePosition,
     subtitleWidthPct,
   ]);
+
+  React.useEffect(() => {
+    const container = playerContainerRef.current;
+    if (!container) return undefined;
+
+    let frameId = 0;
+    const scheduleSubtitleStyleRefresh = () => {
+      if (frameId) cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(() => {
+        frameId = 0;
+        applySubtitleStyleToArt();
+      });
+    };
+
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(scheduleSubtitleStyleRefresh)
+      : null;
+    observer?.observe(container);
+    window.addEventListener('resize', scheduleSubtitleStyleRefresh);
+    document.addEventListener('fullscreenchange', scheduleSubtitleStyleRefresh);
+
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+      observer?.disconnect();
+      window.removeEventListener('resize', scheduleSubtitleStyleRefresh);
+      document.removeEventListener('fullscreenchange', scheduleSubtitleStyleRefresh);
+    };
+  }, [applySubtitleStyleToArt]);
 
   React.useEffect(() => {
     if (showSubtitleDragOverlay) return;
@@ -1226,7 +1470,8 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
     });
 
     // Handle source switching back to React state
-    art.on('video:url', (url: string) => {
+    art.on('video:url' as any, (...args: unknown[]) => {
+      const url = typeof args[0] === 'string' ? args[0] : String(args[0] ?? '');
       const opt = videoSourceOptionsRef.current.find((o) => o.src === url);
       if (opt && opt.id !== selectedVideoSourceIdRef.current) {
         setSelectedVideoSourceId(opt.id);
@@ -1239,6 +1484,43 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
 
     art.on('video:canplay', () => {
       restorePlaybackAfterSwitch(art);
+    });
+
+    art.on('subtitleLoad', () => {
+      applySubtitleStyleToArt(art);
+    });
+
+    art.on('subtitleAfterUpdate', () => {
+      applySubtitleStyleToArt(art);
+    });
+
+    let subtitleStyleFrameId = 0;
+    let subtitleStyleTimeoutId = 0;
+    const scheduleArtSubtitleStyleRefresh = () => {
+      if (subtitleStyleFrameId) cancelAnimationFrame(subtitleStyleFrameId);
+      if (subtitleStyleTimeoutId) window.clearTimeout(subtitleStyleTimeoutId);
+      subtitleStyleFrameId = requestAnimationFrame(() => {
+        subtitleStyleFrameId = 0;
+        applySubtitleStyleToArt(art);
+      });
+      subtitleStyleTimeoutId = window.setTimeout(() => {
+        subtitleStyleTimeoutId = 0;
+        applySubtitleStyleToArt(art);
+      }, 120);
+    };
+
+    art.on('resize', scheduleArtSubtitleStyleRefresh);
+    art.on('fullscreen', scheduleArtSubtitleStyleRefresh);
+    art.on('fullscreenWeb', scheduleArtSubtitleStyleRefresh);
+    art.on('destroy', () => {
+      if (subtitleStyleFrameId) {
+        cancelAnimationFrame(subtitleStyleFrameId);
+        subtitleStyleFrameId = 0;
+      }
+      if (subtitleStyleTimeoutId) {
+        window.clearTimeout(subtitleStyleTimeoutId);
+        subtitleStyleTimeoutId = 0;
+      }
     });
 
     art.on('video:error', () => {
@@ -1472,7 +1754,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
             )}
 
             {showPlayerLoadingOverlay && (
-              <div className="absolute inset-0 bg-black/35 backdrop-blur-[2px] flex items-center justify-center z-20">
+              <div className="absolute inset-0 bg-black/35 backdrop-blur-[2px] flex items-center justify-center z-[70]">
                 <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-surface-container-high border border-white/10 text-sm text-secondary">
                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
                   <span>{t('common.loading')}</span>
@@ -1481,7 +1763,7 @@ export default function VideoPlayer({ project }: VideoPlayerProps) {
             )}
 
             {showSubtitleDragOverlay && (
-              <div className="absolute inset-0 z-30 pointer-events-none">
+              <div className="absolute inset-0 z-[80] pointer-events-none">
                 <div
                   style={subtitleDragOverlayStyle}
                   className="absolute group/subtitle-frame"

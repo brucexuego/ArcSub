@@ -29,10 +29,12 @@ type DiarizationScenePreset = 'interview' | 'podcast' | 'meeting' | 'presentatio
 type DiarizationProvider = 'classic' | 'pyannote';
 
 interface DiarizationDiagnostics {
-  provider: 'acoustic' | 'semantic';
-  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote' | 'semantic';
+  provider: 'acoustic' | 'semantic' | 'provider_native';
+  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote' | 'semantic' | 'provider_native';
   speechSegmentCount: number;
   vadWindowCount: number;
+  providerNative?: boolean;
+  providerNativeProvider?: string;
   options?: {
     provider: DiarizationProvider;
     mode: DiarizationMode;
@@ -58,6 +60,8 @@ interface AlignmentDiagnostics {
   applied: boolean;
   modelId: string;
   language: string | null;
+  backend?: string;
+  providerNativeProvider?: string;
   attemptedSegmentCount: number;
   alignedSegmentCount: number;
   skippedSegments: number;
@@ -133,11 +137,13 @@ function getDiarizationCopy(language: Language) {
       threshold: '分群閾值',
       providerAcoustic: '聲學分離',
       providerSemantic: '語義分離',
+      providerNative: '雲端原生',
       sourceVad: 'VAD 收緊片段',
       sourceSpeechRegion: '語音區段',
       sourceChunk: '字幕區段',
       sourcePyannote: 'Pyannote turn segments',
       sourceSemantic: '語義回退',
+      sourceProviderNative: '雲端原生標籤',
     },
     'zh-cn': {
       modeLabel: '说话人模式',
@@ -176,11 +182,13 @@ function getDiarizationCopy(language: Language) {
       threshold: '聚类阈值',
       providerAcoustic: '声学分离',
       providerSemantic: '语义分离',
+      providerNative: '云端原生',
       sourceVad: 'VAD 收紧片段',
       sourceSpeechRegion: '语音区段',
       sourceChunk: '字幕区段',
       sourcePyannote: 'Pyannote turn segments',
       sourceSemantic: '语义回退',
+      sourceProviderNative: '云端原生标签',
     },
     en: {
       modeLabel: 'Speaker Mode',
@@ -219,11 +227,13 @@ function getDiarizationCopy(language: Language) {
       threshold: 'Cluster Threshold',
       providerAcoustic: 'Acoustic',
       providerSemantic: 'Semantic',
+      providerNative: 'Provider native',
       sourceVad: 'VAD-bounded',
       sourceSpeechRegion: 'Speech regions',
       sourceChunk: 'Chunk-based',
       sourcePyannote: 'Pyannote turn segments',
       sourceSemantic: 'Semantic fallback',
+      sourceProviderNative: 'Provider native labels',
     },
     jp: {
       modeLabel: '話者モード',
@@ -262,11 +272,13 @@ function getDiarizationCopy(language: Language) {
       threshold: 'クラスタ閾値',
       providerAcoustic: '音響分離',
       providerSemantic: '意味分離',
+      providerNative: 'クラウド原生',
       sourceVad: 'VAD収束区間',
       sourceSpeechRegion: '音声区間',
       sourceChunk: '字幕チャンク',
       sourcePyannote: 'Pyannote turn segments',
       sourceSemantic: '意味フォールバック',
+      sourceProviderNative: 'クラウド原生ラベル',
     },
     de: {
       modeLabel: 'Sprechermodus',
@@ -305,11 +317,13 @@ function getDiarizationCopy(language: Language) {
       threshold: 'Cluster-Schwelle',
       providerAcoustic: 'Akustisch',
       providerSemantic: 'Semantisch',
+      providerNative: 'Provider-nativ',
       sourceVad: 'VAD-begrenzt',
       sourceSpeechRegion: 'Sprachsegmente',
       sourceChunk: 'Chunk-basiert',
       sourcePyannote: 'Pyannote turn segments',
       sourceSemantic: 'Semantischer Fallback',
+      sourceProviderNative: 'Provider-native Labels',
     },
   } as const;
 
@@ -1460,15 +1474,24 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       applied.segmentation ? t('stt.modeSegOn') : t('stt.modeSegOff')
     );
     modeParts.push(
-      applied.vad
+      applied.providerNativeVad
+        ? t('stt.modeVadCloud')
+        : applied.vad
         ? t('stt.modeVadWindows').replace('{count}', String(stats.vadWindowCount ?? 0))
         : t('stt.modeVadOff')
     );
     modeParts.push(
       applied.diarization ? t('stt.modeDiarizationOn') : t('stt.modeDiarizationOff')
     );
+    const nativeAlignmentApplied = Boolean(
+      debug.alignment?.applied &&
+      (
+        debug.alignment?.backend === 'native' ||
+        debug.alignment?.providerNativeProvider
+      )
+    );
     modeParts.push(
-      applied.forcedAlignment ? t('stt.modeAlignOn') : t('stt.modeAlignOff')
+      applied.forcedAlignment && !nativeAlignmentApplied ? t('stt.modeAlignOn') : t('stt.modeAlignOff')
     );
 
     return modeParts.join(' | ');
@@ -1557,12 +1580,21 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     [diarizationCopy]
   );
 
+  const providerNativeDiarizationApplied = Boolean(
+    diarizationDiagnostics?.providerNative ||
+    diarizationDiagnostics?.provider === 'provider_native' ||
+    diarizationDiagnostics?.selectedSource === 'provider_native'
+  );
   const localizedDiarizationProvider =
-    diarizationDiagnostics?.provider === 'semantic'
+    providerNativeDiarizationApplied
+      ? diarizationCopy.providerNative
+      : diarizationDiagnostics?.provider === 'semantic'
       ? diarizationCopy.providerSemantic
       : diarizationCopy.providerAcoustic;
   const localizedDiarizationSource =
-    diarizationDiagnostics?.selectedSource === 'speech_region'
+    providerNativeDiarizationApplied
+      ? diarizationCopy.sourceProviderNative
+      : diarizationDiagnostics?.selectedSource === 'speech_region'
       ? diarizationCopy.sourceSpeechRegion
       : diarizationDiagnostics?.selectedSource === 'vad_chunk'
       ? diarizationCopy.sourceVad
@@ -1581,13 +1613,20 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       ? t('stt.wordAlignmentOn')
       : lastWordAlignmentState === 'off'
         ? t('stt.wordAlignmentOff')
-        : lastWordAlignmentState === 'unavailable'
+      : lastWordAlignmentState === 'unavailable'
           ? t('stt.wordAlignmentUnavailable')
           : null;
+  const providerNativeAlignmentApplied = Boolean(
+    alignmentDiagnostics?.applied &&
+    (
+      alignmentDiagnostics.backend === 'native' ||
+      alignmentDiagnostics.providerNativeProvider
+    )
+  );
   const localizedForcedAlignmentState =
-    alignmentDiagnostics?.applied
+    alignmentDiagnostics?.applied && !providerNativeAlignmentApplied
       ? t('stt.forcedAlignmentOn')
-      : alignmentDiagnostics
+      : alignmentDiagnostics && !providerNativeAlignmentApplied
         ? t('stt.forcedAlignmentOff')
         : null;
   const providerProfileId = String(providerDebug?.profileId || '').trim() || '-';
@@ -1604,6 +1643,8 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   const alignmentSourceLabel =
     providerForcedAlignment?.backend === 'qwen3-forced-aligner' && providerForcedAlignment?.applied
       ? t('stt.alignmentSourceQwenOfficial')
+      : providerNativeAlignmentApplied
+        ? t('stt.alignmentSourceProvider')
       : alignmentDiagnostics?.modelId
         ? t('stt.alignmentSourceGeneric')
         : providerDebug?.rawHasTimestamps
@@ -1626,11 +1667,11 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         tone: 'warning',
       });
     }
-    if (alignmentDiagnostics?.applied) {
+    if (alignmentDiagnostics?.applied && !providerNativeAlignmentApplied) {
       badges.push({ label: t('stt.warnForcedAlignmentApplied'), tone: 'success' });
     }
     return badges;
-  }, [alignmentDiagnostics?.applied, pipelineMode, pipelineWarnings.length, t]);
+  }, [alignmentDiagnostics?.applied, pipelineMode, pipelineWarnings.length, providerNativeAlignmentApplied, t]);
   const asrDetailsSummary = React.useMemo(() => {
     const parts: string[] = [];
     if (formattedElapsedTime) parts.push(`${t('stt.elapsedTime')}: ${formattedElapsedTime}`);
@@ -1683,9 +1724,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     if (alignmentDiagnostics) {
       sections.push({
         key: 'alignment',
-        title: t('stt.forcedAlignment'),
+        title: providerNativeAlignmentApplied ? t('stt.wordAlignment') : t('stt.forcedAlignment'),
         fields: [
-          ...(localizedForcedAlignmentState ? [{ label: t('stt.statusMonitor'), value: localizedForcedAlignmentState }] : []),
+          ...(providerNativeAlignmentApplied
+            ? [{ label: t('stt.statusMonitor'), value: t('stt.wordAlignmentOn') }]
+            : localizedForcedAlignmentState
+              ? [{ label: t('stt.statusMonitor'), value: localizedForcedAlignmentState }]
+              : []),
           { label: t('stt.alignmentModel'), value: alignmentDiagnostics.modelId },
           ...(alignmentDiagnostics.language ? [{ label: t('stt.alignmentLanguage'), value: alignmentDiagnostics.language }] : []),
           { label: t('stt.alignedSegments'), value: `${alignmentDiagnostics.alignedSegmentCount}/${alignmentDiagnostics.attemptedSegmentCount}` },
@@ -1762,7 +1807,7 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     }
 
     return sections;
-  }, [alignmentDiagnostics, alignmentSourceLabel, cjkWordDiagnostics, diarizationCopy, diarizationDiagnostics, formattedAlignmentElapsedTime, formattedElapsedTime, formatTechnicalValue, localBaselineConfidence, localBaselineTaskFamily, localFallbackBaseline, localizedDiarizationProvider, localizedDiarizationSource, localizedForcedAlignmentState, localizedWordAlignmentState, localModelProfileId, pipelineWarnings, providerDebug, providerForcedAlignment?.modelId, providerForcedAlignmentError, providerHelperChunking?.chunkCount, providerHelperChunking?.maxChunkSec, providerHelperChunking?.strategy, providerProfileFamily, providerProfileId, t]);
+  }, [alignmentDiagnostics, alignmentSourceLabel, cjkWordDiagnostics, diarizationCopy, diarizationDiagnostics, formattedAlignmentElapsedTime, formattedElapsedTime, formatTechnicalValue, localBaselineConfidence, localBaselineTaskFamily, localFallbackBaseline, localizedDiarizationProvider, localizedDiarizationSource, localizedForcedAlignmentState, localizedWordAlignmentState, localModelProfileId, pipelineWarnings, providerDebug, providerForcedAlignment?.modelId, providerForcedAlignmentError, providerHelperChunking?.chunkCount, providerHelperChunking?.maxChunkSec, providerHelperChunking?.strategy, providerNativeAlignmentApplied, providerProfileFamily, providerProfileId, t]);
 
   const currentAudioLabel =
     sourceType === 'online'

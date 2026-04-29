@@ -72,6 +72,13 @@ interface BuildAsrDebugInfoInput {
 
 export function buildAsrWarningCodes(input: BuildAsrWarningsInput) {
   const warnings: string[] = [];
+  const nativeAlignmentApplied = Boolean(
+    input.alignmentDiagnostics?.applied &&
+    (
+      input.alignmentDiagnostics?.backend === 'native' ||
+      input.alignmentDiagnostics?.providerNativeProvider
+    )
+  );
   if (input.segmentationForcedForDiarization) warnings.push('segmentation_forced_for_diarization');
   if (input.effectiveSegmentation && input.providerMeta?.isWhisperCppInference && !input.timestampsSynthesized) {
     warnings.push('segmentation_ignored_by_provider');
@@ -85,11 +92,18 @@ export function buildAsrWarningCodes(input: BuildAsrWarningsInput) {
   if (input.effectiveVad && input.speechSegments.length > 0 && !input.allowVadWindowedTranscription) {
     warnings.push('local_vad_windowing_disabled');
   }
-  if (input.alignmentDiagnostics?.applied) warnings.push('forced_alignment_applied');
+  if (input.alignmentDiagnostics?.applied && !nativeAlignmentApplied) warnings.push('forced_alignment_applied');
   return warnings;
 }
 
 export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
+  const nativeAlignmentApplied = Boolean(
+    input.alignmentDiagnostics?.applied &&
+    (
+      input.alignmentDiagnostics?.backend === 'native' ||
+      input.alignmentDiagnostics?.providerNativeProvider
+    )
+  );
   const warningIssues: RunIssue[] = input.warnings.map((code) => ({
     code,
     severity:
@@ -159,8 +173,12 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
     applied: {
       segmentation: input.effectiveSegmentation && input.hasUsableChunkTimestamps(input.result?.chunks || []),
       wordAlignment: input.effectiveWordAlignment && Array.isArray(input.result.word_segments) && input.result.word_segments.length > 0,
-      forcedAlignment: Boolean(input.alignmentDiagnostics?.applied),
+      forcedAlignment: Boolean(input.alignmentDiagnostics?.applied && !nativeAlignmentApplied),
       vad: input.effectiveVad && input.speechSegments.length > 0,
+      providerNativeVad: Boolean(
+        input.providerMeta?.cloudNativeAdvancedFeatures?.vadRequested &&
+        input.providerMeta?.cloudNativeAdvancedFeatures?.localVadBypassed
+      ),
       diarization: input.requestedFeatures.diarization && input.diarizationApplied,
       localModelProfileId: input.localProfile?.modelProfile?.id ?? null,
       localBaselineConfidence: input.localProfile?.baseProfile.baseline.baselineConfidence ?? null,
@@ -172,6 +190,8 @@ export function buildAsrDebugInfo(input: BuildAsrDebugInfoInput) {
         ? 'vad_window'
         : input.providerMeta?.rawHasTimestamps
         ? 'native'
+        : nativeAlignmentApplied
+          ? 'native'
         : input.alignmentDiagnostics?.applied
           ? 'forced'
           : input.providerMeta?.syntheticWordFallbackUsed

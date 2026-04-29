@@ -2,6 +2,8 @@ export type CloudAsrProvider =
   | 'openai-whisper'
   | 'whispercpp-inference'
   | 'elevenlabs-scribe'
+  | 'deepgram-listen'
+  | 'gladia-pre-recorded'
   | 'github-models-phi4-multimodal'
   | 'google-cloud-chirp3'
   | 'google-gemini-audio';
@@ -39,6 +41,22 @@ export function detectCloudAsrProvider(url: string, modelName?: string): CloudAs
     hasScribeModelHint(named)
   ) {
     return 'elevenlabs-scribe';
+  }
+  if (
+    /(^|\.)deepgram\.com$/.test(hostname) ||
+    pathname.includes('/listen') ||
+    named.includes('deepgram') ||
+    named.includes('nova-')
+  ) {
+    return 'deepgram-listen';
+  }
+  if (
+    /(^|\.)gladia\.io$/.test(hostname) ||
+    pathname.includes('/v2/pre-recorded') ||
+    pathname.includes('/v2/upload') ||
+    named.includes('gladia')
+  ) {
+    return 'gladia-pre-recorded';
   }
   if (
     hostname === 'models.github.ai' ||
@@ -129,6 +147,24 @@ export function buildCloudAsrEndpointUrl(provider: CloudAsrProvider, rawUrl: str
     if (path.includes('/speech-to-text')) return parsed.toString();
     return ensureEndpointPath('/v1/speech-to-text').toString();
   }
+  if (provider === 'deepgram-listen') {
+    if (path.includes('/listen')) return parsed.toString();
+    return ensureEndpointPath('/v1/listen').toString();
+  }
+  if (provider === 'gladia-pre-recorded') {
+    if (path.includes('/v2/pre-recorded')) return parsed.toString();
+    if (path.replace(/\/+$/, '') === '/v2') {
+      const next = new URL(parsed.toString());
+      next.pathname = '/v2/pre-recorded';
+      return next.toString();
+    }
+    if (path.includes('/v2/upload') || path.includes('/v2/transcription')) {
+      const next = new URL(parsed.toString());
+      next.pathname = '/v2/pre-recorded';
+      return next.toString();
+    }
+    return ensureEndpointPath('/v2/pre-recorded').toString();
+  }
   if (provider === 'github-models-phi4-multimodal') {
     if (path.includes('/inference/chat/completions')) return parsed.toString();
     return buildGitHubModelsChatEndpoint();
@@ -156,6 +192,8 @@ export function getDefaultCloudAsrModel(provider: CloudAsrProvider) {
   if (provider === 'google-gemini-audio') return 'gemini-2.5-flash';
   if (provider === 'google-cloud-chirp3') return 'chirp_3';
   if (provider === 'github-models-phi4-multimodal') return 'microsoft/Phi-4-multimodal-instruct';
+  if (provider === 'gladia-pre-recorded') return 'gladia-v2';
+  if (provider === 'deepgram-listen') return 'nova-3';
   if (provider === 'elevenlabs-scribe') return 'scribe_v2';
   if (provider === 'whispercpp-inference') return 'whispercpp';
   return 'whisper-1';
