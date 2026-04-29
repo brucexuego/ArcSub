@@ -22,6 +22,10 @@ function parseUrl(url: string) {
   return new URL(String(url || '').trim());
 }
 
+function hasScribeModelHint(value: string) {
+  return /(^|[^a-z0-9])scribe(?:[\s._-]?v?\d+)?($|[^a-z0-9])/i.test(value);
+}
+
 export function detectCloudAsrProvider(url: string, modelName?: string): CloudAsrProvider {
   const parsed = parseUrl(url);
   const hostname = parsed.hostname.toLowerCase();
@@ -32,7 +36,7 @@ export function detectCloudAsrProvider(url: string, modelName?: string): CloudAs
     /(^|\.)elevenlabs\.io$/.test(hostname) ||
     pathname.includes('/speech-to-text') ||
     named.includes('elevenlabs') ||
-    named.includes('scribe')
+    hasScribeModelHint(named)
   ) {
     return 'elevenlabs-scribe';
   }
@@ -102,6 +106,13 @@ export function buildCloudAsrEndpointUrl(provider: CloudAsrProvider, rawUrl: str
       return next;
     }
     if (currentLower === '/v1beta' && targetLower.startsWith('/v1beta/')) {
+      next.pathname = target;
+      return next;
+    }
+    if (
+      (currentLower === '/v1/models' || currentLower === '/v1beta/models') &&
+      (targetLower.startsWith('/v1/models/') || targetLower.startsWith('/v1beta/models/'))
+    ) {
       next.pathname = target;
       return next;
     }
