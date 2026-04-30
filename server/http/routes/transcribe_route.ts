@@ -55,7 +55,6 @@ export function registerTranscribeRoute(app: express.Express, deps: TranscribeRo
       allowShortInterjectionSpeaker: parseOptionalBoolean(req.query.allowShortInterjectionSpeaker),
       preferVadBoundedRegions: parseOptionalBoolean(req.query.preferVadBoundedRegions),
       forceMergeTinyClustersInTwoSpeakerMode: parseOptionalBoolean(req.query.forceMergeTinyClustersInTwoSpeakerMode),
-      semanticFallbackEnabled: parseOptionalBoolean(req.query.semanticFallbackEnabled),
     };
     const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     let clientDisconnected = false;

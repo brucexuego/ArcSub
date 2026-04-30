@@ -29,8 +29,8 @@ type DiarizationScenePreset = 'interview' | 'podcast' | 'meeting' | 'presentatio
 type DiarizationProvider = 'classic' | 'pyannote';
 
 interface DiarizationDiagnostics {
-  provider: 'acoustic' | 'semantic' | 'provider_native';
-  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote' | 'semantic' | 'provider_native';
+  provider: 'acoustic' | 'provider_native';
+  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote' | 'provider_native';
   speechSegmentCount: number;
   vadWindowCount: number;
   providerNative?: boolean;
@@ -46,7 +46,6 @@ interface DiarizationDiagnostics {
     allowShortInterjectionSpeaker: boolean;
     preferVadBoundedRegions: boolean;
     forceMergeTinyClustersInTwoSpeakerMode: boolean;
-    semanticFallbackEnabled: boolean;
   };
   selectedPass?: {
     source: string;
@@ -126,7 +125,6 @@ function getDiarizationCopy(language: Language) {
       allowShortInterjection: '允許短暫插話獨立成新語者',
       preferVadBounded: '優先使用 VAD 收緊語音區段',
       forceMergeTiny: '雙人模式強制合併小群',
-      semanticFallback: '低信心時改用語義分離',
       diagnostics: '語者分離診斷',
       provider: '執行方式',
       source: '實際來源',
@@ -136,13 +134,11 @@ function getDiarizationCopy(language: Language) {
       regions: '聲紋區段',
       threshold: '分群閾值',
       providerAcoustic: '聲學分離',
-      providerSemantic: '語義分離',
       providerNative: '雲端原生',
       sourceVad: 'VAD 收緊片段',
       sourceSpeechRegion: '語音區段',
       sourceChunk: '字幕區段',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '語義回退',
       sourceProviderNative: '雲端原生標籤',
     },
     'zh-cn': {
@@ -171,7 +167,6 @@ function getDiarizationCopy(language: Language) {
       allowShortInterjection: '允许短暂插话独立成新说话人',
       preferVadBounded: '优先使用 VAD 收紧语音区段',
       forceMergeTiny: '双人模式强制合并小群',
-      semanticFallback: '低置信度时改用语义分离',
       diagnostics: '语者分离诊断',
       provider: '执行方式',
       source: '实际来源',
@@ -181,13 +176,11 @@ function getDiarizationCopy(language: Language) {
       regions: '声纹区段',
       threshold: '聚类阈值',
       providerAcoustic: '声学分离',
-      providerSemantic: '语义分离',
       providerNative: '云端原生',
       sourceVad: 'VAD 收紧片段',
       sourceSpeechRegion: '语音区段',
       sourceChunk: '字幕区段',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '语义回退',
       sourceProviderNative: '云端原生标签',
     },
     en: {
@@ -216,7 +209,6 @@ function getDiarizationCopy(language: Language) {
       allowShortInterjection: 'Allow short interjections as separate speakers',
       preferVadBounded: 'Prefer VAD-bounded speech regions',
       forceMergeTiny: 'Force tiny-cluster merge in 2-speaker mode',
-      semanticFallback: 'Use semantic fallback on low confidence',
       diagnostics: 'Diarization Diagnostics',
       provider: 'Provider',
       source: 'Selected Source',
@@ -226,13 +218,11 @@ function getDiarizationCopy(language: Language) {
       regions: 'Embedding Regions',
       threshold: 'Cluster Threshold',
       providerAcoustic: 'Acoustic',
-      providerSemantic: 'Semantic',
       providerNative: 'Provider native',
       sourceVad: 'VAD-bounded',
       sourceSpeechRegion: 'Speech regions',
       sourceChunk: 'Chunk-based',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: 'Semantic fallback',
       sourceProviderNative: 'Provider native labels',
     },
     jp: {
@@ -261,7 +251,6 @@ function getDiarizationCopy(language: Language) {
       allowShortInterjection: '短い割り込みを別話者として許可',
       preferVadBounded: 'VADで絞った音声区間を優先',
       forceMergeTiny: '2人モードで小クラスタを強制統合',
-      semanticFallback: '低信頼時は意味ベースへフォールバック',
       diagnostics: '話者分離診断',
       provider: '方式',
       source: '実際の入力',
@@ -271,13 +260,11 @@ function getDiarizationCopy(language: Language) {
       regions: '埋め込み区間',
       threshold: 'クラスタ閾値',
       providerAcoustic: '音響分離',
-      providerSemantic: '意味分離',
       providerNative: 'クラウド原生',
       sourceVad: 'VAD収束区間',
       sourceSpeechRegion: '音声区間',
       sourceChunk: '字幕チャンク',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '意味フォールバック',
       sourceProviderNative: 'クラウド原生ラベル',
     },
     de: {
@@ -306,7 +293,6 @@ function getDiarizationCopy(language: Language) {
       allowShortInterjection: 'Kurze Einwürfe als eigene Sprecher erlauben',
       preferVadBounded: 'VAD-begrenzte Sprachsegmente bevorzugen',
       forceMergeTiny: 'Tiny-Cluster im 2-Sprecher-Modus zusammenführen',
-      semanticFallback: 'Bei niedriger Sicherheit semantisch fallbacken',
       diagnostics: 'Diarisierungsdiagnose',
       provider: 'Verfahren',
       source: 'Gewählte Quelle',
@@ -316,13 +302,11 @@ function getDiarizationCopy(language: Language) {
       regions: 'Embedding-Segmente',
       threshold: 'Cluster-Schwelle',
       providerAcoustic: 'Akustisch',
-      providerSemantic: 'Semantisch',
       providerNative: 'Provider-nativ',
       sourceVad: 'VAD-begrenzt',
       sourceSpeechRegion: 'Sprachsegmente',
       sourceChunk: 'Chunk-basiert',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: 'Semantischer Fallback',
       sourceProviderNative: 'Provider-native Labels',
     },
   } as const;
@@ -424,7 +408,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   const [allowShortInterjectionSpeaker, setAllowShortInterjectionSpeaker] = React.useState(false);
   const [preferVadBoundedRegions, setPreferVadBoundedRegions] = React.useState(true);
   const [forceMergeTinyClustersInTwoSpeakerMode, setForceMergeTinyClustersInTwoSpeakerMode] = React.useState(true);
-  const [semanticFallbackEnabled, setSemanticFallbackEnabled] = React.useState(true);
   const [diarizationDiagnostics, setDiarizationDiagnostics] = React.useState<DiarizationDiagnostics | null>(null);
   const [alignmentDiagnostics, setAlignmentDiagnostics] = React.useState<AlignmentDiagnostics | null>(null);
   const [cjkWordDiagnostics, setCjkWordDiagnostics] = React.useState<CjkWordDiagnostics | null>(null);
@@ -452,7 +435,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       setAllowShortInterjectionSpeaker(false);
       setPreferVadBoundedRegions(true);
       setForceMergeTinyClustersInTwoSpeakerMode(true);
-      setSemanticFallbackEnabled(true);
       return;
     }
     if (preset === 'podcast') {
@@ -464,7 +446,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       setAllowShortInterjectionSpeaker(false);
       setPreferVadBoundedRegions(true);
       setForceMergeTinyClustersInTwoSpeakerMode(false);
-      setSemanticFallbackEnabled(true);
       return;
     }
     if (preset === 'meeting') {
@@ -475,7 +456,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       setAllowShortInterjectionSpeaker(true);
       setPreferVadBoundedRegions(false);
       setForceMergeTinyClustersInTwoSpeakerMode(false);
-      setSemanticFallbackEnabled(true);
       return;
     }
     if (preset === 'presentation_qa') {
@@ -486,7 +466,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       setAllowShortInterjectionSpeaker(true);
       setPreferVadBoundedRegions(true);
       setForceMergeTinyClustersInTwoSpeakerMode(false);
-      setSemanticFallbackEnabled(true);
     }
   }, []);
 
@@ -947,7 +926,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
         params.append('allowShortInterjectionSpeaker', String(allowShortInterjectionSpeaker));
         params.append('preferVadBoundedRegions', String(preferVadBoundedRegions));
         params.append('forceMergeTinyClustersInTwoSpeakerMode', String(forceMergeTinyClustersInTwoSpeakerMode));
-        params.append('semanticFallbackEnabled', String(semanticFallbackEnabled));
       }
     }
 
@@ -1588,8 +1566,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   const localizedDiarizationProvider =
     providerNativeDiarizationApplied
       ? diarizationCopy.providerNative
-      : diarizationDiagnostics?.provider === 'semantic'
-      ? diarizationCopy.providerSemantic
       : diarizationCopy.providerAcoustic;
   const localizedDiarizationSource =
     providerNativeDiarizationApplied
@@ -1600,8 +1576,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
       ? diarizationCopy.sourceVad
       : diarizationDiagnostics?.selectedSource === 'pyannote'
         ? diarizationCopy.sourcePyannote
-      : diarizationDiagnostics?.selectedSource === 'semantic'
-        ? diarizationCopy.sourceSemantic
         : diarizationCopy.sourceChunk;
   const formattedElapsedTime = React.useMemo(() => formatElapsedTime(lastElapsedMs), [formatElapsedTime, lastElapsedMs]);
   const formattedAlignmentElapsedTime = React.useMemo(
@@ -2186,11 +2160,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                             checked: forceMergeTinyClustersInTwoSpeakerMode,
                             onChange: setForceMergeTinyClustersInTwoSpeakerMode,
                             label: diarizationCopy.forceMergeTiny,
-                          },
-                          {
-                            checked: semanticFallbackEnabled,
-                            onChange: setSemanticFallbackEnabled,
-                            label: diarizationCopy.semanticFallback,
                           },
                         ].map((item) => (
                           <label

@@ -36,6 +36,9 @@
     "clean:runtime:dry": "tsx scripts/clean-runtime.ts",
     "clean:runtime": "tsx scripts/clean-runtime.ts --apply",
     "typecheck": "tsc --noEmit",
+    "test:asr-source": "tsx scripts/asr-source-guard.ts",
+    "test:asr-local": "tsx scripts/asr-local-smoke.ts",
+    "test:asr-providers": "tsx scripts/asr-provider-tests.ts",
     "check": "npm run -s typecheck && npm run -s build",
     "lint": "npm run -s typecheck"
   },

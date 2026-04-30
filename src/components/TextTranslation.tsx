@@ -39,8 +39,8 @@ type DiarizationScenePreset = 'interview' | 'podcast' | 'meeting' | 'presentatio
 type DiarizationProvider = 'classic' | 'pyannote';
 
 interface DiarizationDiagnostics {
-  provider: 'acoustic' | 'semantic';
-  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote' | 'semantic';
+  provider: 'acoustic';
+  selectedSource: 'speech_region' | 'vad_chunk' | 'chunk' | 'pyannote';
   speechSegmentCount: number;
   vadWindowCount: number;
   options?: {
@@ -54,7 +54,6 @@ interface DiarizationDiagnostics {
     allowShortInterjectionSpeaker: boolean;
     preferVadBoundedRegions: boolean;
     forceMergeTinyClustersInTwoSpeakerMode: boolean;
-    semanticFallbackEnabled: boolean;
   };
   selectedPass?: {
     source: string;
@@ -223,12 +222,10 @@ function getDiarizationSummaryCopy(language: Language) {
       threshold: '分群閾值',
       resegmented: '邊界重整',
       providerAcoustic: '聲學分離',
-      providerSemantic: '語義分離',
       sourceVad: 'VAD 收緊片段',
       sourceSpeechRegion: '語音區段',
       sourceChunk: '字幕區段',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '語義回退',
       modeAuto: '自動',
       modeFixed: '固定人數',
       modeRange: '範圍人數',
@@ -259,12 +256,10 @@ function getDiarizationSummaryCopy(language: Language) {
       threshold: '聚类阈值',
       resegmented: '边界重整',
       providerAcoustic: '声学分离',
-      providerSemantic: '语义分离',
       sourceVad: 'VAD 收紧片段',
       sourceSpeechRegion: '语音区段',
       sourceChunk: '字幕区段',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '语义回退',
       modeAuto: '自动',
       modeFixed: '固定人数',
       modeRange: '范围人数',
@@ -295,12 +290,10 @@ function getDiarizationSummaryCopy(language: Language) {
       threshold: 'Cluster Threshold',
       resegmented: 'Resegmentation',
       providerAcoustic: 'Acoustic',
-      providerSemantic: 'Semantic',
       sourceVad: 'VAD-bounded',
       sourceSpeechRegion: 'Speech regions',
       sourceChunk: 'Chunk-based',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: 'Semantic fallback',
       modeAuto: 'Auto',
       modeFixed: 'Fixed Count',
       modeRange: 'Range',
@@ -331,12 +324,10 @@ function getDiarizationSummaryCopy(language: Language) {
       threshold: 'クラスタ閾値',
       resegmented: '境界再整列',
       providerAcoustic: '音響分離',
-      providerSemantic: '意味分離',
       sourceVad: 'VAD収束区間',
       sourceSpeechRegion: '音声区間',
       sourceChunk: '字幕チャンク',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: '意味フォールバック',
       modeAuto: '自動',
       modeFixed: '固定人数',
       modeRange: '人数レンジ',
@@ -367,12 +358,10 @@ function getDiarizationSummaryCopy(language: Language) {
       threshold: 'Cluster-Schwelle',
       resegmented: 'Neusegmentierung',
       providerAcoustic: 'Akustisch',
-      providerSemantic: 'Semantisch',
       sourceVad: 'VAD-begrenzt',
       sourceSpeechRegion: 'Sprachsegmente',
       sourceChunk: 'Chunk-basiert',
       sourcePyannote: 'Pyannote turn segments',
-      sourceSemantic: 'Semantischer Fallback',
       modeAuto: 'Automatisch',
       modeFixed: 'Feste Anzahl',
       modeRange: 'Bereich',
@@ -1872,8 +1861,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     const diagnostics = sourceDiarizationDiagnostics;
     if (!diagnostics) return null;
     const options = diagnostics.options;
-    const providerLabel =
-      diagnostics.provider === 'semantic' ? diarizationCopy.providerSemantic : diarizationCopy.providerAcoustic;
+    const providerLabel = diarizationCopy.providerAcoustic;
     const sourceLabel =
       diagnostics.selectedSource === 'speech_region'
         ? diarizationCopy.sourceSpeechRegion
@@ -1881,8 +1869,6 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         ? diarizationCopy.sourceVad
         : diagnostics.selectedSource === 'pyannote'
           ? diarizationCopy.sourcePyannote
-        : diagnostics.selectedSource === 'semantic'
-          ? diarizationCopy.sourceSemantic
           : diarizationCopy.sourceChunk;
     const modeLabel = options
       ? ({

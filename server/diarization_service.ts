@@ -1,5 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
-import { SettingsManager } from "./services/settings_manager.js";
 import { SpeakerEmbeddingService } from "./speaker_embedding_service.js";
 import { ClusteringService } from "./clustering_service.js";
 import { PyannoteDiarizationService } from "./pyannote_diarization_service.js";
@@ -36,7 +34,6 @@ export interface DiarizationOptions {
   allowShortInterjectionSpeaker?: boolean;
   preferVadBoundedRegions?: boolean;
   forceMergeTinyClustersInTwoSpeakerMode?: boolean;
-  semanticFallbackEnabled?: boolean;
 }
 
 interface NormalizedDiarizationOptions {
@@ -50,7 +47,6 @@ interface NormalizedDiarizationOptions {
   allowShortInterjectionSpeaker: boolean;
   preferVadBoundedRegions: boolean;
   forceMergeTinyClustersInTwoSpeakerMode: boolean;
-  semanticFallbackEnabled: boolean;
 }
 
 interface EmbeddingQuality {
@@ -84,27 +80,9 @@ interface AcousticPassResult {
   resegmentationPasses: number;
 }
 
-class DiarizationLowConfidenceError extends Error {
-  attemptedPasses: DiarizationDiagnostics["attemptedPasses"];
-  selectedPass?: DiarizationDiagnostics["selectedPass"];
-
-  constructor(
-    message: string,
-    details: {
-      attemptedPasses: DiarizationDiagnostics["attemptedPasses"];
-      selectedPass?: DiarizationDiagnostics["selectedPass"];
-    }
-  ) {
-    super(message);
-    this.name = "DiarizationLowConfidenceError";
-    this.attemptedPasses = details.attemptedPasses;
-    this.selectedPass = details.selectedPass;
-  }
-}
-
 export interface DiarizationDiagnostics {
-  provider: "acoustic" | "semantic";
-  selectedSource: "speech_region" | "vad_chunk" | "chunk" | "pyannote" | "semantic";
+  provider: "acoustic";
+  selectedSource: "speech_region" | "vad_chunk" | "chunk" | "pyannote";
   speechSegmentCount: number;
   vadWindowCount: number;
   options: NormalizedDiarizationOptions;
@@ -126,6 +104,7 @@ export interface DiarizationDiagnostics {
     resegmentedChunkCount?: number;
     resegmentationPasses?: number;
   }>;
+  error?: string;
 }
 
 export interface DiarizationResult {
@@ -140,8 +119,6 @@ export class DiarizationService {
   private static readonly maxAssignedSpeakerCount = 6;
   private static readonly acousticClusterThresholdMin = 0.45;
   private static readonly acousticClusterThresholdMax = 0.6;
-  private static readonly acousticLowConfidenceP90 = 0.94;
-  private static readonly acousticLowConfidenceAvg = 0.9;
   private static readonly regionMergeGapSec = 0.2;
   private static readonly regionAssignOverlapMinSec = 0.1;
   private static readonly regionAssignPaddingSec = 0.2;
@@ -174,8 +151,8 @@ export class DiarizationService {
     context: DiarizationContext = {}
   ): Promise<DiarizationResult> {
     this.throwIfAborted(context.signal);
+    const normalizedOptions = this.normalizeOptions(context.options, chunks.length);
     if (chunks.length === 0) {
-      const normalizedOptions = this.normalizeOptions(context.options, chunks.length);
       return {
         chunks,
         diagnostics: {
@@ -191,28 +168,23 @@ export class DiarizationService {
 
     try {
       context.onProgress?.(`Speaker diarization started (${chunks.length} transcript chunks)...`);
-      const normalizedOptions = this.normalizeOptions(context.options, chunks.length);
       if (normalizedOptions.provider === 'pyannote') {
         return await this.performPyannoteDiarization(chunks, audioPath, context, normalizedOptions);
       }
       return await this.performAcousticDiarization(chunks, audioPath, context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[Diarization] Acoustic diarization failed, falling back to semantic diarization: ${message}`);
-      context.onProgress?.(`Acoustic diarization fallback triggered: ${message}`);
-      const semantic = await this.performSemanticDiarization(chunks);
-      const attemptedPasses = error instanceof DiarizationLowConfidenceError ? error.attemptedPasses : [];
-      const selectedPass = error instanceof DiarizationLowConfidenceError ? error.selectedPass : undefined;
+      console.warn(`[Diarization] Local diarization failed, keeping transcript without speaker tags: ${message}`);
       return {
-        chunks: semantic,
+        chunks,
         diagnostics: {
-          provider: "semantic",
-          selectedSource: "semantic",
+          provider: "acoustic",
+          selectedSource: normalizedOptions.provider === 'pyannote' ? "pyannote" : "chunk",
           speechSegmentCount: context.speechSegments?.length ?? 0,
           vadWindowCount: context.vadWindows?.length ?? 0,
-          options: this.normalizeOptions(context.options, chunks.length),
-          selectedPass,
-          attemptedPasses,
+          options: normalizedOptions,
+          attemptedPasses: [],
+          error: message,
         },
       };
     }
@@ -383,35 +355,6 @@ export class DiarizationService {
         continue;
       }
 
-      if (this.shouldFallbackToSemantic(pass.uniqueSpeakerCount, pass.quality, chunks.length)) {
-        if (!normalizedOptions.semanticFallbackEnabled) {
-          return {
-            chunks: chunks.map((chunk, index) => ({
-              ...chunk,
-              speaker: `Speaker ${pass.assignedSpeakerIds[index] + 1}`,
-            })),
-            diagnostics: {
-              provider: "acoustic",
-              selectedSource: candidate.source as "speech_region" | "vad_chunk" | "chunk",
-              speechSegmentCount: speechSegments.length,
-              vadWindowCount: context.vadWindows?.length ?? 0,
-              options: normalizedOptions,
-              selectedPass: attemptedPasses[attemptedPasses.length - 1],
-              attemptedPasses,
-            },
-          };
-        }
-        throw new DiarizationLowConfidenceError(
-          `Acoustic diarization low confidence (source=${candidate.source}, speakers=${pass.uniqueSpeakerCount}, avgSim=${pass.quality.avgSimilarity.toFixed(
-            4
-          )}, p90Sim=${pass.quality.p90Similarity.toFixed(4)})`,
-          {
-            attemptedPasses,
-            selectedPass: attemptedPasses[attemptedPasses.length - 1],
-          }
-        );
-      }
-
       return {
         chunks: chunks.map((chunk, index) => ({
           ...chunk,
@@ -441,35 +384,6 @@ export class DiarizationService {
           attemptedPasses,
         },
       };
-    }
-
-    if (this.shouldFallbackToSemantic(finalPass.uniqueSpeakerCount, finalPass.quality, chunks.length)) {
-      if (!normalizedOptions.semanticFallbackEnabled) {
-        return {
-          chunks: chunks.map((chunk, index) => ({
-            ...chunk,
-            speaker: `Speaker ${finalPass.assignedSpeakerIds[index] + 1}`,
-          })),
-          diagnostics: {
-            provider: "acoustic",
-            selectedSource: finalSource as "speech_region" | "vad_chunk" | "chunk",
-            speechSegmentCount: speechSegments.length,
-            vadWindowCount: context.vadWindows?.length ?? 0,
-            options: normalizedOptions,
-            selectedPass: attemptedPasses[attemptedPasses.length - 1],
-            attemptedPasses,
-          },
-        };
-      }
-      throw new DiarizationLowConfidenceError(
-        `Acoustic diarization low confidence (source=${finalSource}, speakers=${finalPass.uniqueSpeakerCount}, avgSim=${finalPass.quality.avgSimilarity.toFixed(
-          4
-        )}, p90Sim=${finalPass.quality.p90Similarity.toFixed(4)})`,
-        {
-          attemptedPasses,
-          selectedPass: attemptedPasses[attemptedPasses.length - 1],
-        }
-      );
     }
 
     return {
@@ -561,20 +475,6 @@ export class DiarizationService {
       embeddingCache.delete(key);
       throw error;
     }
-  }
-
-  private static shouldFallbackToSemantic(
-    uniqueSpeakerCount: number,
-    quality: EmbeddingQuality,
-    chunkCount: number
-  ) {
-    if (chunkCount < 4 || quality.pairCount === 0) return false;
-    if (uniqueSpeakerCount > 1 && uniqueSpeakerCount <= this.maxAssignedSpeakerCount) return false;
-    return (
-      uniqueSpeakerCount > this.maxAssignedSpeakerCount ||
-      quality.p90Similarity >= this.acousticLowConfidenceP90 ||
-      quality.avgSimilarity >= this.acousticLowConfidenceAvg
-    );
   }
 
   private static clusterWithAdaptiveThreshold(
@@ -1115,8 +1015,6 @@ export class DiarizationService {
         options?.preferVadBoundedRegions ?? scenePreset !== 'meeting',
       forceMergeTinyClustersInTwoSpeakerMode:
         options?.forceMergeTinyClustersInTwoSpeakerMode ?? (scenePreset === 'interview' || exactSpeakerCount === 2),
-      semanticFallbackEnabled:
-        options?.semanticFallbackEnabled ?? true,
     };
   }
 
@@ -1219,49 +1117,6 @@ export class DiarizationService {
     }
 
     return { start, duration: end - start };
-  }
-
-  private static async performSemanticDiarization(chunks: TranscribedChunk[]): Promise<TranscribedChunk[]> {
-    console.log(`[Diarization] Starting semantic diarization for ${chunks.length} chunks`);
-
-    const settings = await SettingsManager.getSettings({ mask: false });
-    const geminiModel = settings.translateModels.find(
-      (model) => model.name.toLowerCase().includes("gemini") || model.id.toLowerCase().includes("gemini")
-    );
-
-    if (!geminiModel?.key) {
-      console.warn("[Diarization] Gemini API key not configured. Returning chunks without speaker tags.");
-      return chunks;
-    }
-
-    const ai = new GoogleGenAI({ apiKey: geminiModel.key });
-    const textToAnalyze = chunks.map((chunk, index) => `${index}: ${chunk.text}`).join("\n");
-    const systemInstruction = [
-      "Assign speaker labels to each subtitle line.",
-      "Use compact labels such as Speaker 1, Speaker 2, Speaker 3.",
-      `Return a JSON array with exactly ${chunks.length} strings.`,
-      "Do not include explanations.",
-    ].join(" ");
-
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: `Assign speaker labels to these lines:\n${textToAnalyze}`,
-        config: { systemInstruction, temperature: 0.1 },
-      });
-
-      const speakerTags = JSON.parse(response.text.replace(/```json|```/g, "").trim());
-      if (Array.isArray(speakerTags) && speakerTags.length === chunks.length) {
-        return chunks.map((chunk, index) => ({
-          ...chunk,
-          speaker: String(speakerTags[index]),
-        }));
-      }
-    } catch (error) {
-      console.error("[Diarization] Semantic diarization failed:", error);
-    }
-
-    return chunks;
   }
 
   private static async extractAudioClip(filePath: string, start: number, duration: number): Promise<Float32Array> {
