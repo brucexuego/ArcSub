@@ -6,9 +6,55 @@ function toSingleLineText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
 }
 
-function limitText(value: string, max = 180) {
+function limitText(value: string, max = 800) {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...`;
+}
+
+function pushUniqueErrorPart(parts: string[], value: string) {
+  const normalized = value.trim();
+  if (normalized && !parts.includes(normalized)) {
+    parts.push(normalized);
+  }
+}
+
+function stringifyJsonErrorValue(value: unknown, seen = new WeakSet<object>()): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    value.forEach((item) => pushUniqueErrorPart(parts, stringifyJsonErrorValue(item, seen)));
+    return parts.join(' | ');
+  }
+  if (typeof value !== 'object') return '';
+
+  if (seen.has(value)) return '';
+  seen.add(value);
+
+  const record = value as Record<string, unknown>;
+  const parts: string[] = [];
+  [
+    'message',
+    'msg',
+    'err_msg',
+    'error_description',
+    'description',
+    'reason',
+    'detail',
+    'error',
+  ].forEach((key) => pushUniqueErrorPart(parts, stringifyJsonErrorValue(record[key], seen)));
+  ['status', 'code', 'type', 'error_code', 'err_code'].forEach((key) => {
+    const text = stringifyJsonErrorValue(record[key], seen);
+    if (text) pushUniqueErrorPart(parts, `${key}: ${text}`);
+  });
+
+  if (parts.length > 0) return parts.join(' | ');
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '';
+  }
 }
 
 export function extractErrorMessage(bodyText: string, contentType: string) {
@@ -18,13 +64,9 @@ export function extractErrorMessage(bodyText: string, contentType: string) {
   if (contentType.includes('application/json')) {
     try {
       const parsed = JSON.parse(bodyText);
-      const nestedError = parsed?.error;
-      const nestedMessage =
-        typeof nestedError === 'string'
-          ? nestedError
-          : nestedError?.message || parsed?.message || parsed?.detail;
-      if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
-        return limitText(toSingleLineText(nestedMessage));
+      const message = stringifyJsonErrorValue(parsed);
+      if (message) {
+        return limitText(toSingleLineText(message));
       }
     } catch {
       // Fall back to text body

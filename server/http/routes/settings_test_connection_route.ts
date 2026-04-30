@@ -1,5 +1,6 @@
 import express from 'express';
-import { resolveCloudAsrProvider } from '../../services/cloud_asr_provider.js';
+import { testCloudAsrConnection } from '../../services/cloud_asr/connection_probe.js';
+import { resolveCloudAsrProvider } from '../../services/cloud_asr/resolver.js';
 import type { ApiModelRequestOptions } from '../../../src/types.js';
 
 function sanitizeModelOptions(raw: unknown): ApiModelRequestOptions | undefined {
@@ -15,7 +16,6 @@ export interface SettingsTestConnectionRouteDeps {
 
 let settingsManagerTask: Promise<typeof import('../../services/settings_manager.js').SettingsManager> | null = null;
 let translationServiceTask: Promise<typeof import('../../services/translation_service.js').TranslationService> | null = null;
-let asrServiceTask: Promise<typeof import('../../services/asr_service.js').AsrService> | null = null;
 
 function getSettingsManager() {
   if (!settingsManagerTask) {
@@ -29,13 +29,6 @@ function getTranslationService() {
     translationServiceTask = import('../../services/translation_service.js').then((module) => module.TranslationService);
   }
   return translationServiceTask;
-}
-
-function getAsrService() {
-  if (!asrServiceTask) {
-    asrServiceTask = import('../../services/asr_service.js').then((module) => module.AsrService);
-  }
-  return asrServiceTask;
 }
 
 export function registerSettingsTestConnectionRoute(
@@ -130,8 +123,7 @@ export function registerSettingsTestConnectionRoute(
         });
       }
 
-      const AsrService = await getAsrService();
-      const asrConnection = await AsrService.testConnection({
+      const asrConnection = await testCloudAsrConnection({
         url: finalUrl,
         key: finalKey,
         model: finalModel,
