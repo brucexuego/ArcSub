@@ -2644,7 +2644,7 @@ const ModelItem: React.FC<{
                           if (e.target.checked) {
                             draft.translation.batching!.enabled = true;
                           } else {
-                            delete draft.translation.batching!.enabled;
+                            draft.translation.batching!.enabled = false;
                           }
                         })}
                         className="h-4 w-4 accent-primary"

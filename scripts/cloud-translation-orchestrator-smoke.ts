@@ -5,6 +5,8 @@ import {
   type CloudTranslationProviderResult,
 } from '../server/services/llm/orchestrators/cloud_translation_orchestrator.js';
 import { getCloudTranslateAdapter } from '../server/services/cloud_translate_adapter.js';
+import { resolveCloudTranslateProvider } from '../server/services/cloud_translate_provider.js';
+import { resolveCloudTranslateBatchingProfile } from '../server/services/cloud_translate/profiles/batching.js';
 
 class SmokeProviderHttpError extends Error {
   status: number;
@@ -188,6 +190,30 @@ async function assertOpenAiSseErrorFrameFails() {
   assert(failed, 'OpenAI-compatible SSE error frame was not treated as a provider error.');
 }
 
+function assertExplicitProviderBatchingFalseDisablesDefaultProfile() {
+  const modelOptions = {
+    translation: {
+      batching: {
+        enabled: false,
+      },
+    },
+  };
+  const resolvedProvider = resolveCloudTranslateProvider({
+    url: 'https://integrate.api.nvidia.com/v1',
+    modelName: 'NVIDIA hosted model',
+    model: 'deepseek-ai/deepseek-v4-pro',
+    options: modelOptions,
+  });
+  const profile = resolveCloudTranslateBatchingProfile({
+    resolvedProvider,
+    modelOptions,
+    readEnvNumber: (_name, fallback) => fallback,
+    readEnvBoolean: (_name, fallback = false) => fallback,
+    requestTimeoutMs: 300000,
+  });
+  assert(profile === null, 'Explicit translation.batching.enabled=false did not disable provider default batching.');
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -277,6 +303,7 @@ async function main() {
   assert(batched.cloudBatching?.source === 'github-models', 'provider batch source was not preserved.');
 
   await assertOpenAiSseErrorFrameFails();
+  assertExplicitProviderBatchingFalseDisablesDefaultProfile();
 
   console.log('cloud translation orchestrator smoke passed');
 }
