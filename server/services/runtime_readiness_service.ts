@@ -338,7 +338,10 @@ export class RuntimeReadinessService {
       path.join(PathManager.getModelsPath(), 'silero_vad.onnx'),
     ]);
     const tenVad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ten-vad.onnx'));
-    const speakerEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ecapa-tdnn.xml'));
+    const speakerEmbedding = await getPreferredFileReadiness([
+      path.join(PathManager.getModelsPath(), 'ecapa-tdnn.xml'),
+      path.join(PathManager.getModelsPath(), 'ecapa-tdnn.onnx'),
+    ]);
     const pyannoteSegmentation = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'segmentation', 'model.xml'));
     const pyannoteEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'embedding', 'model.xml'));
     const pyannotePlda = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'plda', 'vbx.json'));
