@@ -706,18 +706,18 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       };
     }
 
-    if (!localModelPreloadEnabled) {
+    if (!isLocalModel) {
       setModelLoadStatus('idle');
       setModelLoadError(null);
+      void releaseLocalRuntime();
       return () => {
         cancelled = true;
       };
     }
 
-    if (!isLocalModel) {
+    if (!localModelPreloadEnabled) {
       setModelLoadStatus('idle');
       setModelLoadError(null);
-      void releaseLocalRuntime();
       return () => {
         cancelled = true;
       };
