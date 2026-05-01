@@ -588,7 +588,11 @@ ensure_dotenv_file
 env_path="$resolved_env_path"
 dotenv_set "$env_path" "OPENVINO_HELPER_PYTHON" "$python_bin"
 if [[ "$skip_local_model_python" -eq 0 ]]; then
-  ensure_whisper_asr_helper_python_dependencies
+  if [[ "$preinstall_local_model_python" -eq 1 ]]; then
+    ensure_whisper_asr_helper_python_dependencies
+  elif ! ensure_whisper_asr_helper_python_dependencies; then
+    log "Whisper ASR helper Python dependency preinstall failed; continuing because local ASR helper setup is optional. Run ./deploy.sh --preinstall-local-model-python to require it."
+  fi
 else
   log "Skipping local ASR helper Python dependency preinstall."
 fi

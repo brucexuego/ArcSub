@@ -780,7 +780,16 @@ $pythonExe = Ensure-PortablePython -RootDir $scriptPath -Manifest $manifest
 Ensure-PipAvailable -PythonExe $pythonExe -RootDir $scriptPath -Manifest $manifest
 Ensure-PythonPackagingTools -PythonExe $pythonExe -RootDir $scriptPath
 if (-not $SkipLocalModelPython) {
-  Ensure-WhisperAsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
+  if ($PreinstallLocalModelPython) {
+    Ensure-WhisperAsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
+  } else {
+    try {
+      Ensure-WhisperAsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
+    } catch {
+      Write-Info "Whisper ASR helper Python dependency preinstall failed; continuing because local ASR helper setup is optional. Run deploy.ps1 -PreinstallLocalModelPython to require it."
+      Write-Info ([string]$_.Exception.Message)
+    }
+  }
 } else {
   Write-Info "Skipping local ASR helper Python dependency preinstall."
 }
