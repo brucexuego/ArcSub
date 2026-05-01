@@ -1,77 +1,41 @@
 # 快速開始
 
-ArcSub 是一套用來做以下工作的字幕工具：
+ArcSub 是一個雲端與本機並重的全流程字幕翻譯工作站。
 
-- 下載或匯入影音
-- 語音轉文字
-- 字幕翻譯
-- 檢查與匯出
+你可以用它來：
 
-## 選擇使用方式
+- 從線上連結、本機影片上傳，或既有專案準備影音素材
+- 使用雲端語音服務或本機模型將語音轉成文字
+- 使用雲端翻譯服務或本機模型翻譯字幕
+- 在影片撥放器中搭配影片觀賞翻譯後的字幕成果
 
-### 正式封包
+## 選擇工作方式
 
-Windows
+如果你已經有語音辨識與翻譯服務的 API 資訊，可以先使用雲端流程。
 
-1. 解壓正式封包
-2. 在資料夾內執行：
+如果你希望語音辨識或翻譯在自己的電腦上執行，可以到 **設定** 安裝本機 OpenVINO 模型。本機模型通常需要較大的下載空間，也會受電腦硬體影響。
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
-```
+ArcSub 也支援混合使用，例如雲端語音辨識搭配本機翻譯，或本機語音辨識搭配雲端翻譯。
 
-Linux
+## 第一次設定
 
-1. 解壓正式封包
-2. 在資料夾內執行：
+1. 開啟 **設定**。
+2. 新增至少一個雲端 ASR 模型，或安裝一個本機 ASR 模型。
+3. 新增至少一個雲端翻譯模型，或安裝一個本機翻譯模型。
+4. 在 **設定** 中拖曳模型小卡調整預設順序。排在第一個的模型會成為預設模型。
+5. 只有在使用 pyannote 語者分離，或需要授權的 Hugging Face 模型時，才需要設定 `HF_TOKEN`。
 
-```bash
-./deploy.sh
-./start.production.sh
-```
+## 一般流程
 
-### 原始碼 repo
-
-如果你是直接從這個 repo 開發：
-
-Windows
-
-```powershell
-npm install
-.\start.ps1
-```
-
-Linux
-
-```bash
-npm install
-./start.sh
-```
-
-`start.ps1` 與 `start.sh` 會先清理舊的開發程序，再啟動 `npm run dev`。
-
-## 第一次使用建議
-
-ArcSub 開啟後：
-
-1. 先進入 **Settings**
-2. 準備至少一個語音轉文字來源
-3. 準備至少一個翻譯來源
-4. 如果你要用 pyannote 語者分離或 gated/private Hugging Face 本地模型，再輸入 `HF_TOKEN`
-5. 透過 Hugging Face 模型 id 安裝需要使用的本地 ASR 或本地翻譯模型
-
-## 標準流程
-
-1. 匯入或下載影音
-2. 執行 **Speech to Text**
-3. 執行 **Text Translation**
-4. 在 **Player** 檢查
-5. 匯出字幕
+1. 建立或開啟專案。
+2. 在 **影片獲取器** 準備影音素材。
+3. 執行 **語音轉文字**。
+4. 執行 **文字精準翻譯**。
+5. 開啟 **影片撥放器** 搭配影片觀賞翻譯後的字幕。
 
 ## 下一步
 
-- [installation.md](./installation.md)
-- [usage.md](./usage.md)
-- [faq.md](./faq.md)
-- [env-configuration.md](./env-configuration.md)
+- [安裝說明](./installation.md)
+- [使用說明](./usage.md)
+- [常見問題](./faq.md)
+- [環境設定](./env-configuration.md)

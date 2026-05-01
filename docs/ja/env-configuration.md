@@ -1,49 +1,38 @@
 # 環境設定
 
-多くの利用者が気にする必要がある `.env` は少数です。
+ほとんどの設定は **設定** ページで行えます。`.env` は、起動時の値、セキュリティキー、一部の詳細な実行オプションに使います。
+
+`.env` を変更したあとは、ArcSub を再起動してください。
 
 ## よく使う項目
 
 | 変数 | 用途 |
 |---|---|
-| `HOST` | サーバーの待受アドレス |
-| `PORT` | サーバーポート |
-| `ENCRYPTION_KEY` | バックエンド暗号鍵 |
-| `HF_TOKEN` | pyannote アセットと gated/private Hugging Face モデルのダウンロードに必要 |
+| `HOST` | サーバーの待ち受けアドレス。自分のPCだけで使う場合は `127.0.0.1` のままでかまいません。 |
+| `PORT` | サーバーのポート。既定のポートが使用中の場合だけ変更します。 |
+| `ENCRYPTION_KEY` | 保存された認証情報を保護するためのキーです。通常利用の前に自分用の値を設定してください。 |
+| `HF_TOKEN` | 任意です。pyannote、またはアクセス承認が必要な Hugging Face モデルを使う場合に設定します。 |
 
-## メモ
+## ローカルモデルのオプション
 
-- `ENCRYPTION_KEY` は自分の値にしてください
-- pyannote または gated/private Hugging Face ローカルモデルを使わないなら `HF_TOKEN` は不要です
-- `.env` を変更したら ArcSub を再起動してください
+| 変数 | 用途 |
+|---|---|
+| `OPENVINO_LOCAL_MODEL_PRELOAD_ENABLED` | `1` または `true` にすると、ローカルモデルの事前読み込みを有効にします。既定ではオフで、ArcSub の起動を軽くしています。 |
+| `OPENVINO_BASELINE_DEVICE` | 共通の OpenVINO 補助モデルで使うデバイスです。環境に応じて `CPU`、`GPU`、`AUTO` などが使われます。 |
+| `PYANNOTE_DEVICE` | pyannote 話者分離で使うデバイスです。別のデバイスが利用できることを確認していない場合は `CPU` を推奨します。 |
+| `OPENVINO_QWEN3_ASR_FORCED_ALIGNER_DEVICE` | Qwen3 ASR の単語時間整列を使う場合に、整列用の補助モデルで使うデバイスです。 |
+| `TEN_VAD_PROVIDER` | Ten VAD で使う実行方式です。多くの場合は `cpu` のままで十分です。別の方式は、インストール済みの実行環境が対応している場合だけ指定してください。 |
 
-## 詳細設定
+## クラウドリクエストのオプション
 
-通常は変更不要です。
+クラウド ASR とクラウド翻訳モデルの API URL、キー、モデル名は、通常 **設定** で登録します。
 
-ローカル OpenVINO ASR は既定で `OPENVINO_ASR_TIMEOUT_MODE=auto` を使い、音声の長さ、実行デバイス、word alignment の有無から transcription timeout を見積もります。旧来の固定上限が必要な場合だけ `OPENVINO_ASR_TIMEOUT_MODE=fixed` にして `OPENVINO_ASR_TIMEOUT_MS` を使ってください。
+`TRANSLATE_CLOUD_REQUEST_TIMEOUT_MS` は、クラウド翻訳の応答を ArcSub が待つ時間を指定します。長い字幕でサービスやモデルに時間が必要な場合だけ増やしてください。
 
-## クラウド翻訳
+サービスごとの利用制限を設定する場合は、**設定** のモデルカードで行うことをおすすめします。モデルごとに別々の制限を持たせられます。
 
-クラウド翻訳リクエストのタイムアウトは `TRANSLATE_CLOUD_REQUEST_TIMEOUT_MS` で制御します。
+## 推奨事項
 
-RPM、TPM、RPD、同時実行数の制限は、設定画面の「高度なリクエストオプション」でクラウド翻訳モデルごとに個別設定することを推奨します。
-
-```json
-{
-  "translation": {
-    "quota": { "rpm": 10, "tpm": 250000, "rpd": 500, "maxConcurrency": 1 },
-    "batching": {
-      "enabled": true,
-      "targetLines": 24,
-      "minTargetLines": 6,
-      "charBudget": 2400,
-      "maxOutputTokens": 2048
-    }
-  }
-}
-```
-
-ArcSub は既定でクラウド翻訳の quota 状態を `runtime/cache` に保存し、再起動後も RPM、TPM、RPD のウィンドウを引き継ぎます。メモリ上だけで管理したい場合は `TRANSLATE_CLOUD_QUOTA_PERSIST=0` を設定してください。プロバイダーが rate-limit headers または HTTP 429 を返した場合、ArcSub はその情報を記録し、次のリクエストウィンドウを遅らせてから再試行します。
-
-`TRANSLATE_NVIDIA_CLOUD_*` は NVIDIA hosted OpenAI-compatible endpoint 向けの互換既定値として残しています。他のプロバイダーを追加する場合は、プロバイダーごとの調整が互いに影響しないよう、各モデルの `translation.batching` 設定を使うことを推奨します。
+- `.env` は公開しないでください。
+- API キー、token、ローカルマシンのパスをコミットしないでください。
+- ハードウェアと実行環境が対応していると確認できる場合以外は、詳細なデバイス設定を変更しないでください。

@@ -47,14 +47,15 @@ const releaseCopies = [
   { source: 'tools_src/export_pyannote.py', destination: 'tools_src/export_pyannote.py' },
   { source: '.env.example', destination: '.env.example' },
   { source: 'README.md', destination: 'README.md' },
+  { source: 'README.zh-TW.md', destination: 'README.zh-TW.md' },
+  { source: 'README.ja.md', destination: 'README.ja.md' },
+  { source: 'docs', destination: 'docs' },
   { source: 'collect-diagnostics.ps1', destination: 'collect-diagnostics.ps1' },
   { source: 'collect-diagnostics.sh', destination: 'collect-diagnostics.sh' },
   { source: 'deploy.ps1', destination: 'deploy.ps1' },
   { source: 'deploy.sh', destination: 'deploy.sh' },
   { source: 'start.production.ps1', destination: 'start.production.ps1' },
   { source: 'start.production.sh', destination: 'start.production.sh' },
-  { source: 'update-release.ps1', destination: 'update-release.ps1' },
-  { source: 'update-release.sh', destination: 'update-release.sh' },
   { source: 'install-linux-system-deps.sh', destination: 'install-linux-system-deps.sh' },
   { source: 'install-linux-release-deps.sh', destination: 'install-linux-release-deps.sh' },
   { source: 'scripts/preflight-linux-runtime.sh', destination: 'scripts/preflight-linux-runtime.sh' },
@@ -69,7 +70,6 @@ const linuxExecutableCopies = [
   'deploy.sh',
   'collect-diagnostics.sh',
   'start.production.sh',
-  'update-release.sh',
   'install-linux-system-deps.sh',
   'install-linux-release-deps.sh',
   'scripts/preflight-linux-runtime.sh',
@@ -174,7 +174,6 @@ async function bundleReleaseRuntime() {
       '-File',
       path.join(releaseRoot, 'deploy.ps1'),
       '-SkipBuild',
-      '-SkipSmoke',
       '-SkipPyannote',
     ]);
   } else if (target.startsWith('linux')) {
@@ -190,6 +189,9 @@ async function bundleReleaseRuntime() {
 async function main() {
   await assertExists('build/server/index.js');
   await assertExists('dist/index.html');
+  for (const entry of releaseCopies) {
+    await assertExists(entry.source);
+  }
 
   await fs.remove(releaseRoot);
   await fs.ensureDir(releaseRoot);
@@ -239,8 +241,6 @@ async function main() {
       'deploy:linux': 'bash ./deploy.sh',
       'start:prod:windows': 'powershell -ExecutionPolicy Bypass -File ./start.production.ps1',
       'start:prod:linux': 'bash ./start.production.sh',
-      'update:windows': 'powershell -ExecutionPolicy Bypass -File ./update-release.ps1',
-      'update:linux': 'bash ./update-release.sh',
     },
     dependencies: runtimeDependencies,
   };

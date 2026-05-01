@@ -5,7 +5,8 @@ import { useLanguage } from '../i18n/LanguageContext';
 import type { Language } from '../i18n/translations';
 import { isValidUrl, sanitizeInput } from '../utils/security';
 import { PROJECT_STATUS } from '../project_status';
-import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
+import RunMonitor, { type RunMonitorBadge } from './RunMonitor';
+import FieldHelp from './FieldHelp';
 
 type FetcherSourceMode = 'online' | 'upload';
 
@@ -237,7 +238,6 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
   const [downloadMsg, setDownloadMsg] = React.useState<string | null>(null);
   const [parseProgress, setParseProgress] = React.useState(0);
   const [lastSyncedProjectId, setLastSyncedProjectId] = React.useState<string | null>(null);
-  const [showStatusDetails, setShowStatusDetails] = React.useState(false);
   const videoUploadInputRef = React.useRef<HTMLInputElement | null>(null);
 
   const projectSourceMode = inferProjectSourceMode(project);
@@ -261,6 +261,10 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
     downloadMsg || ((isDownloading || isUploadingVideo)
       ? t('fetcher.downloading')
       : (downloadProgress === 100 ? t('fetcher.downloadComplete') : t('fetcher.pending')));
+  const transferStatusDetails = [downloadSpeed, downloadEta].filter(Boolean).join(' - ');
+  const downloadProgressStatusLabel = transferStatusDetails
+    ? `${downloaderStatusLabel} - ${transferStatusDetails}`
+    : downloaderStatusLabel;
   const downloaderMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
     const badges: RunMonitorBadge[] = [
       {
@@ -275,41 +279,6 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
     }
     return badges;
   }, [audioReady, onlineModeEnabled, sourceCopy.modeOnlineName, sourceCopy.modeUploadName, stepTwoReady, t, videoReady]);
-  const downloaderMonitorSections = React.useMemo<RunMonitorSection[]>(() => {
-    const sections: RunMonitorSection[] = [];
-    sections.push({
-      key: 'source',
-      title: sourceCopy.modeLabel,
-      fields: [
-        { label: sourceCopy.modeLabel, value: onlineModeEnabled ? sourceCopy.modeOnlineName : sourceCopy.modeUploadName },
-        { label: sourceCopy.workflowVideoLabel, value: uploadedFileName || sourceCopy.workflowNoVideo },
-        { label: sourceCopy.workflowAudioLabel, value: audioReady ? getFileNameFromClientPath(String(project?.audioUrl || '')) || 'audio.wav' : sourceCopy.workflowNoAudio },
-      ],
-    });
-    if (onlineModeEnabled) {
-      sections.push({
-        key: 'download',
-        title: t('fetcher.downloadProgressLabel'),
-        fields: [
-          { label: t('fetcher.parseProgress'), value: `${Math.round(parseProgress)}%` },
-          { label: t('fetcher.downloadProgressLabel'), value: `${Math.round(downloadProgress)}%` },
-          ...(downloadSpeed ? [{ label: t('fetcher.downloading'), value: downloadSpeed }] : []),
-          ...(downloadEta ? [{ label: t('fetcher.pending'), value: downloadEta }] : []),
-        ],
-      });
-    } else {
-      sections.push({
-        key: 'upload',
-        title: sourceCopy.workflowTitle,
-        fields: [
-          { label: sourceCopy.workflowVideoLabel, value: uploadedFileName || sourceCopy.workflowNoVideo },
-          { label: sourceCopy.workflowAudioLabel, value: audioReady ? getFileNameFromClientPath(String(project?.audioUrl || '')) || 'audio.wav' : sourceCopy.workflowNoAudio },
-          { label: t('fetcher.downloadProgressLabel'), value: `${Math.round(downloadProgress)}%` },
-        ],
-      });
-    }
-    return sections;
-  }, [audioReady, downloadEta, downloadProgress, downloadSpeed, onlineModeEnabled, parseProgress, project?.audioUrl, sourceCopy.modeLabel, sourceCopy.modeOnlineName, sourceCopy.modeUploadName, sourceCopy.workflowAudioLabel, sourceCopy.workflowNoAudio, sourceCopy.workflowNoVideo, sourceCopy.workflowTitle, sourceCopy.workflowVideoLabel, t, uploadedFileName]);
 
   const handleProceedToAsr = () => {
     if (!canProceedToAsr) return;
@@ -610,8 +579,14 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
             <span className="text-[11px] font-black text-primary tracking-[0.22em] uppercase">{t('fetcher.stepUrl')}</span>
             <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <label className="block text-lg font-semibold text-secondary">{sourceCopy.modeLabel}</label>
-                <p className="text-sm text-outline">{sourceCopy.modeHint}</p>
+                <div className="flex items-center gap-2">
+                  <label className="block text-lg font-semibold text-secondary">{sourceCopy.modeLabel}</label>
+                  <FieldHelp
+                    ariaLabel={t('fetcher.help.sourceModeAria')}
+                    title={sourceCopy.modeLabel}
+                    body={t('fetcher.help.sourceModeBody')}
+                  />
+                </div>
               </div>
               {project && (
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-outline">
@@ -660,8 +635,14 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
           {onlineModeEnabled && (
             <div className="space-y-3">
               <div>
-                <label className="block text-base font-semibold text-secondary">{t('fetcher.urlLabel')}</label>
-                <p className="text-sm text-outline">{t('fetcher.urlHint')}</p>
+                <div className="flex items-center gap-2">
+                  <label className="block text-base font-semibold text-secondary">{t('fetcher.urlLabel')}</label>
+                  <FieldHelp
+                    ariaLabel={t('fetcher.help.urlAria')}
+                    title={t('fetcher.help.urlTitle')}
+                    body={t('fetcher.help.urlBody')}
+                  />
+                </div>
               </div>
               <div className="flex flex-col gap-4 xl:flex-row">
                 <div className="flex-1 relative">
@@ -739,8 +720,14 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
             <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
               <div className="space-y-1">
                 <span className="text-[11px] font-black text-primary tracking-[0.22em] uppercase">{t('fetcher.stepPrepare')}</span>
-                <h3 className="text-xl font-semibold text-secondary">{t('fetcher.selectionTitle')}</h3>
-                <p className="text-sm text-outline">{t('fetcher.selectionSubtitle')}</p>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-semibold text-secondary">{t('fetcher.selectionTitle')}</h3>
+                  <FieldHelp
+                    ariaLabel={t('fetcher.help.formatAria')}
+                    title={t('fetcher.help.formatTitle')}
+                    body={t('fetcher.help.formatBody')}
+                  />
+                </div>
               </div>
               {stepTwoReady && (
                 <div className="inline-flex items-center gap-2 rounded-full border border-primary/15 bg-primary/8 px-3 py-1.5 text-[11px] font-semibold text-primary">
@@ -917,17 +904,20 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
           <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-secondary/10 blur-[100px] pointer-events-none" />
 
           <div className="relative z-10 flex items-center justify-between">
-            <div className="space-y-1">
-              <span className="text-[11px] font-black text-primary tracking-[0.22em] uppercase">{t('fetcher.stepControl')}</span>
-              <h3 className="text-lg font-semibold text-secondary">{t('fetcher.statusTitle')}</h3>
-            </div>
+            <h3 className="text-lg font-semibold text-secondary">{t('fetcher.stepControl')}</h3>
             <div className="w-2 h-2 rounded-full bg-primary animate-pulse shadow-[0_0_10px_rgba(var(--primary),0.8)]" />
           </div>
 
           <div className="relative z-10 rounded-[24px] border border-white/5 bg-white/[0.03] p-4 space-y-3">
             <div>
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-outline/65">{t('fetcher.mediaReadyTitle')}</p>
-              <p className="mt-1 text-sm text-outline">{t('fetcher.nextStepHint')}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-outline/65">{t('fetcher.mediaReadyTitle')}</p>
+                <FieldHelp
+                  ariaLabel={t('fetcher.help.readyAria')}
+                  title={t('fetcher.help.readyTitle')}
+                  body={t('fetcher.help.readyBody')}
+                />
+              </div>
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between rounded-2xl border border-white/5 bg-surface-container-high px-3 py-3">
@@ -969,16 +959,15 @@ export default function VideoDownloader({ project, onUpdateProject, onNext }: Vi
                 {
                   label: t('fetcher.downloadProgressLabel'),
                   progress: downloadProgress,
-                  status: downloaderStatusLabel,
+                  status: downloadProgressStatusLabel,
                   tone: downloadProgress >= 100 ? 'success' : 'normal',
                 },
               ]}
               message={downloaderStatusLabel}
-              detailsTitle={t('stt.statusDetails')}
-              detailsSummary={showStatusDetails ? t('stt.hideStatusDetails') : t('stt.showStatusDetails')}
-              showDetails={showStatusDetails}
-              onToggleDetails={() => setShowStatusDetails((current) => !current)}
-              sections={downloaderMonitorSections}
+              detailsTitle=""
+              showDetails={false}
+              onToggleDetails={() => undefined}
+              sections={[]}
             />
           </div>
 

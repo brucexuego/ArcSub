@@ -705,6 +705,7 @@ export class VadService {
     const windowSizeRaw = Math.round(this.getEnvNumber("TEN_VAD_WINDOW_SIZE", 256, 160, 512));
     // TEN_VAD_* values are optional overrides; otherwise Ten follows shared VAD_* semantics.
     return {
+      provider: String(process.env.TEN_VAD_PROVIDER || "cpu").trim() || "cpu",
       windowSize: windowSizeRaw,
       threshold: this.getEnvNumber("TEN_VAD_THRESHOLD", baseConfig.startThreshold, 0.05, 0.95),
       minSilenceDuration: this.getEnvNumber(
@@ -778,7 +779,7 @@ export class VadService {
       },
       sampleRate: this.sampleRate,
       numThreads: 1,
-      provider: "cpu",
+      provider: tenConfig.provider,
       debug: 0,
       bufferSizeInSeconds: Math.max(30, Math.ceil(totalSec) + 1),
     });

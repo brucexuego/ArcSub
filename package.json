@@ -1,7 +1,7 @@
 {
   "name": "arcsub",
   "private": true,
-  "version": "0.9.1",
+  "version": "0.9.2",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -28,7 +28,7 @@
     "package:windows": "npm run -s build:prod && node ./scripts/package-windows-release.mjs",
     "package:windows:archive": "npm run -s package:windows && npm run -s archive:windows",
     "package:release": "npm run -s build:prod && node ./scripts/package-release.mjs",
-    "package:release:archive": "npm run -s package:release && npm run -s archive:release",
+    "package:release:archive": "npm run -s package:all:archive",
     "package:all:archive": "npm run -s package:windows:archive && npm run -s package:linux:archive",
     "release:checksums": "node ./scripts/generate-release-checksums.mjs",
     "preview": "vite preview",

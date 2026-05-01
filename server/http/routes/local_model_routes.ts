@@ -132,6 +132,21 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
     }
   });
 
+  app.post('/api/local-models/reorder', async (req, res) => {
+    try {
+      const LocalModelService = await getLocalModelService();
+      const rawType = typeof req.body?.type === 'string' ? req.body.type.trim() : '';
+      if (rawType !== 'asr' && rawType !== 'translate') {
+        return res.status(400).json({ error: 'type must be asr or translate.' });
+      }
+      const orderedIds = Array.isArray(req.body?.orderedIds) ? req.body.orderedIds : [];
+      const data = await LocalModelService.reorderModels(rawType, orderedIds);
+      return res.json(data);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message || 'Failed to reorder local models.' });
+    }
+  });
+
   app.post('/api/local-models/inspect', async (req, res) => {
     try {
       const LocalModelService = await getLocalModelService();
@@ -262,6 +277,17 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
   app.post('/api/local-models/preload', async (req, res) => {
     try {
       const LocalModelService = await getLocalModelService();
+      if (!LocalModelService.isLocalModelPreloadEnabled()) {
+        return res.status(403).json({
+          error:
+            'Local model preload is disabled. Set OPENVINO_LOCAL_MODEL_PRELOAD_ENABLED=1 and restart ArcSub to enable it.',
+          code: 'LOCAL_MODEL_PRELOAD_DISABLED',
+          features: {
+            localModelPreloadEnabled: false,
+          },
+        });
+      }
+
       const rawTarget = typeof req.body?.target === 'string' ? req.body.target.trim() : '';
       if (rawTarget !== 'translate') {
         return res.status(400).json({ error: 'target must be translate.' });

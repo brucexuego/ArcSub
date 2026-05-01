@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { ArrowRight, Download, Loader2, Play, CheckCircle2, FolderOpen, FileText, Upload, Square, X } from 'lucide-react';
+import { ArrowRight, Download, Loader2, Play, CheckCircle2, FolderOpen, FileText, Upload, Square, X, Cloud, HardDrive } from 'lucide-react';
 import { Project, ApiConfig, Material } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
@@ -13,6 +13,7 @@ import { PROJECT_STATUS } from '../project_status';
 import { postJson } from '../utils/http_client';
 import SubtitleRowsEditor from './SubtitleRowsEditor';
 import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
+import FieldHelp from './FieldHelp';
 import {
   EditableSubtitleRow,
   hasStrictBracketTimecodes,
@@ -34,6 +35,38 @@ interface TextTranslationProps {
   onNext: () => void;
   onBack: () => void;
   onTaskLockChange?: (locked: boolean) => void;
+}
+
+interface HelpLabelProps {
+  label: string;
+  ariaLabel: string;
+  title: string;
+  body: string;
+  className?: string;
+}
+
+function HelpLabel({ label, ariaLabel, title, body, className = '' }: HelpLabelProps) {
+  return (
+    <div className={`flex min-w-0 items-center gap-2 ${className}`}>
+      <span className="min-w-0">{label}</span>
+      <FieldHelp ariaLabel={ariaLabel} title={title} body={body} />
+    </div>
+  );
+}
+
+function isLocalRuntimeModel(model: ApiConfig | null | undefined) {
+  return Boolean(model?.isLocal || model?.provider === 'local-openvino' || String(model?.url || '').startsWith('local://'));
+}
+
+function getRuntimeModelDisplayName(model: ApiConfig) {
+  return String(model?.name || '').replace(/\s+\((?:OpenVINO\s+)?Local\)$/i, '').trim() || model.id;
+}
+
+interface RuntimeModelsResponse {
+  translateModels?: ApiConfig[];
+  features?: {
+    localModelPreloadEnabled?: boolean;
+  };
 }
 
 type PromptTemplateId = TranslationPromptTemplateId;
@@ -503,6 +536,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const [translatedLines, setTranslatedLines] = React.useState<Array<{ original: string; translated: string }>>([]);
   const [translateModels, setTranslateModels] = React.useState<ApiConfig[]>([]);
   const [selectedModelId, setSelectedModelId] = React.useState('');
+  const [localModelPreloadEnabled, setLocalModelPreloadEnabled] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [translateMsg, setTranslateMsg] = React.useState<string | null>(null);
   const [pipelineMode, setPipelineMode] = React.useState<string | null>(null);
@@ -543,6 +577,18 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     () => translateModels.find((model) => model.id === selectedModelId) || null,
     [translateModels, selectedModelId]
   );
+  const cloudTranslateModels = React.useMemo(
+    () => translateModels.filter((model) => !isLocalRuntimeModel(model)),
+    [translateModels]
+  );
+  const localTranslateModels = React.useMemo(
+    () => translateModels.filter(isLocalRuntimeModel),
+    [translateModels]
+  );
+  const selectedModelIsLocal = selectedTranslateModel ? isLocalRuntimeModel(selectedTranslateModel) : false;
+  const selectedModelSourceLabel = selectedTranslateModel
+    ? (selectedModelIsLocal ? t('translation.localModelGroup') : t('translation.cloudModelGroup'))
+    : t('translation.noModelsConfigured');
   const translateGemmaPromptControlsDisabled = isTranslateGemmaModel(selectedTranslateModel);
   const transcriptionSourceLanguage = React.useMemo(
     () => normalizeTranscriptionSourceLanguage(project?.transcriptionSourceLanguage),
@@ -609,7 +655,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     fetch('/api/runtime-models')
       .then((res) => res.json())
       .then((data) => {
-        const models = (data.translateModels || []) as ApiConfig[];
+        const payload = data as RuntimeModelsResponse;
+        const models = payload.translateModels || [];
+        setLocalModelPreloadEnabled(Boolean(payload.features?.localModelPreloadEnabled));
         setTranslateModels(models);
         if (models.length > 0) {
           setSelectedModelId(models[0].id);
@@ -618,11 +666,12 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         } else {
           setSelectedModelId('');
           setModelLoadStatus('failed');
-          setModelLoadError(t('stt.noModels'));
+          setModelLoadError(t('translation.noModelsConfigured'));
         }
       })
       .catch((err) => {
         console.error('Failed to load translation models', err);
+        setLocalModelPreloadEnabled(false);
         setModelLoadStatus('failed');
         setModelLoadError(t('settings.testFailed'));
       });
@@ -666,6 +715,14 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       };
     }
 
+    if (!localModelPreloadEnabled) {
+      setModelLoadStatus('idle');
+      setModelLoadError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setModelLoadStatus('loading');
     setModelLoadError(null);
 
@@ -691,7 +748,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     return () => {
       cancelled = true;
     };
-  }, [selectedTranslateModel, isTranslating, releaseLocalRuntime, t]);
+  }, [selectedTranslateModel, isTranslating, localModelPreloadEnabled, releaseLocalRuntime, t]);
 
   const handleNextStep = async () => {
     await releaseLocalRuntime();
@@ -1519,7 +1576,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
     if (!selectedModelId) {
       setModelLoadStatus('failed');
-      setModelLoadError(t('stt.noModels'));
+      setModelLoadError(t('translation.noModelsConfigured'));
       return;
     }
 
@@ -2366,10 +2423,15 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
         <div className="xl:col-span-4 space-y-5">
           <section className="bg-surface-container p-6 rounded-2xl border border-white/5 space-y-5">
-            <h3 className="text-sm font-bold text-primary uppercase tracking-widest">{t('translation.config')}</h3>
+            <HelpLabel
+              label={t('translation.config')}
+              ariaLabel={t('translation.help.configAria')}
+              title={t('translation.config')}
+              body={t('translation.help.configBody')}
+              className="text-sm font-bold text-primary uppercase tracking-widest"
+            />
 
             <div>
-              <label className="block text-xs font-bold text-outline mb-3 uppercase tracking-widest">{t('translation.sourceText')}</label>
               <div className="grid grid-cols-2 gap-3 p-1.5 bg-surface-container-lowest rounded-xl">
                 <button
                   onClick={() => {
@@ -2412,7 +2474,60 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-outline mb-3 uppercase tracking-widest">{t('translation.modelSelection')}</label>
+              <HelpLabel
+                label={t('translation.modelSelection')}
+                ariaLabel={t('translation.help.modelAria')}
+                title={t('translation.modelSelection')}
+                body={t('translation.help.modelBody')}
+                className="mb-3 text-xs font-bold text-outline uppercase tracking-widest"
+              />
+              <div className={`mb-3 flex flex-col gap-3 rounded-xl border p-3 ${
+                selectedTranslateModel
+                  ? selectedModelIsLocal
+                    ? 'border-tertiary/15 bg-tertiary/[0.06]'
+                    : 'border-primary-container/20 bg-primary-container/[0.08]'
+                  : 'border-white/5 bg-surface-container-lowest'
+              }`}>
+                <div className="flex min-w-0 items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                      selectedTranslateModel
+                        ? selectedModelIsLocal
+                          ? 'border-tertiary/20 bg-tertiary/10 text-tertiary'
+                          : 'border-primary-container/25 bg-primary-container/15 text-primary'
+                        : 'border-white/8 bg-white/[0.03] text-outline'
+                    }`}>
+                      {selectedTranslateModel ? (
+                        selectedModelIsLocal ? <HardDrive className="h-4 w-4" /> : <Cloud className="h-4 w-4" />
+                      ) : (
+                        <FileText className="h-4 w-4" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-outline/70">{t('translation.currentModelSource')}</div>
+                      <div className={`text-base font-black leading-tight ${
+                        selectedTranslateModel
+                          ? selectedModelIsLocal
+                            ? 'text-tertiary'
+                            : 'text-primary'
+                          : 'text-outline'
+                      }`}>
+                        {selectedModelSourceLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="hidden shrink-0 items-center gap-2 sm:flex">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary-container/15 bg-primary-container/10 px-2.5 py-1 text-[10px] font-bold text-primary">
+                      <Cloud className="h-3 w-3" />
+                      {t('translation.cloudModelShort')} {cloudTranslateModels.length}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-tertiary/15 bg-tertiary/10 px-2.5 py-1 text-[10px] font-bold text-tertiary">
+                      <HardDrive className="h-3 w-3" />
+                      {t('translation.localModelShort')} {localTranslateModels.length}
+                    </span>
+                  </div>
+                </div>
+              </div>
               <select
                 value={selectedModelId}
                 onChange={(e) => {
@@ -2420,19 +2535,50 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                   setModelLoadStatus('idle');
                   setModelLoadError(null);
                 }}
-                className="w-full bg-surface-container-high border border-white/10 rounded-xl px-5 py-3.5 text-sm text-white focus:ring-2 focus:ring-primary-container outline-none appearance-none"
+                disabled={translateModels.length === 0}
+                className="w-full bg-surface-container-high border border-white/10 rounded-xl px-5 py-3.5 text-sm text-white focus:ring-2 focus:ring-primary-container outline-none appearance-none disabled:cursor-not-allowed disabled:opacity-60 [&>option]:bg-surface-container-high [&>option]:text-white"
               >
-                {translateModels.length === 0 && <option value="">{t('stt.noModels')}</option>}
-                {translateModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                  </option>
-                ))}
+                {translateModels.length === 0 && <option value="">{t('translation.noModelsConfigured')}</option>}
+                <optgroup label={`${t('translation.cloudModelGroup')} (${cloudTranslateModels.length})`}>
+                  {cloudTranslateModels.length > 0 ? (
+                    cloudTranslateModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {getRuntimeModelDisplayName(model)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="__cloud_empty" disabled>
+                      {t('translation.noCloudModels')}
+                    </option>
+                  )}
+                </optgroup>
+                <optgroup label={`${t('translation.localModelGroup')} (${localTranslateModels.length})`}>
+                  {localTranslateModels.length > 0 ? (
+                    localTranslateModels.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {getRuntimeModelDisplayName(model)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="__local_empty" disabled>
+                      {t('translation.noLocalModels')}
+                    </option>
+                  )}
+                </optgroup>
               </select>
+              {translateModels.length === 0 && (
+                <p className="mt-3 text-xs leading-5 text-outline/72">{t('translation.noModelsHint')}</p>
+              )}
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-outline mb-3 uppercase tracking-widest">{t('translation.targetLanguage')}</label>
+              <HelpLabel
+                label={t('translation.targetLanguage')}
+                ariaLabel={t('translation.help.targetLanguageAria')}
+                title={t('translation.targetLanguage')}
+                body={t('translation.help.targetLanguageBody')}
+                className="mb-3 text-xs font-bold text-outline uppercase tracking-widest"
+              />
               <select
                 value={targetLang}
                 onChange={(e) => setTargetLang(e.target.value)}
@@ -2460,29 +2606,42 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
               )}
             </div>
 
-            <div className="space-y-3">
-              <label className="block text-xs font-bold text-outline uppercase tracking-widest">{t('translation.promptLabel')}</label>
-              <div className="rounded-xl border border-white/10 bg-surface-container-lowest/70 px-4 py-3 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-[11px] font-bold text-secondary leading-5">{t('translation.strictJsonRepairToggle')}</div>
-                  <div className="mt-1 text-[11px] leading-5 text-outline/72">{t('translation.strictJsonRepairHint')}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setStrictJsonLineRepairEnabled((prev) => !prev)}
-                  className="inline-flex shrink-0 items-center gap-2 text-[11px] text-outline hover:text-white transition-colors"
+            <div className="rounded-xl border border-white/10 bg-surface-container-lowest/70 px-4 py-3 flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <HelpLabel
+                  label={t('translation.strictJsonRepairToggle')}
+                  ariaLabel={t('translation.help.alignmentRepairAria')}
                   title={t('translation.strictJsonRepairToggle')}
-                  aria-pressed={strictJsonLineRepairEnabled}
+                  body={t('translation.help.alignmentRepairBody')}
+                  className="text-[11px] font-bold text-secondary leading-5"
+                />
+                <div className="mt-1 text-[11px] leading-5 text-outline/72">{t('translation.strictJsonRepairHint')}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setStrictJsonLineRepairEnabled((prev) => !prev)}
+                className="inline-flex shrink-0 items-center gap-2 text-[11px] text-outline hover:text-white transition-colors"
+                title={t('translation.strictJsonRepairToggle')}
+                aria-pressed={strictJsonLineRepairEnabled}
+              >
+                <span
+                  className={`w-9 h-5 rounded-full transition-colors ${strictJsonLineRepairEnabled ? 'bg-primary' : 'bg-white/20'}`}
                 >
                   <span
-                    className={`w-9 h-5 rounded-full transition-colors ${strictJsonLineRepairEnabled ? 'bg-primary' : 'bg-white/20'}`}
-                  >
-                    <span
-                      className={`block w-4 h-4 rounded-full bg-white mt-0.5 transition-transform ${strictJsonLineRepairEnabled ? 'translate-x-4' : 'translate-x-0.5'}`}
-                    />
-                  </span>
-                </button>
-              </div>
+                    className={`block w-4 h-4 rounded-full bg-white mt-0.5 transition-transform ${strictJsonLineRepairEnabled ? 'translate-x-4' : 'translate-x-0.5'}`}
+                  />
+                </span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <HelpLabel
+                label={t('translation.promptTemplateLabel')}
+                ariaLabel={t('translation.help.promptTemplateAria')}
+                title={t('translation.promptTemplateLabel')}
+                body={t('translation.help.promptTemplateBody')}
+                className="text-xs font-bold text-outline uppercase tracking-widest"
+              />
               <select
                 value={translateGemmaPromptControlsDisabled ? '__translategemma_official__' : selectedPromptTemplateId}
                 onChange={(e) => handleSelectPromptTemplate(e.target.value as PromptTemplateId)}
@@ -2499,6 +2658,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                   ))
                 )}
               </select>
+              <HelpLabel
+                label={t('translation.promptLabel')}
+                ariaLabel={t('translation.help.promptAria')}
+                title={t('translation.promptLabel')}
+                body={t('translation.help.promptBody')}
+                className="text-xs font-bold text-outline uppercase tracking-widest"
+              />
               <textarea
                 value={translateGemmaPromptControlsDisabled ? '' : promptText}
                 onChange={(e) => setPromptText(e.target.value)}
@@ -2512,7 +2678,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                     : t('translation.promptPlaceholder')
                 }
               />
-              <div className="text-[11px] font-bold text-secondary">{t('translation.glossary')}</div>
+              <HelpLabel
+                label={t('translation.glossary')}
+                ariaLabel={t('translation.help.glossaryAria')}
+                title={t('translation.glossary')}
+                body={t('translation.help.glossaryBody')}
+                className="text-xs font-bold text-outline uppercase tracking-widest"
+              />
               <textarea
                 value={translateGemmaPromptControlsDisabled ? '' : glossaryText}
                 onChange={(e) => setGlossaryText(e.target.value)}

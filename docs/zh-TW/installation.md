@@ -1,66 +1,57 @@
-# 安裝
+# 安裝說明
 
-本頁主要針對 packaged release 的一般使用方式。
+ArcSub 可以從封裝好的版本使用，也可以從原始碼啟動。
 
-## 下載
+多數使用者建議使用封裝版本，因為它已經包含一般使用需要的應用程式檔案與啟動腳本。
 
-如果這個 repository 已經發布安裝包，請先到 [Releases](../../releases/latest) 下載。
+## 封裝版本
 
-目前 `v0.9.1` 的資產：
+1. 下載符合你作業系統的發行檔。
+2. 解壓縮到路徑較短的資料夾。
+3. 啟動 ArcSub：
+   - Windows：執行 `start.ps1`
+   - Linux 或 macOS：執行 `start.sh`
+4. 開啟終端機中顯示的網址。
 
-- `ArcSub-v0.9.1-windows-x64.zip`
-- `ArcSub-v0.9.1-linux-x64.tar.gz`
+如果你要使用本機 OpenVINO 模型，可以之後再到 **設定** 安裝。雲端 ASR 與雲端翻譯模型可以直接在 **設定** 中設定，不需要先安裝本機模型。
 
-## 建議平台
+## 從原始碼啟動
 
-- Windows
-- Linux
+先安裝 Node.js，然後執行：
 
-## Windows
-
-1. 解壓 packaged folder
-2. 在該資料夾中開啟 PowerShell
-3. 執行：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
+```bash
+npm install
+npm run dev
 ```
 
-`deploy.ps1` 會準備 runtime、工具與 baseline assets。
+開發伺服器啟動後，終端機會顯示本機網址。
 
-## Linux
+## 自行建立封裝版本
 
-1. 解壓 packaged folder
-2. 在該資料夾中開啟 terminal
-3. 執行：
+Windows：
+
+```powershell
+.\deploy.ps1
+```
+
+Linux 或 macOS：
 
 ```bash
 ./deploy.sh
-./start.production.sh
 ```
 
-`deploy.sh` 會準備 runtime、工具與 baseline assets。
+部署腳本會準備封裝版本需要的應用程式元件。
 
-## 注意事項
+## 選用的模型存取權限
 
-- source repository 不包含本地 runtime 資料、已下載模型與個人 `.env`
-- 即使尚未安裝 OpenVINO，ArcSub 仍可啟動
-- 若沒有 OpenVINO，本地模型安裝功能不可用，但雲端路徑仍可使用
-- 本地 ASR 與本地翻譯模型會在之後從 **Settings** 透過 Hugging Face 模型 id 安裝
-- 大型本地模型的下載與轉換會以背景安裝任務繼續進行，並在 **Settings** 顯示狀態
-- `HF_TOKEN` 會用於 pyannote 與 gated/private Hugging Face 模型下載
+只有在下列情況才需要設定 `HF_TOKEN`：
 
-## 從原始碼開發
+- 使用 pyannote 語者分離
+- 使用需要申請存取權限的 Hugging Face 模型
+- 使用私有 Hugging Face 模型
 
-如果你是從 source repository 開發，請改用 dev startup helpers：
+公開的 Hugging Face 模型通常不需要 token。
 
-```powershell
-npm install
-.\start.ps1
-```
+## 不會放進原始碼的內容
 
-```bash
-npm install
-./start.sh
-```
+專案產生的資料、下載的影音檔、已安裝的模型、個人 API 金鑰與本機 `.env` 機密，都不應放進原始碼版本控制。

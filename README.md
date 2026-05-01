@@ -1,6 +1,6 @@
 # ArcSub
 
-ArcSub is a local-first subtitle workstation for downloading media, converting speech to text, translating subtitles, reviewing results, and exporting finished subtitles.
+ArcSub is an end-to-end subtitle translation workstation that treats cloud services and local OpenVINO models as equal first-class paths. It covers media intake, speech to text, subtitle translation, and watching the finished subtitles with the video.
 
 ## Languages
 
@@ -26,26 +26,21 @@ Video Fetcher: parse source metadata, select downloadable formats, and prepare a
 
 ![ArcSub speech to text workflow](./docs/assets/screenshots/speech-to-text-overview.png)
 
-Speech to Text: choose a recognition model, configure advanced features, and generate transcript output.
+Speech to Text: choose a cloud or local recognition model, configure advanced features, and generate transcript output.
 
 ![ArcSub text translation workflow](./docs/assets/screenshots/text-translation-overview.png)
 
-Text Translation: configure model and language options, then review side-by-side source and translated subtitles.
+Text Translation: choose a cloud or local translation model, configure language options, and compare source and translated subtitles.
 
 ![ArcSub video player workflow](./docs/assets/screenshots/video-player-overview.png)
 
-Video Player: preview final subtitles on video and fine-tune subtitle styling before export.
+Video Player: watch the finished subtitles with the video and fine-tune subtitle styling for the viewing page.
 
 ## Quick Paths
 
 ### Downloads
 
-When packaged assets are published for this repository, download them from [Releases](../../releases/latest).
-
-Current `v0.9.1` assets:
-
-- `ArcSub-v0.9.1-windows-x64.zip`
-- `ArcSub-v0.9.1-linux-x64.tar.gz`
+When packaged assets are published for this repository, download the latest archive for your operating system from [Releases](../../releases/latest).
 
 ### Packaged Release
 
@@ -91,18 +86,19 @@ It does not include:
 ## Main Capabilities
 
 - import local media or download online media
-- run speech to text with local models or cloud services
+- run speech to text with cloud ASR services or local OpenVINO ASR models
 - use word alignment, VAD, and diarization-related helpers
-- translate subtitles with local models or cloud services
-- review and export results in the player
+- translate subtitles with cloud translation services or local OpenVINO translation models
+- watch subtitle results with the video and tune styling for the viewing page
 
-## Local Models
+## Cloud and Local Models
 
-ArcSub supports local models, but installation is split into stages:
+ArcSub is designed to let each project choose the most practical model path across cloud services and local OpenVINO runtimes:
 
-- deploy prepares tools and baseline assets
-- local ASR and local translation models are installed later from `Settings`
-- pyannote requires a Hugging Face token, but missing it does not block startup
+- cloud ASR and translation models are configured in `Settings` with API endpoints, keys, and provider options
+- local ASR and local translation models are installed from `Settings` and run through the bundled OpenVINO runtime path
+- model order in `Settings` controls the default model shown in Speech to Text and Text Translation
+- pyannote speaker diarization uses Hugging Face assets when enabled; a missing token does not block normal startup or cloud workflows
 
 ## More Documents
 

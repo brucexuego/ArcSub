@@ -28,20 +28,41 @@ export class SettingsManager {
   private static normalizeLocalModels(input: any): LocalModelSelection {
     const defaults = getDefaultLocalModelSelection();
     const current = input || {};
+    const installed = Array.isArray(current.installed)
+      ? current.installed
+          .map((item: any) => sanitizeLocalModelDefinition(item))
+          .filter(Boolean)
+      : defaults.installed;
+    const getValidSelection = (type: 'asr' | 'translate', selectedId: unknown) => {
+      const normalizedId = String(selectedId || '').trim();
+      if (!normalizedId) return '';
+      return installed.some((item: any) => item?.type === type && item?.id === normalizedId) ? normalizedId : '';
+    };
+    const firstAsr = installed.find((item: any) => item?.type === 'asr');
+    const firstTranslate = installed.find((item: any) => item?.type === 'translate');
+    const asrSelectedId = getValidSelection('asr', current.asrSelectedId) || firstAsr?.id || defaults.asrSelectedId;
+    const translateSelectedId =
+      getValidSelection('translate', current.translateSelectedId) || firstTranslate?.id || defaults.translateSelectedId;
+    const moveSelectedToTypeFront = (models: NonNullable<typeof installed>, type: 'asr' | 'translate', selectedId: string) => {
+      if (!selectedId) return models;
+      const index = models.findIndex((item: any) => item?.type === type && item?.id === selectedId);
+      if (index <= 0) return models;
+      const next = [...models];
+      const [selected] = next.splice(index, 1);
+      const insertAt = next.findIndex((item: any) => item?.type === type);
+      next.splice(insertAt >= 0 ? insertAt : 0, 0, selected);
+      return next;
+    };
+    const orderedInstalled = moveSelectedToTypeFront(
+      moveSelectedToTypeFront(installed, 'asr', asrSelectedId),
+      'translate',
+      translateSelectedId
+    );
+
     return {
-      asrSelectedId:
-        typeof current.asrSelectedId === 'string' && current.asrSelectedId.trim()
-          ? current.asrSelectedId.trim()
-          : defaults.asrSelectedId,
-      translateSelectedId:
-        typeof current.translateSelectedId === 'string' && current.translateSelectedId.trim()
-          ? current.translateSelectedId.trim()
-          : defaults.translateSelectedId,
-      installed: Array.isArray(current.installed)
-        ? current.installed
-            .map((item: any) => sanitizeLocalModelDefinition(item))
-            .filter(Boolean)
-        : defaults.installed,
+      asrSelectedId,
+      translateSelectedId,
+      installed: orderedInstalled,
     };
   }
 

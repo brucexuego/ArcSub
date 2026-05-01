@@ -135,9 +135,9 @@ function Ensure-PyannoteDeployment([string]$RootDir, [string]$NodeExe, [string]$
       }
     }
 
-    Write-Host "[ArcSub] Pyannote needs a Hugging Face access token for gated assets." -ForegroundColor Yellow
-    Write-Host "[ArcSub] Approve the pyannote model access on Hugging Face first, then paste HF_TOKEN." -ForegroundColor DarkYellow
-    $tokenInput = (Read-PlainSecret -Prompt "HF_TOKEN (leave blank to skip pyannote for now)").Trim()
+    Write-Host "[ArcSub] HF_TOKEN is optional and is used for Pyannote assets plus Hugging Face models that require approval, login, or private access." -ForegroundColor Yellow
+    Write-Host "[ArcSub] Accept the pyannote model access on Hugging Face before installing Pyannote assets. The same token is saved for later local-model downloads." -ForegroundColor DarkYellow
+    $tokenInput = (Read-PlainSecret -Prompt "HF_TOKEN (leave blank to skip Pyannote asset install for now)").Trim()
     if ([string]::IsNullOrWhiteSpace($tokenInput)) {
       Write-Info "Skipping pyannote installation."
       Remove-Item Env:HF_TOKEN -ErrorAction SilentlyContinue
@@ -172,10 +172,12 @@ function Ensure-DotEnvFile([string]$WorkspaceRoot) {
   }
 
   $currentKey = Get-DotEnvValue -Path $envPath -Key "ENCRYPTION_KEY"
-  if ($currentKey -notmatch "^[0-9a-fA-F]{64}$") {
+  if ([string]::IsNullOrWhiteSpace($currentKey) -or $currentKey -eq "replace_with_random_64_hex") {
     $newKey = New-RandomHex 32
     Set-DotEnvValue -Path $envPath -Key "ENCRYPTION_KEY" -Value $newKey
     Write-Info "Generated a fresh ENCRYPTION_KEY in .env"
+  } elseif ($currentKey -notmatch "^[0-9a-fA-F]{64}$") {
+    Write-Info "Keeping existing custom ENCRYPTION_KEY in .env"
   }
 
   return $envPath
