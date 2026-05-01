@@ -1,66 +1,57 @@
 # インストール
 
-このページは主に packaged release を使う通常利用向けです。
+ArcSub は、パッケージ版から使うことも、ソースコードから起動することもできます。
 
-## ダウンロード
+通常の利用では、必要なアプリファイルと起動スクリプトが含まれているパッケージ版をおすすめします。
 
-この repository で release asset が公開されている場合は、まず [Releases](../../releases/latest) から取得してください。
+## パッケージ版
 
-現在の `v0.9.1` アセット：
+1. 利用するOSに合ったリリースアーカイブをダウンロードします。
+2. 短めのパスのフォルダに展開します。
+3. ArcSub を起動します。
+   - Windows: `start.ps1` を実行
+   - Linux または macOS: `start.sh` を実行
+4. ターミナルに表示されたURLを開きます。
 
-- `ArcSub-v0.9.1-windows-x64.zip`
-- `ArcSub-v0.9.1-linux-x64.tar.gz`
+ローカル OpenVINO モデルを使う場合は、あとから **設定** でインストールできます。クラウド ASR とクラウド翻訳モデルは、ローカルモデルを先に入れなくても **設定** で登録できます。
 
-## 推奨プラットフォーム
+## ソースコードから起動
 
-- Windows
-- Linux
+Node.js をインストールしてから、次を実行します。
 
-## Windows
-
-1. packaged folder を展開
-2. そのフォルダで PowerShell を開く
-3. 次を実行：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
+```bash
+npm install
+npm run dev
 ```
 
-`deploy.ps1` は runtime、ツール、baseline assets を準備します。
+開発サーバーが起動すると、ターミナルにローカルURLが表示されます。
 
-## Linux
+## リリースをローカルで作成する
 
-1. packaged folder を展開
-2. そのフォルダで terminal を開く
-3. 次を実行：
+Windows:
+
+```powershell
+.\deploy.ps1
+```
+
+Linux または macOS:
 
 ```bash
 ./deploy.sh
-./start.production.sh
 ```
 
-`deploy.sh` は runtime、ツール、baseline assets を準備します。
+デプロイスクリプトは、パッケージ版に必要なアプリ構成を準備します。
 
-## 注意
+## 任意のモデルアクセス
 
-- source repository にはローカル runtime データ、ダウンロード済みモデル、個人用 `.env` は含まれません
-- OpenVINO が未導入でも ArcSub は起動できます
-- OpenVINO がない場合、ローカルモデル導入は使えませんが、クラウド経路は利用できます
-- ローカル ASR とローカル翻訳モデルは後から **Settings** で Hugging Face モデル id から導入します
-- 大きなローカルモデルのダウンロードや変換はバックグラウンドインストールタスクとして継続され、**Settings** に状態が表示されます
-- `HF_TOKEN` は pyannote と gated/private Hugging Face モデルのダウンロードで使われます
+`HF_TOKEN` が必要になるのは、主に次の場合です。
 
-## ソースから開発する場合
+- pyannote 話者分離を使う
+- アクセス承認が必要な Hugging Face モデルを使う
+- 非公開の Hugging Face モデルを使う
 
-source repository で作業する場合は、dev startup helpers を使ってください：
+公開モデルでは通常 token は不要です。
 
-```powershell
-npm install
-.\start.ps1
-```
+## ソース管理に含めないもの
 
-```bash
-npm install
-./start.sh
-```
+生成されたプロジェクトデータ、ダウンロードしたメディア、インストール済みモデル、個人の API キー、ローカル `.env` の秘密情報は、ソース管理に含めないでください。

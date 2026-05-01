@@ -1,66 +1,57 @@
 # Installation
 
-This page is mainly for normal packaged use.
+ArcSub can be used from a packaged release or from source.
 
-## Download
+For most users, the packaged release is recommended because it includes the application files and startup scripts needed for normal use.
 
-If release assets are available for this repository, start from [Releases](../../releases/latest).
+## Packaged Release
 
-Current `v0.9.1` assets:
+1. Download the release archive for your operating system.
+2. Extract it to a folder with a short path.
+3. Start ArcSub:
+   - Windows: run `start.ps1`
+   - Linux or macOS: run `start.sh`
+4. Open the URL shown in the terminal.
 
-- `ArcSub-v0.9.1-windows-x64.zip`
-- `ArcSub-v0.9.1-linux-x64.tar.gz`
+If you plan to use local OpenVINO models, install them later from **Settings**. Cloud ASR and cloud translation models can be configured in **Settings** without installing local models.
 
-## Recommended Platform
+## Run from Source
 
-- Windows
-- Linux
+Install Node.js, then run:
 
-## Windows
-
-1. Extract the packaged folder
-2. Open PowerShell in that folder
-3. Run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.production.ps1
+```bash
+npm install
+npm run dev
 ```
 
-`deploy.ps1` prepares the runtime, tools, and baseline assets.
+The development server prints the local URL after it starts.
 
-## Linux
+## Build a Release Locally
 
-1. Extract the packaged folder
-2. Open a terminal in that folder
-3. Run:
+Windows:
+
+```powershell
+.\deploy.ps1
+```
+
+Linux or macOS:
 
 ```bash
 ./deploy.sh
-./start.production.sh
 ```
 
-`deploy.sh` prepares the runtime, tools, and baseline assets.
+The deploy script prepares the application components needed by the packaged release.
 
-## Notes
+## Optional Model Access
 
-- The source repository does not ship local runtime data, downloaded models, or personal `.env` values
-- ArcSub can start even if OpenVINO is not installed
-- without OpenVINO, local-model install is unavailable, but cloud usage can still work
-- local ASR and local translation models are installed later from **Settings** by Hugging Face model id
-- long local-model downloads/conversions continue as background install tasks and show status in **Settings**
-- `HF_TOKEN` is used for pyannote and gated/private Hugging Face model downloads
+Set `HF_TOKEN` only when you need:
 
-## Source Development
+- pyannote speaker diarization
+- a Hugging Face model that requires access approval
+- a private Hugging Face model
 
-If you are working from the source repository, use the dev startup helpers instead:
+Public Hugging Face models usually do not need a token.
 
-```powershell
-npm install
-.\start.ps1
-```
+## What Is Not Included in Source Control
 
-```bash
-npm install
-./start.sh
-```
+The repository does not include generated project data, downloaded media, installed models, personal API keys, or local `.env` secrets.

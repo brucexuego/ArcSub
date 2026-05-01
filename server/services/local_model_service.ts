@@ -65,6 +65,16 @@ interface LocalModelMetadataInspection {
   metadataPath?: string | null;
 }
 
+const LOCAL_MODEL_PRELOAD_ENV_KEY = 'OPENVINO_LOCAL_MODEL_PRELOAD_ENABLED';
+
+function readEnvBoolean(key: string, fallback: boolean) {
+  const raw = String(process.env[key] || '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
 export class LocalModelService {
   private static readonly HF_BASE = 'https://huggingface.co';
   private static readonly OVERVIEW_CACHE_MS = 1500;
@@ -951,20 +961,12 @@ export class LocalModelService {
     availableModels: LocalModelDefinition[]
   ) {
     const defaults = getDefaultLocalModelSelection();
-    const current = settings?.localModels || defaults;
     const asrModels = availableModels.filter((model) => model.type === 'asr');
     const translateModels = availableModels.filter((model) => model.type === 'translate');
 
     return {
-      asrSelectedId:
-        typeof current.asrSelectedId === 'string' && asrModels.some((model) => model.id === current.asrSelectedId)
-          ? current.asrSelectedId
-          : asrModels[0]?.id || defaults.asrSelectedId,
-      translateSelectedId:
-        typeof current.translateSelectedId === 'string' &&
-        translateModels.some((model) => model.id === current.translateSelectedId)
-          ? current.translateSelectedId
-          : translateModels[0]?.id || defaults.translateSelectedId,
+      asrSelectedId: asrModels[0]?.id || defaults.asrSelectedId,
+      translateSelectedId: translateModels[0]?.id || defaults.translateSelectedId,
     };
   }
 
@@ -1019,7 +1021,7 @@ export class LocalModelService {
     }));
 
     return {
-      catalog: this.sortOverviewEntries(entries, selection),
+      catalog: entries,
       selection,
       installs: this.getInstallStatusList(),
     };
@@ -1037,6 +1039,16 @@ export class LocalModelService {
     if (selectionOverrides?.translateSelectedId) {
       localModels.translateSelectedId = selectionOverrides.translateSelectedId;
     }
+    const moveSelectedToFront = (type: LocalModelType, selectedId?: string) => {
+      if (!selectedId) return;
+      const index = localModels.installed.findIndex((model) => model.type === type && model.id === selectedId);
+      if (index <= 0) return;
+      const [selected] = localModels.installed.splice(index, 1);
+      const insertAt = localModels.installed.findIndex((model) => model.type === type);
+      localModels.installed.splice(insertAt >= 0 ? insertAt : 0, 0, selected);
+    };
+    moveSelectedToFront('asr', localModels.asrSelectedId);
+    moveSelectedToFront('translate', localModels.translateSelectedId);
     await SettingsManager.updateSettings({ localModels });
   }
 
@@ -1069,12 +1081,51 @@ export class LocalModelService {
     }
 
     const currentState = this.buildLocalModelState(settings, installedModels);
+    const selectedIndex = currentState.installed.findIndex((item) => item.type === type && item.id === modelId);
+    if (selectedIndex > 0) {
+      const [selected] = currentState.installed.splice(selectedIndex, 1);
+      const insertAt = currentState.installed.findIndex((item) => item.type === type);
+      currentState.installed.splice(insertAt >= 0 ? insertAt : 0, 0, selected);
+    }
     const nextState =
       type === 'asr'
         ? { ...currentState, asrSelectedId: modelId }
         : { ...currentState, translateSelectedId: modelId };
 
     await SettingsManager.updateSettings({ localModels: nextState });
+    this.invalidateOverviewCache();
+    return this.getLocalModelsOverview({ forceFresh: true });
+  }
+
+  static async reorderModels(type: LocalModelType, orderedIds: string[]) {
+    const settings = await SettingsManager.getSettings({ mask: false });
+    const installedModels = await this.resolveInstalledModels(settings);
+    const typeModels = installedModels.filter((item) => item.type === type);
+    const availableIds = new Set(typeModels.map((item) => item.id));
+    const cleanOrderedIds = orderedIds
+      .map((id) => String(id || '').trim())
+      .filter((id, index, list) => id && availableIds.has(id) && list.indexOf(id) === index);
+
+    if (cleanOrderedIds.length === 0) {
+      throw new Error('orderedIds must contain at least one installed local model id for this type.');
+    }
+
+    const byId = new Map(typeModels.map((item) => [item.id, item]));
+    const reorderedTypeModels = [
+      ...cleanOrderedIds.map((id) => byId.get(id)).filter(Boolean),
+      ...typeModels.filter((item) => !cleanOrderedIds.includes(item.id)),
+    ] as LocalModelDefinition[];
+    const otherModels = installedModels.filter((item) => item.type !== type);
+    const nextInstalled =
+      type === 'asr'
+        ? [...reorderedTypeModels, ...otherModels]
+        : [...otherModels, ...reorderedTypeModels];
+
+    await this.persistInstalledModels(settings, nextInstalled, {
+      asrSelectedId: type === 'asr' ? reorderedTypeModels[0]?.id : undefined,
+      translateSelectedId: type === 'translate' ? reorderedTypeModels[0]?.id : undefined,
+    });
+
     this.invalidateOverviewCache();
     return this.getLocalModelsOverview({ forceFresh: true });
   }
@@ -1299,20 +1350,13 @@ export class LocalModelService {
     const asrModels = Array.isArray(settings.asrModels) ? [...settings.asrModels] : [];
     const translateModels = Array.isArray(settings.translateModels) ? [...settings.translateModels] : [];
 
-    const localAsrModels = installedLocalModels
-      .filter((model) => model.type === 'asr')
-      .sort((a, b) => {
-        const aSelected = a.id === selection.asrSelectedId ? 0 : 1;
-        const bSelected = b.id === selection.asrSelectedId ? 0 : 1;
-        if (aSelected !== bSelected) return aSelected - bSelected;
-        return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' });
-      });
+    const localAsrModels = installedLocalModels.filter((model) => model.type === 'asr');
 
     for (const local of localAsrModels) {
       if (asrModels.some((model: any) => model?.id === local.id)) continue;
       asrModels.push({
         id: local.id,
-        name: `${local.displayName} (Local)`,
+        name: local.displayName,
         url: 'local://openvino/asr',
         key: '',
         model: local.repoId,
@@ -1321,20 +1365,13 @@ export class LocalModelService {
       });
     }
 
-    const localTranslateModels = installedLocalModels
-      .filter((model) => model.type === 'translate')
-      .sort((a, b) => {
-        const aSelected = a.id === selection.translateSelectedId ? 0 : 1;
-        const bSelected = b.id === selection.translateSelectedId ? 0 : 1;
-        if (aSelected !== bSelected) return aSelected - bSelected;
-        return a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' });
-      });
+    const localTranslateModels = installedLocalModels.filter((model) => model.type === 'translate');
 
     for (const local of localTranslateModels) {
       if (translateModels.some((model: any) => model?.id === local.id)) continue;
       translateModels.push({
         id: local.id,
-        name: `${local.displayName} (OpenVINO Local)`,
+        name: local.displayName,
         url: 'local://openvino/translate',
         key: '',
         model: local.repoId,
@@ -1347,7 +1384,14 @@ export class LocalModelService {
       asrModels,
       translateModels,
       localSelection: selection,
+      features: {
+        localModelPreloadEnabled: this.isLocalModelPreloadEnabled(),
+      },
     };
+  }
+
+  static isLocalModelPreloadEnabled() {
+    return readEnvBoolean(LOCAL_MODEL_PRELOAD_ENV_KEY, false);
   }
 
   static async getOpenvinoStatus() {
@@ -1427,6 +1471,12 @@ export class LocalModelService {
   }
 
   static async preloadLocalRuntime(target: 'asr' | 'translate', modelId: string) {
+    if (!this.isLocalModelPreloadEnabled()) {
+      throw new Error(
+        `Local model preload is disabled. Set ${LOCAL_MODEL_PRELOAD_ENV_KEY}=1 and restart ArcSub to enable it.`
+      );
+    }
+
     const settings = await SettingsManager.getSettings({ mask: false });
     const localModel = await this.resolveLocalModelForRequest(target, modelId, settings);
     if (!localModel) {

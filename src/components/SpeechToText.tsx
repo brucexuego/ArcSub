@@ -1,5 +1,5 @@
 ﻿import React from 'react';
-import { Mic, Upload, FolderOpen, Play, Download, CheckCircle2, Loader2, ArrowRight, Music, Square, ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Mic, Upload, FolderOpen, Play, Download, CheckCircle2, Loader2, ArrowRight, Music, Square, ChevronDown, ChevronUp, X, Cloud, HardDrive } from 'lucide-react';
 import { Project } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { Language } from '../i18n/translations';
@@ -8,6 +8,7 @@ import { PROJECT_STATUS } from '../project_status';
 import { getJson, HttpRequestError, postJson } from '../utils/http_client';
 import SubtitleRowsEditor from './SubtitleRowsEditor';
 import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
+import FieldHelp from './FieldHelp';
 import {
   EditableSubtitleRow,
   subtitleRowsFromText,
@@ -27,6 +28,70 @@ interface SpeechToTextProps {
 type DiarizationMode = 'auto' | 'fixed' | 'range' | 'many';
 type DiarizationScenePreset = 'interview' | 'podcast' | 'meeting' | 'presentation_qa' | 'custom';
 type DiarizationProvider = 'classic' | 'pyannote';
+
+interface FeatureOptionHeaderProps {
+  label: string;
+  term: string;
+  helpAriaLabel: string;
+  helpTitle: string;
+  helpBody: string;
+}
+
+function FeatureOptionHeader({ label, term, helpAriaLabel, helpTitle, helpBody }: FeatureOptionHeaderProps) {
+  return (
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_1.5rem] items-start gap-2">
+      <div className="min-w-0 space-y-1">
+        <div className="min-h-[2.25rem] text-sm font-bold leading-snug text-secondary [overflow-wrap:normal] [word-break:normal]">
+          {label}
+        </div>
+        <div
+          title={term}
+          className="inline-flex max-w-full overflow-hidden rounded-full border border-white/8 bg-white/[0.04] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-outline"
+        >
+          <span className="block min-w-0 truncate whitespace-nowrap">{term}</span>
+        </div>
+      </div>
+      <FieldHelp
+        ariaLabel={helpAriaLabel}
+        title={helpTitle}
+        body={helpBody}
+      />
+    </div>
+  );
+}
+
+interface HelpLabelProps {
+  label: string;
+  ariaLabel: string;
+  title: string;
+  body: string;
+  className?: string;
+}
+
+function HelpLabel({ label, ariaLabel, title, body, className = '' }: HelpLabelProps) {
+  return (
+    <div className={`flex min-w-0 items-center gap-2 ${className}`}>
+      <span className="min-w-0">{label}</span>
+      <FieldHelp ariaLabel={ariaLabel} title={title} body={body} />
+    </div>
+  );
+}
+
+interface RuntimeAsrModel {
+  id: string;
+  name?: string;
+  isLocal?: boolean;
+  provider?: string;
+  url?: string;
+}
+
+function isLocalRuntimeModel(model: RuntimeAsrModel) {
+  return Boolean(model?.isLocal || model?.provider === 'local-openvino' || String(model?.url || '').startsWith('local://'));
+}
+
+function getRuntimeModelDisplayName(model: RuntimeAsrModel) {
+  return String(model?.name || '').replace(/\s+\((?:OpenVINO\s+)?Local\)$/i, '').trim() || model.id;
+}
 
 interface DiarizationDiagnostics {
   provider: 'acoustic' | 'provider_native';
@@ -104,6 +169,16 @@ function getDiarizationCopy(language: Language) {
       providerLabel: '分離引擎',
       sceneLabel: '場景預設',
       advancedLabel: '進階約束',
+      providerHelpAria: '顯示分離引擎說明',
+      providerHelp: '選擇語者分離的執行方式。經典聲學分離會使用目前音訊、VAD 區段與聲學特徵在本機流程中分群，適合不想額外安裝 Pyannote 的情境。Pyannote 會使用 Hugging Face 授權模型產生 turn segments，通常較適合正式多人語音，但需要 HF_TOKEN、模型授權與額外安裝時間；選用 Pyannote 時，下方經典聲學分離專用約束會停用。',
+      modeHelpAria: '顯示語者模式說明',
+      modeHelp: '控制系統預期要分出幾位語者。自動會依內容估計；固定人數會強制朝指定人數靠攏，適合已知雙人訪談；範圍人數會限制最少與最多語者；多人模式會放寬限制，適合會議。若選擇非自訂場景，這個欄位會由場景預設管理。',
+      sceneHelpAria: '顯示場景預設說明',
+      sceneHelp: '場景預設會一次套用語者模式、人數範圍與進階約束。訪談偏向穩定雙人；Podcast 偏向 2 到 4 人；會議允許更多語者與短插話；演講 + Q&A 會保留主講者穩定但允許問答插話。要手動調整時請改選其他 / 自訂。',
+      speakerCountHelpAria: '顯示語者數設定說明',
+      speakerCountHelp: '固定語者數會把分離結果推向指定人數，適合你已確定音檔中有幾位說話者時使用。範圍人數會提供上下限，讓系統在限制內選擇較合理的分群。數字設太低可能合併不同人，設太高可能把同一人切成多位。',
+      advancedHelpAria: '顯示進階約束說明',
+      advancedHelp: '這些選項只影響經典聲學分離，用來調整分群後的平滑與合併策略。場景預設會自動帶入建議值；只有其他 / 自訂能手動調整。若使用 Pyannote，系統會採用 Pyannote 的 turn segments，這些約束不會套用。',
       providerClassic: '經典聲學分離',
       providerPyannote: 'Pyannote',
       auto: '自動',
@@ -122,9 +197,15 @@ function getDiarizationCopy(language: Language) {
       customSceneHint: '切換到其他 / 自訂後，才可手動調整語者模式與數量。',
       classicOnlyHint: '下列進階約束目前只作用於經典聲學分離；選擇 Pyannote 時會停用。',
       preferStablePrimary: '偏好主講者穩定',
+      preferStablePrimaryHelpAria: '顯示偏好主講者穩定說明',
+      preferStablePrimaryHelp: '會讓系統在分群評分與平滑時偏向維持主要說話者連續，減少主講者被切成多個 speaker label。適合訪談、Podcast、演講等一位或兩位主要說話者的內容；若是多人會議，可能會讓短暫發言較容易被合併。',
       allowShortInterjection: '允許短暫插話獨立成新語者',
+      allowShortInterjectionHelpAria: '顯示短暫插話設定說明',
+      allowShortInterjectionHelp: '啟用後，短句、附和、插話比較有機會保留為獨立語者。適合會議或多人討論；若是雙人訪談或主持人主導的內容，關閉通常能減少雜訊造成的假語者。',
       preferVadBounded: '優先使用 VAD 收緊語音區段',
       forceMergeTiny: '雙人模式強制合併小群',
+      forceMergeTinyHelpAria: '顯示雙人模式合併小群說明',
+      forceMergeTinyHelp: '當目標接近雙人且分群結果多出很小的第三群時，會嘗試把小群合併回最接近的兩位語者。適合雙人訪談或對談；若內容確實有第三位短暫說話者，請在自訂模式關閉此選項。',
       diagnostics: '語者分離診斷',
       provider: '執行方式',
       source: '實際來源',
@@ -146,6 +227,16 @@ function getDiarizationCopy(language: Language) {
       providerLabel: '分离引擎',
       sceneLabel: '场景预设',
       advancedLabel: '高级约束',
+      providerHelpAria: '显示分离引擎说明',
+      providerHelp: '选择说话人分离的执行方式。经典声学分离会使用当前音频、VAD 区段与声学特征在本地流程中聚类，适合不想额外安装 Pyannote 的情况。Pyannote 会使用 Hugging Face 授权模型生成 turn segments，通常更适合正式多人语音，但需要 HF_TOKEN、模型授权与额外安装时间；选择 Pyannote 时，下方经典声学分离专用约束会停用。',
+      modeHelpAria: '显示说话人模式说明',
+      modeHelp: '控制系统预期要分出几位说话人。自动会依内容估计；固定人数会强制朝指定人数靠拢，适合已知双人访谈；范围人数会限制最少与最多说话人；多人模式会放宽限制，适合会议。若选择非自定义场景，这个字段会由场景预设管理。',
+      sceneHelpAria: '显示场景预设说明',
+      sceneHelp: '场景预设会一次套用说话人模式、人数范围与高级约束。访谈偏向稳定双人；Podcast 偏向 2 到 4 人；会议允许更多说话人与短插话；演讲 + Q&A 会保留主讲者稳定但允许问答插话。要手动调整时请改选其他 / 自定义。',
+      speakerCountHelpAria: '显示说话人数设置说明',
+      speakerCountHelp: '固定说话人数会把分离结果推向指定人数，适合你已确定音频中有几位说话人时使用。范围人数会提供上下限，让系统在限制内选择较合理的聚类。数字设太低可能合并不同人，设太高可能把同一人切成多位。',
+      advancedHelpAria: '显示高级约束说明',
+      advancedHelp: '这些选项只影响经典声学分离，用来调整聚类后的平滑与合并策略。场景预设会自动带入建议值；只有其他 / 自定义能手动调整。若使用 Pyannote，系统会采用 Pyannote 的 turn segments，这些约束不会套用。',
       providerClassic: '经典声学分离',
       providerPyannote: 'Pyannote',
       auto: '自动',
@@ -164,9 +255,15 @@ function getDiarizationCopy(language: Language) {
       customSceneHint: '切换到其他 / 自定义后，才可手动调整说话人模式与数量。',
       classicOnlyHint: '下列高级约束目前只作用于经典声学分离；选择 Pyannote 时会停用。',
       preferStablePrimary: '偏好主讲者稳定',
+      preferStablePrimaryHelpAria: '显示偏好主讲者稳定说明',
+      preferStablePrimaryHelp: '会让系统在聚类评分与平滑时偏向维持主要说话人连续，减少主讲者被切成多个 speaker label。适合访谈、Podcast、演讲等一位或两位主要说话人的内容；若是多人会议，可能会让短暂发言较容易被合并。',
       allowShortInterjection: '允许短暂插话独立成新说话人',
+      allowShortInterjectionHelpAria: '显示短暂插话设置说明',
+      allowShortInterjectionHelp: '启用后，短句、附和、插话比较有机会保留为独立说话人。适合会议或多人讨论；若是双人访谈或主持人主导的内容，关闭通常能减少噪声造成的假说话人。',
       preferVadBounded: '优先使用 VAD 收紧语音区段',
       forceMergeTiny: '双人模式强制合并小群',
+      forceMergeTinyHelpAria: '显示双人模式合并小群说明',
+      forceMergeTinyHelp: '当目标接近双人且聚类结果多出很小的第三群时，会尝试把小群合并回最接近的两位说话人。适合双人访谈或对谈；若内容确实有第三位短暂说话人，请在自定义模式关闭此选项。',
       diagnostics: '语者分离诊断',
       provider: '执行方式',
       source: '实际来源',
@@ -188,6 +285,16 @@ function getDiarizationCopy(language: Language) {
       providerLabel: 'Engine',
       sceneLabel: 'Scene Preset',
       advancedLabel: 'Advanced Constraints',
+      providerHelpAria: 'Show engine help',
+      providerHelp: 'Choose how speaker diarization runs. Classic Acoustic uses the current audio, VAD speech regions, and acoustic features to cluster speakers in the local flow, so it works without installing Pyannote. Pyannote uses Hugging Face licensed models to produce turn segments and can be better for formal multi-speaker audio, but it needs HF_TOKEN, model access, and extra setup time. Classic-only constraints are disabled when Pyannote is selected.',
+      modeHelpAria: 'Show speaker mode help',
+      modeHelp: 'Controls how many speakers the system should look for. Auto estimates from the content. Fixed Count pushes the result toward a known number, such as a two-person interview. Range sets minimum and maximum speakers. Many Speakers relaxes the limits for meetings. Non-custom scene presets manage this field automatically.',
+      sceneHelpAria: 'Show scene preset help',
+      sceneHelp: 'Scene presets apply the speaker mode, count range, and advanced constraints together. Interview favors a stable two-person result. Podcast favors 2 to 4 speakers. Meeting allows more speakers and short interjections. Presentation + Q&A keeps the main speaker stable while allowing audience turns. Use Other / Custom when you want manual control.',
+      speakerCountHelpAria: 'Show speaker count help',
+      speakerCountHelp: 'Exact Speaker Count pushes diarization toward the specified number and is useful when you already know how many people speak. Range gives the system lower and upper bounds. Too low can merge different people; too high can split the same person into multiple labels.',
+      advancedHelpAria: 'Show advanced constraints help',
+      advancedHelp: 'These options affect only Classic Acoustic diarization. They tune smoothing and merge behavior after clustering. Scene presets fill in recommended values automatically; manual editing is available only in Other / Custom. Pyannote uses its own turn segments, so these constraints do not apply.',
       providerClassic: 'Classic Acoustic',
       providerPyannote: 'Pyannote',
       auto: 'Auto',
@@ -206,9 +313,15 @@ function getDiarizationCopy(language: Language) {
       customSceneHint: 'Switch to Other / Custom to edit speaker mode and count manually.',
       classicOnlyHint: 'The advanced constraints below currently affect only Classic Acoustic; they are disabled for Pyannote.',
       preferStablePrimary: 'Prefer stable primary speaker',
+      preferStablePrimaryHelpAria: 'Show stable primary speaker help',
+      preferStablePrimaryHelp: 'Biases scoring and smoothing toward keeping the main speaker continuous, reducing cases where the main speaker is split into multiple speaker labels. Useful for interviews, podcasts, and presentations with one or two dominant speakers. In meetings, it may merge brief comments into a nearby dominant speaker.',
       allowShortInterjection: 'Allow short interjections as separate speakers',
+      allowShortInterjectionHelpAria: 'Show short interjection help',
+      allowShortInterjectionHelp: 'When enabled, short replies, backchannels, or interruptions are more likely to remain separate speaker turns. Useful for meetings and group discussion. For two-person interviews or host-led content, leaving it off usually reduces false speaker labels from noise.',
       preferVadBounded: 'Prefer VAD-bounded speech regions',
       forceMergeTiny: 'Force tiny-cluster merge in 2-speaker mode',
+      forceMergeTinyHelpAria: 'Show tiny-cluster merge help',
+      forceMergeTinyHelp: 'When the target is close to two speakers and clustering produces a tiny third cluster, the system tries to merge that small cluster back into the closest two speakers. Useful for two-person interviews. Disable it in Custom mode if a real third person speaks briefly.',
       diagnostics: 'Diarization Diagnostics',
       provider: 'Provider',
       source: 'Selected Source',
@@ -230,6 +343,16 @@ function getDiarizationCopy(language: Language) {
       providerLabel: '分離エンジン',
       sceneLabel: 'シーンプリセット',
       advancedLabel: '詳細制約',
+      providerHelpAria: '分離エンジンの説明を表示',
+      providerHelp: '話者分離の実行方式を選びます。従来の音響分離は、現在の音声、VAD の発話区間、音響特徴を使ってローカル処理で話者をクラスタリングします。Pyannote は Hugging Face のライセンス済みモデルで turn segments を生成し、多人数音声で有効な場合がありますが、HF_TOKEN、モデル利用許可、追加セットアップ時間が必要です。Pyannote 選択時は従来の音響分離専用の詳細制約は無効になります。',
+      modeHelpAria: '話者モードの説明を表示',
+      modeHelp: 'システムが何人の話者を想定するかを指定します。自動は内容から推定します。固定人数は既知の人数に寄せるため、2人の対談などに向いています。人数レンジは最小と最大を指定します。多人数モードは会議向けに制限を緩めます。カスタム以外のシーンでは、この項目はプリセットが管理します。',
+      sceneHelpAria: 'シーンプリセットの説明を表示',
+      sceneHelp: 'シーンプリセットは、話者モード、人数範囲、詳細制約をまとめて設定します。対談は安定した2人構成、Podcast は 2 から 4 人、会議は多人数と短い割り込み、講演 + Q&A は主話者を安定させつつ質問者の発話を許可します。手動調整する場合は その他 / カスタム を選んでください。',
+      speakerCountHelpAria: '話者数設定の説明を表示',
+      speakerCountHelp: '固定話者数は結果を指定人数に寄せます。話者数が分かっている場合に有効です。人数レンジは下限と上限を与え、その範囲内で妥当なクラスタを選ばせます。少なすぎると別人が結合され、多すぎると同一人物が複数ラベルに分割されることがあります。',
+      advancedHelpAria: '詳細制約の説明を表示',
+      advancedHelp: 'これらは従来の音響分離にのみ作用し、クラスタリング後の平滑化と結合方法を調整します。シーンプリセットでは推奨値が自動設定され、手動変更は その他 / カスタム でのみ可能です。Pyannote は独自の turn segments を使うため、この制約は適用されません。',
       providerClassic: '従来の音響分離',
       providerPyannote: 'Pyannote',
       auto: '自動',
@@ -248,9 +371,15 @@ function getDiarizationCopy(language: Language) {
       customSceneHint: '話者モードと人数を手動で調整するには、その他 / カスタムに切り替えてください。',
       classicOnlyHint: '以下の詳細制約は現在、従来の音響分離にのみ作用します。Pyannote では無効になります。',
       preferStablePrimary: '主話者の安定性を優先',
+      preferStablePrimaryHelpAria: '主話者の安定性の説明を表示',
+      preferStablePrimaryHelp: '主要な話者が連続して保たれるよう、クラスタ評価と平滑化を調整します。主話者が複数の speaker label に分裂するのを減らします。インタビュー、Podcast、講演など一人または二人が中心の内容に向いています。会議では短い発話が主話者に結合されやすくなる場合があります。',
       allowShortInterjection: '短い割り込みを別話者として許可',
+      allowShortInterjectionHelpAria: '短い割り込み設定の説明を表示',
+      allowShortInterjectionHelp: '有効にすると、短い返答、相づち、割り込みが独立した話者ターンとして残りやすくなります。会議やグループ討論に向いています。2人の対談や司会者中心の内容では、無効の方がノイズ由来の誤ラベルを減らしやすくなります。',
       preferVadBounded: 'VADで絞った音声区間を優先',
       forceMergeTiny: '2人モードで小クラスタを強制統合',
+      forceMergeTinyHelpAria: '小クラスタ統合の説明を表示',
+      forceMergeTinyHelp: '2人に近い設定で、ごく小さい第3クラスタが出た場合、その小クラスタを最も近い2人へ統合しようとします。2人の対談に有効です。実際に短く話す3人目がいる場合は、カスタムモードで無効にしてください。',
       diagnostics: '話者分離診断',
       provider: '方式',
       source: '実際の入力',
@@ -272,6 +401,16 @@ function getDiarizationCopy(language: Language) {
       providerLabel: 'Engine',
       sceneLabel: 'Szenenvorgabe',
       advancedLabel: 'Erweiterte Regeln',
+      providerHelpAria: 'Hilfe zum Engine anzeigen',
+      providerHelp: 'Waehlt, wie die Sprechertrennung ausgefuehrt wird. Klassisch akustisch nutzt das aktuelle Audio, VAD-Sprachbereiche und akustische Merkmale, um Sprecher im lokalen Ablauf zu clustern. Pyannote nutzt lizenzierte Hugging-Face-Modelle fuer turn segments und kann fuer formelle Mehrsprecheraufnahmen besser sein, benoetigt aber HF_TOKEN, Modellzugriff und zusaetzliche Einrichtung. Bei Pyannote sind die klassischen Zusatzregeln deaktiviert.',
+      modeHelpAria: 'Hilfe zum Sprechermodus anzeigen',
+      modeHelp: 'Legt fest, wie viele Sprecher das System erwarten soll. Automatisch schaetzt aus dem Inhalt. Feste Anzahl drueckt das Ergebnis auf eine bekannte Zahl, etwa ein Zwei-Personen-Interview. Bereich setzt Minimum und Maximum. Viele Sprecher lockert die Grenzen fuer Meetings. Nicht-benutzerdefinierte Szenenvorgaben verwalten dieses Feld automatisch.',
+      sceneHelpAria: 'Hilfe zur Szenenvorgabe anzeigen',
+      sceneHelp: 'Szenenvorgaben setzen Sprechermodus, Anzahlbereich und erweiterte Regeln gemeinsam. Interview bevorzugt stabile zwei Sprecher. Podcast bevorzugt 2 bis 4 Sprecher. Meeting erlaubt mehr Sprecher und kurze Einwuerfe. Vortrag + Q&A haelt den Hauptsprecher stabil und erlaubt Fragen. Fuer manuelle Kontrolle Andere / Benutzerdefiniert waehlen.',
+      speakerCountHelpAria: 'Hilfe zur Sprecherzahl anzeigen',
+      speakerCountHelp: 'Exakte Sprecherzahl drueckt die Diarisierung auf die angegebene Anzahl und ist nuetzlich, wenn die Anzahl bekannt ist. Bereich gibt Unter- und Obergrenzen vor. Zu niedrig kann verschiedene Personen zusammenlegen; zu hoch kann dieselbe Person in mehrere Labels aufteilen.',
+      advancedHelpAria: 'Hilfe zu erweiterten Regeln anzeigen',
+      advancedHelp: 'Diese Optionen wirken nur auf Klassisch akustisch. Sie steuern Glaettung und Zusammenfuehrung nach dem Clustering. Szenenvorgaben setzen empfohlene Werte automatisch; manuelle Bearbeitung ist nur unter Andere / Benutzerdefiniert moeglich. Pyannote nutzt eigene turn segments, daher gelten diese Regeln dort nicht.',
       providerClassic: 'Klassisch akustisch',
       providerPyannote: 'Pyannote',
       auto: 'Automatisch',
@@ -290,9 +429,15 @@ function getDiarizationCopy(language: Language) {
       customSceneHint: 'Wechseln Sie zu Andere / Benutzerdefiniert, um Sprechermodus und Anzahl manuell zu aendern.',
       classicOnlyHint: 'Die folgenden erweiterten Regeln wirken derzeit nur auf Klassisch akustisch; fuer Pyannote sind sie deaktiviert.',
       preferStablePrimary: 'Stabilen Hauptsprecher bevorzugen',
+      preferStablePrimaryHelpAria: 'Hilfe zum stabilen Hauptsprecher anzeigen',
+      preferStablePrimaryHelp: 'Bevorzugt beim Scoring und Glaetten einen durchgehenden Hauptsprecher und reduziert, dass der Hauptsprecher in mehrere speaker labels aufgeteilt wird. Sinnvoll fuer Interviews, Podcasts und Vortraege mit einem oder zwei dominanten Sprechern. In Meetings koennen kurze Kommentare leichter zusammengefuehrt werden.',
       allowShortInterjection: 'Kurze Einwürfe als eigene Sprecher erlauben',
+      allowShortInterjectionHelpAria: 'Hilfe zu kurzen Einwuerfen anzeigen',
+      allowShortInterjectionHelp: 'Wenn aktiviert, bleiben kurze Antworten, Rueckmeldungen oder Unterbrechungen eher als eigene Sprecherwechsel erhalten. Sinnvoll fuer Meetings und Gruppendiskussionen. Bei Zwei-Personen-Interviews oder moderierten Inhalten reduziert Deaktivieren meist falsche Sprecherlabels durch Rauschen.',
       preferVadBounded: 'VAD-begrenzte Sprachsegmente bevorzugen',
       forceMergeTiny: 'Tiny-Cluster im 2-Sprecher-Modus zusammenführen',
+      forceMergeTinyHelpAria: 'Hilfe zum Zusammenfuehren kleiner Cluster anzeigen',
+      forceMergeTinyHelp: 'Wenn das Ziel nahe bei zwei Sprechern liegt und das Clustering einen sehr kleinen dritten Cluster erzeugt, versucht das System, diesen Cluster in die naechsten zwei Sprecher zurueckzufuehren. Sinnvoll fuer Zwei-Personen-Interviews. Deaktivieren Sie es im benutzerdefinierten Modus, wenn tatsaechlich kurz eine dritte Person spricht.',
       diagnostics: 'Diarisierungsdiagnose',
       provider: 'Verfahren',
       source: 'Gewählte Quelle',
@@ -493,7 +638,7 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     }
   };
 
-  const [asrModels, setAsrModels] = React.useState<any[]>([]);
+  const [asrModels, setAsrModels] = React.useState<RuntimeAsrModel[]>([]);
   const [selectedModelId, setSelectedModelId] = React.useState<string>('');
   const [selectedLanguage, setSelectedLanguage] = React.useState<string>('auto');
   const [modelLoadStatus, setModelLoadStatus] = React.useState<'idle' | 'loading' | 'ok' | 'failed'>('idle');
@@ -552,15 +697,18 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     fetch('/api/runtime-models')
       .then(res => res.json())
       .then(data => {
-        if (data.asrModels && data.asrModels.length > 0) {
-          setAsrModels(data.asrModels);
+        const models = Array.isArray(data.asrModels) ? data.asrModels : [];
+        if (models.length > 0) {
+          setAsrModels(models);
           // If the currently selected model isn't in the new list, select the first one
           setSelectedModelId((prev) => (
-            data.asrModels.find((m: any) => m.id === prev) ? prev : data.asrModels[0].id
+            models.find((m: RuntimeAsrModel) => m.id === prev) ? prev : models[0].id
           ));
           setModelLoadStatus('idle');
           setModelLoadError(null);
         } else {
+          setAsrModels([]);
+          setSelectedModelId('');
           setModelLoadStatus('failed');
           setModelLoadError(t('stt.noModels'));
         }
@@ -1790,7 +1938,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
   const hasSourceReady = sourceType === 'online'
     ? Boolean(project?.audioUrl || project?.videoUrl)
     : Boolean(selectedAssetName);
-  const selectedModelName = asrModels.find((model) => model.id === selectedModelId)?.name || t('stt.noModels');
+  const cloudAsrModels = asrModels.filter((model) => !isLocalRuntimeModel(model));
+  const localAsrModels = asrModels.filter(isLocalRuntimeModel);
+  const selectedAsrModel = asrModels.find((model) => model.id === selectedModelId) || null;
+  const selectedModelIsLocal = selectedAsrModel ? isLocalRuntimeModel(selectedAsrModel) : false;
+  const selectedModelSourceLabel = selectedAsrModel
+    ? (selectedModelIsLocal ? t('stt.localModelGroup') : t('stt.cloudModelGroup'))
+    : t('stt.noModelsConfigured');
   const selectedLanguageLabelMap: Record<string, string> = {
     en: t('lang.en'),
     zh: t('lang.zh-audio'),
@@ -1843,8 +1997,12 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                   <h3 className="text-sm font-bold text-primary uppercase tracking-widest flex items-center gap-2">
                     <Mic className="w-4 h-4" />
                     {t('stt.sourceSelection')}
+                    <FieldHelp
+                      ariaLabel={t('stt.help.audioSourceAria')}
+                      title={t('stt.help.audioSourceTitle')}
+                      body={t('stt.help.audioSourceBody')}
+                    />
                   </h3>
-                  <p className="text-sm text-outline mt-2">{t('stt.selectedAudio')}</p>
                 </div>
                 <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold ${
                   hasSourceReady ? 'border-tertiary/20 bg-tertiary/10 text-tertiary' : 'border-white/8 bg-white/[0.03] text-outline'
@@ -1898,7 +2056,60 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <section className="bg-surface-container p-6 rounded-[28px] border border-white/5 shadow-xl">
-              <label className="block text-sm font-bold text-primary uppercase tracking-widest mb-4">{t('stt.modelLabel')}</label>
+              <HelpLabel
+                label={t('stt.modelLabel')}
+                ariaLabel={t('stt.help.modelAria')}
+                title={t('stt.help.modelTitle')}
+                body={t('stt.help.modelBody')}
+                className="mb-4 text-sm font-bold text-primary uppercase tracking-widest"
+              />
+              <div className={`mb-3 flex flex-col gap-3 rounded-2xl border p-3 ${
+                selectedAsrModel
+                  ? selectedModelIsLocal
+                    ? 'border-tertiary/15 bg-tertiary/[0.06]'
+                    : 'border-primary-container/20 bg-primary-container/[0.08]'
+                  : 'border-white/5 bg-surface-container-lowest'
+              }`}>
+                <div className="flex min-w-0 items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${
+                      selectedAsrModel
+                        ? selectedModelIsLocal
+                          ? 'border-tertiary/20 bg-tertiary/10 text-tertiary'
+                          : 'border-primary-container/25 bg-primary-container/15 text-primary'
+                        : 'border-white/8 bg-white/[0.03] text-outline'
+                    }`}>
+                      {selectedAsrModel ? (
+                        selectedModelIsLocal ? <HardDrive className="h-4 w-4" /> : <Cloud className="h-4 w-4" />
+                      ) : (
+                        <Mic className="h-4 w-4" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-outline/70">{t('stt.currentModelSource')}</div>
+                      <div className={`text-base font-black leading-tight ${
+                        selectedAsrModel
+                          ? selectedModelIsLocal
+                            ? 'text-tertiary'
+                            : 'text-primary'
+                          : 'text-outline'
+                      }`}>
+                        {selectedModelSourceLabel}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="hidden shrink-0 items-center gap-2 sm:flex">
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-primary-container/15 bg-primary-container/10 px-2.5 py-1 text-[10px] font-bold text-primary">
+                      <Cloud className="h-3 w-3" />
+                      {t('stt.cloudModelShort')} {cloudAsrModels.length}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-tertiary/15 bg-tertiary/10 px-2.5 py-1 text-[10px] font-bold text-tertiary">
+                      <HardDrive className="h-3 w-3" />
+                      {t('stt.localModelShort')} {localAsrModels.length}
+                    </span>
+                  </div>
+                </div>
+              </div>
               <select
                 value={selectedModelId}
                 onChange={(e) => {
@@ -1906,18 +2117,49 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                   setModelLoadStatus('idle');
                   setModelLoadError(null);
                 }}
-                className="w-full bg-surface-container-high border border-white/10 rounded-2xl text-white py-3.5 px-4 focus:ring-2 focus:ring-primary-container outline-none appearance-none cursor-pointer [&>option]:bg-surface-container-high [&>option]:text-white"
+                disabled={asrModels.length === 0}
+                className="w-full bg-surface-container-high border border-white/10 rounded-2xl text-white py-3.5 px-4 focus:ring-2 focus:ring-primary-container outline-none appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 [&>option]:bg-surface-container-high [&>option]:text-white"
               >
-                {asrModels.map(model => (
-                  <option key={model.id} value={model.id} className="bg-surface-container-high text-white">
-                    {model.name}
-                  </option>
-                ))}
-                {asrModels.length === 0 && <option value="">{t('stt.noModels')}</option>}
+                {asrModels.length === 0 && <option value="">{t('stt.noModelsConfigured')}</option>}
+                <optgroup label={`${t('stt.cloudModelGroup')} (${cloudAsrModels.length})`}>
+                  {cloudAsrModels.length > 0 ? (
+                    cloudAsrModels.map(model => (
+                      <option key={model.id} value={model.id} className="bg-surface-container-high text-white">
+                        {getRuntimeModelDisplayName(model)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="__cloud_empty" disabled className="bg-surface-container-high text-white/50">
+                      {t('stt.noCloudModels')}
+                    </option>
+                  )}
+                </optgroup>
+                <optgroup label={`${t('stt.localModelGroup')} (${localAsrModels.length})`}>
+                  {localAsrModels.length > 0 ? (
+                    localAsrModels.map(model => (
+                      <option key={model.id} value={model.id} className="bg-surface-container-high text-white">
+                        {getRuntimeModelDisplayName(model)}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="__local_empty" disabled className="bg-surface-container-high text-white/50">
+                      {t('stt.noLocalModels')}
+                    </option>
+                  )}
+                </optgroup>
               </select>
+              {asrModels.length === 0 && (
+                <p className="mt-3 text-xs leading-5 text-outline/72">{t('stt.noModelsHint')}</p>
+              )}
             </section>
             <section className="bg-surface-container p-6 rounded-[28px] border border-white/5 shadow-xl">
-              <label className="block text-sm font-bold text-primary uppercase tracking-widest mb-4">{t('stt.languageLabel')}</label>
+              <HelpLabel
+                label={t('stt.languageLabel')}
+                ariaLabel={t('stt.help.languageAria')}
+                title={t('stt.help.languageTitle')}
+                body={t('stt.help.languageBody')}
+                className="mb-4 text-sm font-bold text-primary uppercase tracking-widest"
+              />
               <select
                 value={selectedLanguage}
                 onChange={(e) => setSelectedLanguage(e.target.value)}
@@ -1967,9 +2209,14 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     onChange={(e) => handleSegmentationChange(e.target.checked)}
                     className={`mt-0.5 w-5 h-5 rounded border-white/10 bg-transparent text-primary focus:ring-primary ${diarization ? 'cursor-not-allowed text-primary/40' : ''}`}
                   />
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-secondary">{t('stt.segmentation')}</div>
-                    <div className="mt-1 text-[11px] leading-relaxed text-outline/80">{t('stt.segmentationHint')}</div>
+                  <div className="min-w-0 flex-1">
+                    <FeatureOptionHeader
+                      label={t('stt.feature.segmentationLabel')}
+                      term={t('stt.feature.segmentationTerm')}
+                      helpAriaLabel={t('stt.help.segmentationAria')}
+                      helpTitle={t('stt.segmentation')}
+                      helpBody={t('stt.help.segmentationBody')}
+                    />
                   </div>
                 </div>
               </label>
@@ -1981,9 +2228,14 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     onChange={(e) => handleWordAlignmentChange(e.target.checked)}
                     className="mt-0.5 w-5 h-5 rounded border-white/10 bg-transparent text-primary focus:ring-primary"
                   />
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-secondary">{t('stt.wordAlignment')}</div>
-                    <div className="mt-1 text-[11px] leading-relaxed text-outline/80">{t('stt.wordAlignmentHint')}</div>
+                  <div className="min-w-0 flex-1">
+                    <FeatureOptionHeader
+                      label={t('stt.feature.wordAlignmentLabel')}
+                      term={t('stt.feature.wordAlignmentTerm')}
+                      helpAriaLabel={t('stt.help.wordAlignmentAria')}
+                      helpTitle={t('stt.wordAlignment')}
+                      helpBody={t('stt.help.wordAlignmentBody')}
+                    />
                   </div>
                 </div>
               </label>
@@ -1996,9 +2248,14 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     onChange={(e) => setVad(e.target.checked)}
                     className={`mt-0.5 w-5 h-5 rounded border-white/10 bg-transparent text-primary focus:ring-primary ${diarization ? 'cursor-not-allowed text-primary/40' : ''}`}
                   />
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-secondary">{t('stt.vad')}</div>
-                    <div className="mt-1 text-[11px] leading-relaxed text-outline/80">{t('stt.vadHint')}</div>
+                  <div className="min-w-0 flex-1">
+                    <FeatureOptionHeader
+                      label={t('stt.feature.vadLabel')}
+                      term={t('stt.feature.vadTerm')}
+                      helpAriaLabel={t('stt.help.vadAria')}
+                      helpTitle={t('stt.vad')}
+                      helpBody={t('stt.help.vadBody')}
+                    />
                   </div>
                 </div>
               </label>
@@ -2010,9 +2267,14 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     onChange={(e) => handleDiarizationChange(e.target.checked)}
                     className="mt-0.5 w-5 h-5 rounded border-white/10 bg-transparent text-primary focus:ring-primary"
                   />
-                  <div className="min-w-0">
-                    <div className="text-sm font-bold text-secondary">{t('stt.diarization')}</div>
-                    <div className="mt-1 text-[11px] leading-relaxed text-outline/80">{t('stt.diarizationHint')}</div>
+                  <div className="min-w-0 flex-1">
+                    <FeatureOptionHeader
+                      label={t('stt.feature.diarizationLabel')}
+                      term={t('stt.feature.diarizationTerm')}
+                      helpAriaLabel={t('stt.help.diarizationAria')}
+                      helpTitle={t('stt.diarization')}
+                      helpBody={t('stt.help.diarizationBody')}
+                    />
                   </div>
                 </div>
               </label>
@@ -2030,7 +2292,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] gap-4">
                       <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 space-y-4">
                         <div>
-                          <div className="text-[11px] font-bold text-outline uppercase tracking-widest mb-3">{diarizationCopy.providerLabel}</div>
+                          <HelpLabel
+                            label={diarizationCopy.providerLabel}
+                            ariaLabel={diarizationCopy.providerHelpAria}
+                            title={diarizationCopy.providerLabel}
+                            body={diarizationCopy.providerHelp}
+                            className="mb-3 text-[11px] font-bold text-outline uppercase tracking-widest"
+                          />
                           <select
                             value={diarizationProvider}
                             onChange={(e) => handleDiarizationProviderSelect(e.target.value as DiarizationProvider)}
@@ -2054,7 +2322,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                         </div>
 
                         <div>
-                          <div className="text-[11px] font-bold text-outline uppercase tracking-widest mb-3">{diarizationCopy.modeLabel}</div>
+                          <HelpLabel
+                            label={diarizationCopy.modeLabel}
+                            ariaLabel={diarizationCopy.modeHelpAria}
+                            title={diarizationCopy.modeLabel}
+                            body={diarizationCopy.modeHelp}
+                            className="mb-3 text-[11px] font-bold text-outline uppercase tracking-widest"
+                          />
                           <select
                             value={diarizationMode}
                             onChange={(e) => setDiarizationMode(e.target.value as DiarizationMode)}
@@ -2069,7 +2343,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                       </div>
 
                       <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 space-y-3">
-                        <div className="text-[11px] font-bold text-outline uppercase tracking-widest">{diarizationCopy.sceneLabel}</div>
+                        <HelpLabel
+                          label={diarizationCopy.sceneLabel}
+                          ariaLabel={diarizationCopy.sceneHelpAria}
+                          title={diarizationCopy.sceneLabel}
+                          body={diarizationCopy.sceneHelp}
+                          className="text-[11px] font-bold text-outline uppercase tracking-widest"
+                        />
                         <select
                           value={diarizationScenePreset}
                           onChange={(e) => applyScenePreset(e.target.value as DiarizationScenePreset)}
@@ -2087,9 +2367,13 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
 
                     {(diarizationMode === 'fixed' || diarizationMode === 'range' || diarizationMode === 'many') && (
                       <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-                        <div className="text-[11px] font-bold text-outline uppercase tracking-widest mb-3">
-                          {diarizationMode === 'fixed' ? diarizationCopy.exactCount : `${diarizationCopy.minSpeakers} / ${diarizationCopy.maxSpeakers}`}
-                        </div>
+                        <HelpLabel
+                          label={diarizationMode === 'fixed' ? diarizationCopy.exactCount : `${diarizationCopy.minSpeakers} / ${diarizationCopy.maxSpeakers}`}
+                          ariaLabel={diarizationCopy.speakerCountHelpAria}
+                          title={diarizationMode === 'fixed' ? diarizationCopy.exactCount : `${diarizationCopy.minSpeakers} / ${diarizationCopy.maxSpeakers}`}
+                          body={diarizationCopy.speakerCountHelp}
+                          className="mb-3 text-[11px] font-bold text-outline uppercase tracking-widest"
+                        />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {diarizationMode === 'fixed' ? (
                             <div className="md:col-span-2">
@@ -2140,43 +2424,69 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     )}
 
                     <div className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
-                      <div className="text-[11px] font-bold text-outline uppercase tracking-widest mb-2">{diarizationCopy.advancedLabel}</div>
+                      <HelpLabel
+                        label={diarizationCopy.advancedLabel}
+                        ariaLabel={diarizationCopy.advancedHelpAria}
+                        title={diarizationCopy.advancedLabel}
+                        body={diarizationCopy.advancedHelp}
+                        className="mb-2 text-[11px] font-bold text-outline uppercase tracking-widest"
+                      />
                       <div className="mb-4 text-[11px] text-outline/70 leading-relaxed">
                         {isPyannoteDiarization ? diarizationCopy.classicOnlyHint : isCustomDiarizationScene ? diarizationCopy.customSceneHint : diarizationCopy.scenePresetHint}
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {[
                           {
+                            key: 'stable-primary',
                             checked: preferStablePrimarySpeaker,
                             onChange: setPreferStablePrimarySpeaker,
                             label: diarizationCopy.preferStablePrimary,
+                            helpAriaLabel: diarizationCopy.preferStablePrimaryHelpAria,
+                            helpBody: diarizationCopy.preferStablePrimaryHelp,
                           },
                           {
+                            key: 'short-interjection',
                             checked: allowShortInterjectionSpeaker,
                             onChange: setAllowShortInterjectionSpeaker,
                             label: diarizationCopy.allowShortInterjection,
+                            helpAriaLabel: diarizationCopy.allowShortInterjectionHelpAria,
+                            helpBody: diarizationCopy.allowShortInterjectionHelp,
                           },
                           {
+                            key: 'tiny-cluster-merge',
                             checked: forceMergeTinyClustersInTwoSpeakerMode,
                             onChange: setForceMergeTinyClustersInTwoSpeakerMode,
                             label: diarizationCopy.forceMergeTiny,
+                            helpAriaLabel: diarizationCopy.forceMergeTinyHelpAria,
+                            helpBody: diarizationCopy.forceMergeTinyHelp,
                           },
                         ].map((item) => (
-                          <label
-                            key={item.label}
+                          <div
+                            key={item.key}
                             className={`flex items-center gap-3 rounded-xl border border-white/5 px-4 py-3 ${
                               areClassicOnlyConstraintsDisabled ? 'bg-white/5 opacity-55 cursor-not-allowed' : 'bg-surface-container-high cursor-pointer'
                             }`}
                           >
                             <input
+                              id={`diarization-${item.key}`}
                               type="checkbox"
                               checked={isPyannoteDiarization ? false : item.checked}
                               onChange={(e) => item.onChange(e.target.checked)}
                               disabled={areClassicOnlyConstraintsDisabled}
                               className="w-4 h-4 rounded border-white/10 bg-transparent text-primary focus:ring-primary"
                             />
-                            <span className="text-xs text-secondary font-medium leading-relaxed">{item.label}</span>
-                          </label>
+                            <label
+                              htmlFor={`diarization-${item.key}`}
+                              className={`min-w-0 flex-1 text-xs text-secondary font-medium leading-relaxed ${areClassicOnlyConstraintsDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
+                              {item.label}
+                            </label>
+                            <FieldHelp
+                              ariaLabel={item.helpAriaLabel}
+                              title={item.label}
+                              body={item.helpBody}
+                            />
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -2192,7 +2502,6 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                     placeholder={t('stt.promptPlaceholder')}
                     rows={4}
                   />
-                  <div className="mt-3 text-[11px] leading-relaxed text-outline/78">{t('stt.promptHint')}</div>
                 </div>
               </div>
             )}

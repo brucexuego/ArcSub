@@ -1,51 +1,38 @@
 # Environment Configuration
 
-Most users only need a few `.env` values.
+Most users can configure ArcSub from **Settings**. Use `.env` for startup values, security keys, and a small set of advanced options.
+
+After editing `.env`, restart ArcSub.
 
 ## Common Keys
 
 | Key | Purpose |
 |---|---|
-| `HOST` | Server bind address |
-| `PORT` | Server port |
-| `ENCRYPTION_KEY` | Backend encryption key |
-| `HF_TOKEN` | Needed for pyannote assets and gated/private Hugging Face model downloads |
+| `HOST` | Server bind address. Keep `127.0.0.1` for local-only access. |
+| `PORT` | Server port. Change it only if the default port is already used. |
+| `ENCRYPTION_KEY` | Key used to protect stored credentials. Set your own value before regular use. |
+| `HF_TOKEN` | Optional token for pyannote or Hugging Face models that require access approval. |
+
+## Local Model Options
+
+| Key | Purpose |
+|---|---|
+| `OPENVINO_LOCAL_MODEL_PRELOAD_ENABLED` | Enables local model preloading when set to `1` or `true`. The default is off so ArcSub starts lighter. |
+| `OPENVINO_BASELINE_DEVICE` | Device used by shared OpenVINO helper models. Common values are `CPU`, `GPU`, or `AUTO`, depending on your environment. |
+| `PYANNOTE_DEVICE` | Device used by pyannote speaker diarization. Use `CPU` unless your local setup supports another device. |
+| `OPENVINO_QWEN3_ASR_FORCED_ALIGNER_DEVICE` | Device used by the Qwen3 ASR word-alignment helper when that workflow is used. |
+| `TEN_VAD_PROVIDER` | Execution provider used by Ten VAD. Most users should keep `cpu`; change it only when your installed environment supports another provider. |
+
+## Cloud Request Options
+
+Cloud ASR and cloud translation model endpoints, API keys, and model names should normally be configured in **Settings**.
+
+`TRANSLATE_CLOUD_REQUEST_TIMEOUT_MS` controls how long ArcSub waits for a cloud translation request before treating it as timed out. Increase it only when your provider or model needs more time for long subtitles.
+
+If you use provider rate limits, configure them on the model card in **Settings** so each model can have its own limits.
 
 ## Recommendations
 
-- keep `ENCRYPTION_KEY` set to your own value
-- only set `HF_TOKEN` if you want pyannote or gated/private Hugging Face local models
-- after editing `.env`, restart ArcSub
-
-## Advanced Tuning
-
-ArcSub also includes advanced settings for local runtime behavior.
-
-In most cases, you can leave those values unchanged.
-
-For local OpenVINO ASR, `OPENVINO_ASR_TIMEOUT_MODE=auto` estimates the transcription timeout from audio duration, device type, and word-alignment mode. Set `OPENVINO_ASR_TIMEOUT_MODE=fixed` only if you need the legacy fixed `OPENVINO_ASR_TIMEOUT_MS` behavior.
-
-## Cloud Translation
-
-Cloud translation request timeout is controlled by `TRANSLATE_CLOUD_REQUEST_TIMEOUT_MS`.
-
-Quota limits should usually be set per cloud translation model in Settings -> Advanced Request Options:
-
-```json
-{
-  "translation": {
-    "quota": { "rpm": 10, "tpm": 250000, "rpd": 500, "maxConcurrency": 1 },
-    "batching": {
-      "enabled": true,
-      "targetLines": 24,
-      "minTargetLines": 6,
-      "charBudget": 2400,
-      "maxOutputTokens": 2048
-    }
-  }
-}
-```
-
-ArcSub persists cloud translation quota state under `runtime/cache` by default so RPM/TPM/RPD windows survive restarts. Set `TRANSLATE_CLOUD_QUOTA_PERSIST=0` to keep quota state in memory only. When providers return rate-limit headers or HTTP 429, ArcSub records that feedback and delays the next request window before retrying.
-
-The `TRANSLATE_NVIDIA_CLOUD_*` keys remain as compatibility defaults for NVIDIA hosted OpenAI-compatible endpoints. New providers should prefer per-model `translation.batching` options so provider tuning stays isolated.
+- Keep `.env` private.
+- Do not commit API keys, tokens, or local machine paths.
+- Leave advanced device settings unchanged unless you know your hardware and installed environment support the selected device.

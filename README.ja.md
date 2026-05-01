@@ -1,6 +1,6 @@
 # ArcSub
 
-ArcSub は、メディアの取得、音声文字起こし、字幕翻訳、レビュー、字幕書き出しまでを一台の環境で進められる local-first な字幕ワークステーションです。
+ArcSub は、クラウドサービスとローカル OpenVINO モデルをどちらも主要な実行経路として扱う、エンドツーエンドの字幕翻訳ワークステーションです。メディア取得、音声文字起こし、字幕翻訳、動画と字幕を組み合わせた視聴までを扱えます。
 
 ## 言語
 
@@ -22,30 +22,25 @@ Dashboard overview: 字幕プロジェクトの管理、システムリソース
 
 ![ArcSub video fetcher workflow](./docs/assets/screenshots/video-fetcher-overview.png)
 
-Video Fetcher: ソースのメタデータ解析、ダウンロード形式の選択、音声認識用素材の準備を行います。
+動画取得: ソースのメタデータ解析、ダウンロード形式の選択、音声認識用素材の準備を行います。
 
 ![ArcSub speech to text workflow](./docs/assets/screenshots/speech-to-text-overview.png)
 
-Speech to Text: 認識モデルの選択、詳細オプションの設定、文字起こし結果の生成を行います。
+音声文字変換: クラウドまたはローカルの認識モデルを選び、詳細オプションを設定して文字起こし結果を生成します。
 
 ![ArcSub text translation workflow](./docs/assets/screenshots/text-translation-overview.png)
 
-Text Translation: モデルと言語設定を調整し、原文と翻訳字幕を並べて確認できます。
+高精度翻訳: クラウドまたはローカルの翻訳モデルを選び、言語設定を調整して原文と翻訳字幕を並べて確認できます。
 
 ![ArcSub video player workflow](./docs/assets/screenshots/video-player-overview.png)
 
-Video Player: 最終字幕を動画でプレビューし、書き出し前に字幕スタイルを微調整できます。
+動画プレーヤー: 完成した字幕を動画と一緒に視聴し、ページ内の字幕スタイルを微調整できます。
 
 ## クイックガイド
 
 ### ダウンロード
 
-この repository で配布用アセットが公開されている場合は、まず [Releases](../../releases/latest) から取得してください。
-
-現在の `v0.9.1` アセット：
-
-- `ArcSub-v0.9.1-windows-x64.zip`
-- `ArcSub-v0.9.1-linux-x64.tar.gz`
+この repository で配布用アセットが公開されている場合は、まず [Releases](../../releases/latest) から利用するOS向けの最新ファイルを取得してください。
 
 ### パッケージ版
 
@@ -91,18 +86,19 @@ Video Player: 最終字幕を動画でプレビューし、書き出し前に字
 ## 主な機能
 
 - ローカルメディアの読み込み、またはオンラインメディアの取得
-- ローカルモデルまたはクラウドサービスによる音声文字起こし
+- クラウド ASR サービスまたはローカル OpenVINO ASR モデルによる音声文字起こし
 - word alignment、VAD、diarization 関連の補助機能
-- ローカルモデルまたはクラウドサービスによる字幕翻訳
-- プレイヤー上でのレビューと書き出し
+- クラウド翻訳サービスまたはローカル OpenVINO 翻訳モデルによる字幕翻訳
+- 動画と字幕を組み合わせて視聴し、ページ内の字幕スタイルを調整
 
-## ローカルモデル
+## クラウドモデルとローカルモデル
 
-ArcSub はローカルモデルをサポートしますが、導入は段階的です。
+ArcSub は、プロジェクトごとにクラウドサービスとローカル OpenVINO runtime のどちらが適しているかを選べる設計です。
 
-- deploy ではツールと baseline assets を準備
-- ローカル ASR とローカル翻訳モデルは後から `Settings` で導入
-- pyannote は Hugging Face token が必要だが、未設定でも起動自体は可能
+- クラウド ASR / 翻訳モデルは `設定` で API endpoint、key、プロバイダー設定を登録
+- ローカル ASR / 翻訳モデルは `設定` からインストールし、OpenVINO runtime 経路で実行
+- `設定` 上のモデル順序が音声文字変換と高精度翻訳の既定モデルになります
+- pyannote 話者分離を有効にする場合は Hugging Face アセットを使いますが、token 未設定でも通常の起動やクラウド経路は利用できます
 
 ## 追加ドキュメント
 

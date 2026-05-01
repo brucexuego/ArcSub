@@ -64,7 +64,7 @@ export default function MaterialModal({ project, onClose }: MaterialModalProps) 
   };
 
   const handleDelete = async (material: Material) => {
-    if (!window.confirm(t('dashboard.deleteConfirm'))) return;
+    if (!window.confirm(t('dashboard.deleteMaterialConfirm'))) return;
 
     try {
       const res = await fetch(`/api/projects/${project.id}/materials/${material.category}/${encodeURIComponent(material.name)}`, {

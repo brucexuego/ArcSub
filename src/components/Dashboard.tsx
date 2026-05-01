@@ -396,10 +396,10 @@ export default function Dashboard({
                         className="inline-flex w-full items-center justify-between gap-3 rounded-2xl border border-primary/18 bg-primary-container px-4 py-3 text-left text-white shadow-xl shadow-primary-container/12 transition-all hover:brightness-110"
                       >
                         <div className="min-w-0">
-                          <div className="text-sm font-bold tracking-[-0.01em]">
+                          <div className="truncate text-sm font-bold tracking-[-0.01em]">
                             {t('dashboard.quickJump')}
                           </div>
-                          <div className="mt-0.5 text-[11px] text-white/72">
+                          <div className="mt-0.5 truncate text-[11px] text-white/72">
                             {actionLabel}
                           </div>
                         </div>
@@ -436,18 +436,18 @@ export default function Dashboard({
                       )}
                     </div>
 
-                    <div className="grid gap-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_48px] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_48px]">
+                    <div className="flex flex-wrap items-center justify-end gap-2.5">
                       <button
                         onClick={(e) => {
                           stopCardClick(e);
                           setOpenQuickJumpProjectId(null);
                           onEditProject(project);
                         }}
+                        aria-label={t('dashboard.editProject')}
                         title={t('dashboard.editProject')}
-                        className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/6 bg-surface-container-highest px-3.5 py-2.5 text-sm font-semibold text-secondary transition-all hover:bg-white/10 hover:text-white"
+                        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/6 bg-surface-container-highest text-secondary transition-all hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/55"
                       >
-                        <PencilLine className="h-4 w-4 shrink-0" />
-                        <span className="whitespace-nowrap">{t('dashboard.editProject')}</span>
+                        <PencilLine className="h-4 w-4" />
                       </button>
                       <button
                         onClick={(e) => {
@@ -455,19 +455,20 @@ export default function Dashboard({
                           setOpenQuickJumpProjectId(null);
                           onManageMaterials(project);
                         }}
+                        aria-label={t('dashboard.manageMaterials')}
                         title={t('dashboard.manageMaterials')}
-                        className="inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-white/6 bg-surface-container-highest px-3.5 py-2.5 text-sm font-semibold text-secondary transition-all hover:bg-white/10 hover:text-white"
+                        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/6 bg-surface-container-highest text-secondary transition-all hover:bg-white/10 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/55"
                       >
-                        <FolderOpen className="h-4 w-4 shrink-0" />
-                        <span className="whitespace-nowrap">{t('dashboard.manageMaterials')}</span>
+                        <FolderOpen className="h-4 w-4" />
                       </button>
                       <button
                         onClick={(e) => {
                           setOpenQuickJumpProjectId(null);
                           handleDelete(e, project.id);
                         }}
+                        aria-label={t('dashboard.delete')}
                         title={t('dashboard.delete')}
-                        className="shrink-0 rounded-xl border border-white/6 bg-surface-container-highest px-3 py-2.5 text-outline/45 transition-all hover:bg-red-400/10 hover:text-red-400"
+                        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/6 bg-surface-container-highest text-outline/45 transition-all hover:bg-red-400/10 hover:text-red-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/45"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>

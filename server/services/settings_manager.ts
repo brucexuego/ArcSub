@@ -28,20 +28,17 @@ export class SettingsManager {
   private static normalizeLocalModels(input: any): LocalModelSelection {
     const defaults = getDefaultLocalModelSelection();
     const current = input || {};
+    const installed = Array.isArray(current.installed)
+      ? current.installed
+          .map((item: any) => sanitizeLocalModelDefinition(item))
+          .filter(Boolean)
+      : defaults.installed;
+    const firstAsr = installed.find((item: any) => item?.type === 'asr');
+    const firstTranslate = installed.find((item: any) => item?.type === 'translate');
     return {
-      asrSelectedId:
-        typeof current.asrSelectedId === 'string' && current.asrSelectedId.trim()
-          ? current.asrSelectedId.trim()
-          : defaults.asrSelectedId,
-      translateSelectedId:
-        typeof current.translateSelectedId === 'string' && current.translateSelectedId.trim()
-          ? current.translateSelectedId.trim()
-          : defaults.translateSelectedId,
-      installed: Array.isArray(current.installed)
-        ? current.installed
-            .map((item: any) => sanitizeLocalModelDefinition(item))
-            .filter(Boolean)
-        : defaults.installed,
+      asrSelectedId: firstAsr?.id || defaults.asrSelectedId,
+      translateSelectedId: firstTranslate?.id || defaults.translateSelectedId,
+      installed,
     };
   }
 

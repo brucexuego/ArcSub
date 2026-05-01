@@ -462,18 +462,20 @@ export class PyannoteDiarizationService {
 
   private static async getSegmentationModel() {
     if (!this.segmentationModelPromise) {
-      this.segmentationModelPromise = this.ensureModelsPrepared().then(() =>
-        OpenvinoBackend.compileModel(this.getSegmentationIrPath(), 'CPU')
-      );
+      this.segmentationModelPromise = this.ensureModelsPrepared().then(() => {
+        const device = OpenvinoBackend.getBaselineModelDevice();
+        return OpenvinoBackend.compileModel(this.getSegmentationIrPath(), device);
+      });
     }
     return this.segmentationModelPromise;
   }
 
   private static async getEmbeddingModel() {
     if (!this.embeddingModelPromise) {
-      this.embeddingModelPromise = this.ensureModelsPrepared().then(() =>
-        OpenvinoBackend.compileModel(this.getEmbeddingIrPath(), 'CPU')
-      );
+      this.embeddingModelPromise = this.ensureModelsPrepared().then(() => {
+        const device = OpenvinoBackend.getBaselineModelDevice();
+        return OpenvinoBackend.compileModel(this.getEmbeddingIrPath(), device);
+      });
     }
     return this.embeddingModelPromise;
   }

@@ -1,13 +1,15 @@
 ﻿import React from 'react';
-import { Save, Plus, Globe, Key, Trash2, Info, Edit2, Check, ChevronDown, Zap, Loader2, AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { Save, Plus, Globe, Key, Trash2, Info, Edit2, Check, ChevronDown, Zap, Loader2, AlertCircle, CheckCircle2, X, AudioLines, Languages, GripVertical } from 'lucide-react';
 import { ApiConfig, ApiModelRequestOptions, Project } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
 import { Language } from '../i18n/translations';
 import { sanitizeInput, isValidUrl, isValidApiKey, maskApiKey, isMaskedApiKey } from '../utils/security';
 import { getJson, HttpRequestError, postJson } from '../utils/http_client';
+import FieldHelp from './FieldHelp';
 
 type LocalModelType = 'asr' | 'translate';
 type LocalModelErrorScope = 'install' | 'asr-list' | 'translate-list';
+type ModelDragScope = 'cloud-asr' | 'cloud-translate' | 'local-asr' | 'local-translate';
 type LocalModelInstallPhase =
   | 'queued'
   | 'downloading'
@@ -205,8 +207,6 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: '尚未安裝任何本地模型。',
       selected: '目前預設',
-      setDefaultAsr: '設為 ASR 預設',
-      setDefaultTranslate: '設為翻譯預設',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR 模型',
       installTypeTranslate: '翻譯模型',
@@ -264,8 +264,6 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: '尚未安装任何本地模型。',
       selected: '当前默认',
-      setDefaultAsr: '设为 ASR 默认',
-      setDefaultTranslate: '设为翻译默认',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR 模型',
       installTypeTranslate: '翻译模型',
@@ -323,8 +321,6 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'No local models installed yet.',
       selected: 'Default',
-      setDefaultAsr: 'Set ASR Default',
-      setDefaultTranslate: 'Set Translation Default',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR Model',
       installTypeTranslate: 'Translation Model',
@@ -382,8 +378,6 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'まだローカルモデルがありません。',
       selected: '既定値',
-      setDefaultAsr: 'ASR 既定に設定',
-      setDefaultTranslate: '翻訳既定に設定',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR モデル',
       installTypeTranslate: '翻訳モデル',
@@ -441,8 +435,6 @@ function getLocalModelCopy(language: Language) {
       runtimeEngine: 'Runtime',
       noInstalledModels: 'Noch keine lokalen Modelle installiert.',
       selected: 'Standard',
-      setDefaultAsr: 'Als ASR-Standard setzen',
-      setDefaultTranslate: 'Als Uebersetzungsstandard setzen',
       repoId: 'HF Repo',
       installTypeAsr: 'ASR-Modell',
       installTypeTranslate: 'Ubersetzungsmodell',
@@ -585,6 +577,48 @@ function getPyannoteSettingsCopy(language: Language) {
       saved: 'HF_TOKEN gespeichert.',
       saveFailed: 'HF_TOKEN konnte nicht gespeichert werden.',
       installFailed: 'Pyannote-Installation fehlgeschlagen.',
+    },
+  } as const;
+
+  return maps[language];
+}
+
+function getLocalModelHelpCopy(language: Language) {
+  const maps = {
+    'zh-tw': {
+      localModels: '這裡管理會在本機電腦上執行的 OpenVINO 模型。安裝後，模型可以在語音轉文字或文字翻譯頁面中選用；資料不需要送到雲端，但速度與可用功能會受電腦硬體、模型大小與已安裝元件影響。',
+      runtime: '這裡會檢查 ArcSub 啟動本機模型所需的元件是否可用。OpenVINO Node 主要支援本機模型管理，OpenVINO GenAI 供本機翻譯模型使用，ASR Runtime 供本機語音辨識使用。若顯示不可用，相關本機模型可能無法安裝或執行。',
+      hfAccess: 'Hugging Face 是模型下載來源。大多數公開模型不需要金鑰；需要授權、登入或私有的模型才需要 Access Token。儲存後，ArcSub 下載本機模型和 Pyannote 資產時會使用同一組金鑰。',
+      pyannote: 'Pyannote 用於語者分離，也就是在一段音訊中判斷不同說話者並標上說話者。若你在語音轉文字頁面啟用語者分離，這裡的資產必須先準備好。部分資產可能需要 Hugging Face 授權與金鑰。',
+      install: '在這裡輸入 Hugging Face 上的模型名稱來安裝本機模型。ASR 模型會提供給語音轉文字頁面，翻譯模型會提供給文字翻譯頁面。若來源不是已整理好的 OpenVINO 版本，ArcSub 會嘗試轉換成可在本機執行的格式；只有檢查通過的模型才會加入清單。',
+    },
+    'zh-cn': {
+      localModels: '这里管理会在本机电脑上运行的 OpenVINO 模型。安装后，模型可以在语音转文字或文字翻译页面中选用；资料不需要送到云端，但速度与可用功能会受电脑硬件、模型大小与已安装组件影响。',
+      runtime: '这里会检查 ArcSub 启动本机模型所需的组件是否可用。OpenVINO Node 主要支持本机模型管理，OpenVINO GenAI 供本机翻译模型使用，ASR Runtime 供本机语音识别使用。若显示不可用，相关本机模型可能无法安装或运行。',
+      hfAccess: 'Hugging Face 是模型下载来源。大多数公开模型不需要金钥；需要授权、登录或私有的模型才需要 Access Token。保存后，ArcSub 下载本机模型和 Pyannote 资源时会使用同一组金钥。',
+      pyannote: 'Pyannote 用于说话人分离，也就是在一段音频中判断不同说话人并标上说话人。若你在语音转文字页面启用说话人分离，这里的资源必须先准备好。部分资源可能需要 Hugging Face 授权与金钥。',
+      install: '在这里输入 Hugging Face 上的模型名称来安装本机模型。ASR 模型会提供给语音转文字页面，翻译模型会提供给文字翻译页面。若来源不是已整理好的 OpenVINO 版本，ArcSub 会尝试转换成可在本机运行的格式；只有检查通过的模型才会加入列表。',
+    },
+    en: {
+      localModels: 'Manage OpenVINO models that run on this computer. After installation, they can be selected on the Speech to Text or Text Translation pages. Your files do not need to be sent to the cloud, but speed and available features depend on your hardware, model size, and installed components.',
+      runtime: 'Checks whether the components required for local models are ready. OpenVINO Node supports local model management, OpenVINO GenAI is used by local translation models, and ASR Runtime is used by local speech recognition. If one is unavailable, related local models may not install or run.',
+      hfAccess: 'Hugging Face is the model download source. Most public models do not need a token; models that require approval, login, or private access need an Access Token. After saving it, ArcSub uses the same token when downloading local models and Pyannote assets.',
+      pyannote: 'Pyannote is used for speaker diarization: identifying different speakers in an audio file and assigning speaker labels. If you enable speaker diarization on the Speech to Text page, these assets must be ready first. Some assets may require Hugging Face approval and a token.',
+      install: 'Enter a Hugging Face model name here to install a local model. ASR models become available on the Speech to Text page, and translation models become available on the Text Translation page. If the source is not already prepared for OpenVINO, ArcSub will try to convert it into a local runnable format; only models that pass the check are added to the list.',
+    },
+    jp: {
+      localModels: 'このコンピューター上で動作する OpenVINO モデルを管理します。インストール後は、音声認識ページまたはテキスト翻訳ページで選択できます。ファイルをクラウドへ送る必要はありませんが、速度と使える機能は、PC の性能、モデルサイズ、インストール済みコンポーネントに左右されます。',
+      runtime: 'ローカルモデルの起動に必要なコンポーネントが利用できるか確認します。OpenVINO Node はローカルモデル管理、OpenVINO GenAI はローカル翻訳モデル、ASR Runtime はローカル音声認識に使われます。利用不可の場合、関連するローカルモデルはインストールまたは実行できないことがあります。',
+      hfAccess: 'Hugging Face はモデルのダウンロード元です。多くの公開モデルではトークンは不要ですが、承認、ログイン、または private アクセスが必要なモデルには Access Token が必要です。保存後、ArcSub はローカルモデルと Pyannote アセットのダウンロード時に同じトークンを使用します。',
+      pyannote: 'Pyannote は話者分離に使われます。音声内の異なる話者を判定し、話者ラベルを付けます。音声認識ページで話者分離を有効にする場合、先にこのアセットを準備してください。一部のアセットは Hugging Face の承認とトークンが必要です。',
+      install: 'ここに Hugging Face のモデル名を入力して、ローカルモデルをインストールします。ASR モデルは音声認識ページで、翻訳モデルはテキスト翻訳ページで使えるようになります。OpenVINO 用に準備済みでないモデルは、ArcSub がローカルで動作できる形式への変換を試みます。確認に通ったモデルだけが一覧に追加されます。',
+    },
+    de: {
+      localModels: 'Verwalten Sie OpenVINO-Modelle, die auf diesem Computer laufen. Nach der Installation koennen sie auf der Speech-to-Text- oder Textuebersetzungsseite ausgewaehlt werden. Dateien muessen nicht in die Cloud gesendet werden, aber Geschwindigkeit und verfuegbare Funktionen haengen von Hardware, Modellgroesse und installierten Komponenten ab.',
+      runtime: 'Prueft, ob die Komponenten fuer lokale Modelle bereit sind. OpenVINO Node unterstuetzt die lokale Modellverwaltung, OpenVINO GenAI wird fuer lokale Uebersetzungsmodelle genutzt, und ASR Runtime fuer lokale Spracherkennung. Wenn eine Komponente nicht verfuegbar ist, koennen die zugehoerigen lokalen Modelle eventuell nicht installiert oder ausgefuehrt werden.',
+      hfAccess: 'Hugging Face ist die Quelle fuer Modelldownloads. Die meisten oeffentlichen Modelle brauchen keinen Token; Modelle mit Freigabe, Login oder privatem Zugriff brauchen einen Access Token. Nach dem Speichern nutzt ArcSub denselben Token fuer lokale Modelle und Pyannote-Assets.',
+      pyannote: 'Pyannote wird fuer Sprechertrennung verwendet: Es erkennt verschiedene Sprecher in einer Audiodatei und vergibt Sprecherlabels. Wenn Sie Sprechertrennung auf der Speech-to-Text-Seite aktivieren, muessen diese Assets zuerst bereit sein. Manche Assets brauchen eine Hugging-Face-Freigabe und einen Token.',
+      install: 'Geben Sie hier einen Hugging-Face-Modellnamen ein, um ein lokales Modell zu installieren. ASR-Modelle stehen danach auf der Speech-to-Text-Seite zur Verfuegung, Uebersetzungsmodelle auf der Textuebersetzungsseite. Wenn die Quelle noch nicht fuer OpenVINO vorbereitet ist, versucht ArcSub sie in ein lokal ausfuehrbares Format umzuwandeln; nur erfolgreich gepruefte Modelle werden zur Liste hinzugefuegt.',
     },
   } as const;
 
@@ -801,9 +835,39 @@ function RuntimeHintsSummary({
   );
 }
 
+function SettingsHelpTitle({
+  label,
+  title,
+  body,
+  className = 'text-sm font-bold text-secondary',
+}: {
+  label: string;
+  title: string;
+  body: string;
+  className?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className={className}>{label}</span>
+      <FieldHelp ariaLabel={`${label} help`} title={title} body={body} />
+    </div>
+  );
+}
+
+function reorderItemsById<T extends { id: string }>(items: T[], activeId: string, overId: string) {
+  const fromIndex = items.findIndex((item) => item.id === activeId);
+  const toIndex = items.findIndex((item) => item.id === overId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return items;
+  const next = [...items];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
 export default function Settings({ project }: { project: Project | null }) {
   const { language, setLanguage, t } = useLanguage();
   const localCopy = React.useMemo(() => getLocalModelCopy(language), [language]);
+  const localHelpCopy = React.useMemo(() => getLocalModelHelpCopy(language), [language]);
   const pyannoteCopy = React.useMemo(() => getPyannoteSettingsCopy(language), [language]);
 
   const [asrModels, setAsrModels] = React.useState<ApiConfig[]>([]);
@@ -816,7 +880,6 @@ export default function Settings({ project }: { project: Project | null }) {
   const [settingsLoading, setSettingsLoading] = React.useState(false);
   const [settingsHydrated, setSettingsHydrated] = React.useState(false);
   const [localModels, setLocalModels] = React.useState<LocalModelEntry[]>([]);
-  const [localSelection, setLocalSelection] = React.useState({ asrSelectedId: '', translateSelectedId: '' });
   const [localInstallStatuses, setLocalInstallStatuses] = React.useState<LocalModelInstallStatus[]>([]);
   const [openvinoStatus, setOpenvinoStatus] = React.useState<OpenvinoStatus | null>(null);
   const [pyannoteStatus, setPyannoteStatus] = React.useState<PyannoteStatus | null>(null);
@@ -836,6 +899,7 @@ export default function Settings({ project }: { project: Project | null }) {
   const [localError, setLocalError] = React.useState<string | null>(null);
   const [localErrorScope, setLocalErrorScope] = React.useState<LocalModelErrorScope | null>(null);
   const [localPanelActive, setLocalPanelActive] = React.useState(false);
+  const [dragState, setDragState] = React.useState<{ scope: ModelDragScope; id: string } | null>(null);
   const saveStatusTimeoutRef = React.useRef<number | null>(null);
   const initialBootstrapRef = React.useRef(false);
   const localPanelBootstrapRef = React.useRef(false);
@@ -873,10 +937,6 @@ export default function Settings({ project }: { project: Project | null }) {
 
   const applyLocalModelsResponse = React.useCallback((data: LocalModelsResponse) => {
     setLocalModels(Array.isArray(data.catalog) ? data.catalog : []);
-    setLocalSelection({
-      asrSelectedId: data.selection?.asrSelectedId || '',
-      translateSelectedId: data.selection?.translateSelectedId || '',
-    });
     if (Array.isArray(data.installs)) {
       setLocalInstallStatuses(data.installs);
     } else if (data.install) {
@@ -1194,6 +1254,57 @@ export default function Settings({ project }: { project: Project | null }) {
     });
   };
 
+  const handleCloudModelDrop = (scope: Extract<ModelDragScope, 'cloud-asr' | 'cloud-translate'>, overId: string) => {
+    if (!dragState || dragState.scope !== scope || dragState.id === overId) return;
+    if (scope === 'cloud-asr') {
+      const nextAsrModels = reorderItemsById(asrModels, dragState.id, overId);
+      if (nextAsrModels === asrModels) return;
+      setAsrModels(nextAsrModels);
+      void persistSettings({ asrModels: nextAsrModels });
+      return;
+    }
+    const nextTranslateModels = reorderItemsById(translateModels, dragState.id, overId);
+    if (nextTranslateModels === translateModels) return;
+    setTranslateModels(nextTranslateModels);
+    void persistSettings({ translateModels: nextTranslateModels });
+  };
+
+  const handleLocalModelDrop = async (
+    scope: Extract<ModelDragScope, 'local-asr' | 'local-translate'>,
+    overId: string
+  ) => {
+    if (!dragState || dragState.scope !== scope || dragState.id === overId) return;
+    const type: LocalModelType = scope === 'local-asr' ? 'asr' : 'translate';
+    const currentModels = localModels
+      .filter((model) => !isHiddenSettingsLocalModel(model) && model.type === type)
+      .filter((model) => model.id);
+    const reorderedModels = reorderItemsById(currentModels, dragState.id, overId);
+    if (reorderedModels === currentModels) return;
+    const orderedIds = reorderedModels.map((model) => model.id);
+
+    setLocalModels((prev) => {
+      const otherModels = prev.filter((model) => model.type !== type);
+      const selectedId = orderedIds[0] || '';
+      const nextTypeModels = reorderedModels.map((model) => ({
+        ...model,
+        selected: model.id === selectedId,
+      }));
+      return type === 'asr' ? [...nextTypeModels, ...otherModels] : [...otherModels, ...nextTypeModels];
+    });
+    try {
+      const data = await postJson<LocalModelsResponse>(
+        '/api/local-models/reorder',
+        { type, orderedIds },
+        { timeoutMs: 20_000 }
+      );
+      applyLocalModelsResponse(data);
+    } catch (error: any) {
+      setLocalErrorScope(type === 'asr' ? 'asr-list' : 'translate-list');
+      setLocalError(formatRequestError(error, t('settings.localSelectFailed')));
+      void loadLocalModels();
+    }
+  };
+
   const visibleLocalModels = localModels.filter((model) => !isHiddenSettingsLocalModel(model));
   const localAsrModels = visibleLocalModels.filter((model) => model.type === 'asr');
   const localTranslateModels = visibleLocalModels.filter((model) => model.type === 'translate');
@@ -1242,22 +1353,6 @@ export default function Settings({ project }: { project: Project | null }) {
     }, 3000);
     return () => window.clearInterval(intervalId);
   }, [hasActiveLocalInstall, localPanelActive, pollLocalInstallStatus]);
-
-  const handleSelectLocalModel = async (type: LocalModelType, modelId: string) => {
-    setLocalError(null);
-    setLocalErrorScope(null);
-    try {
-      const data = await postJson<LocalModelsResponse>(
-        '/api/local-models/select',
-        { type, modelId },
-        { timeoutMs: 20_000 }
-      );
-      applyLocalModelsResponse(data);
-    } catch (error: any) {
-      setLocalErrorScope(type === 'asr' ? 'asr-list' : 'translate-list');
-      setLocalError(formatRequestError(error, t('settings.localSelectFailed')));
-    }
-  };
 
   const handleInspectLocalModel = async () => {
     const repoId = localRepoId.trim();
@@ -1437,7 +1532,7 @@ export default function Settings({ project }: { project: Project | null }) {
         <section className="rounded-3xl border border-white/5 bg-surface-container p-7 shadow-[0_18px_50px_rgba(7,10,24,0.18)]">
           <div className="mb-6 flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-container/10">
-              <Plus className="w-5 h-5 text-primary" />
+              <AudioLines className="w-5 h-5 text-primary" />
             </div>
             <div>
               <h3 className="text-xl font-bold text-secondary">{t('settings.asrModels')}</h3>
@@ -1446,13 +1541,28 @@ export default function Settings({ project }: { project: Project | null }) {
           </div>
           
           <div className="space-y-4">
-            {asrModels.map(model => (
+            {asrModels.map((model, index) => (
               <ModelItem 
                 key={model.id} 
                 model={model} 
                 modelType="asr"
                 onSave={handleSaveAsr}
                 onDelete={() => handleDeleteAsr(model.id)}
+                isDefault={index === 0}
+                defaultLabel={localCopy.selected}
+                isDragging={dragState?.scope === 'cloud-asr' && dragState.id === model.id}
+                dragScope="cloud-asr"
+                onDragStart={(scope, id) => setDragState({ scope, id })}
+                onDragOverItem={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDropItem={(event, overId) => {
+                  event.preventDefault();
+                  handleCloudModelDrop('cloud-asr', overId);
+                  setDragState(null);
+                }}
+                onDragEnd={() => setDragState(null)}
               />
             ))}
             
@@ -1481,7 +1591,7 @@ export default function Settings({ project }: { project: Project | null }) {
         <section className="rounded-3xl border border-white/5 bg-surface-container p-7 shadow-[0_18px_50px_rgba(7,10,24,0.18)]">
           <div className="mb-6 flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-container/10">
-              <Globe className="w-5 h-5 text-primary" />
+              <Languages className="w-5 h-5 text-primary" />
             </div>
             <div>
               <h3 className="text-xl font-bold text-secondary">{t('settings.transModels')}</h3>
@@ -1490,13 +1600,28 @@ export default function Settings({ project }: { project: Project | null }) {
           </div>
           
           <div className="space-y-4">
-            {translateModels.map(model => (
+            {translateModels.map((model, index) => (
               <ModelItem 
                 key={model.id} 
                 model={model} 
                 modelType="translate"
                 onSave={handleSaveTranslate}
                 onDelete={() => handleDeleteTranslate(model.id)}
+                isDefault={index === 0}
+                defaultLabel={localCopy.selected}
+                isDragging={dragState?.scope === 'cloud-translate' && dragState.id === model.id}
+                dragScope="cloud-translate"
+                onDragStart={(scope, id) => setDragState({ scope, id })}
+                onDragOverItem={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDropItem={(event, overId) => {
+                  event.preventDefault();
+                  handleCloudModelDrop('cloud-translate', overId);
+                  setDragState(null);
+                }}
+                onDragEnd={() => setDragState(null)}
               />
             ))}
 
@@ -1527,8 +1652,14 @@ export default function Settings({ project }: { project: Project | null }) {
         <section className="rounded-3xl border border-white/5 bg-surface-container p-7 shadow-[0_18px_50px_rgba(7,10,24,0.18)] space-y-6">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <h3 className="text-xl font-bold text-secondary">{t('settings.localModelsTitle')}</h3>
-              <p className="text-xs text-outline mt-1">{t('settings.localModelsSubtitle')}</p>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xl font-bold text-secondary">{t('settings.localModelsTitle')}</h3>
+                <FieldHelp
+                  ariaLabel={`${t('settings.localModelsTitle')} help`}
+                  title={t('settings.localModelsTitle')}
+                  body={localHelpCopy.localModels}
+                />
+              </div>
             </div>
             <button
               type="button"
@@ -1550,8 +1681,11 @@ export default function Settings({ project }: { project: Project | null }) {
 
           <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
             <div>
-              <div className="text-sm font-bold text-secondary">{localCopy.runtimeTitle}</div>
-              <div className="mt-1 text-[11px] text-outline">{localCopy.runtimeSubtitle}</div>
+              <SettingsHelpTitle
+                label={localCopy.runtimeTitle}
+                title={localCopy.runtimeTitle}
+                body={localHelpCopy.runtime}
+              />
             </div>
 
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -1632,8 +1766,11 @@ export default function Settings({ project }: { project: Project | null }) {
 
           <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
             <div>
-              <div className="text-sm font-bold text-secondary">{localCopy.hfAccessTitle}</div>
-              <div className="mt-1 text-[11px] text-outline">{localCopy.hfAccessSubtitle}</div>
+              <SettingsHelpTitle
+                label={localCopy.hfAccessTitle}
+                title={localCopy.hfAccessTitle}
+                body={localHelpCopy.hfAccess}
+              />
             </div>
 
             <div className="flex flex-col gap-2 rounded-xl border border-white/5 bg-surface-container-high px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
@@ -1683,8 +1820,11 @@ export default function Settings({ project }: { project: Project | null }) {
           <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 space-y-3">
             <div className="flex items-start justify-between gap-4 flex-wrap">
               <div>
-                <div className="text-sm font-bold text-secondary">{pyannoteCopy.title}</div>
-                <div className="mt-1 text-[11px] text-outline">{pyannoteCopy.subtitle}</div>
+                <SettingsHelpTitle
+                  label={pyannoteCopy.title}
+                  title={pyannoteCopy.title}
+                  body={localHelpCopy.pyannote}
+                />
               </div>
               <button
                 type="button"
@@ -1732,8 +1872,11 @@ export default function Settings({ project }: { project: Project | null }) {
 
           <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-6 space-y-4">
             <div>
-              <div className="text-sm font-bold text-secondary">{localCopy.installTitle}</div>
-              <div className="mt-1 text-[11px] text-outline">{localCopy.installHint} {localCopy.installHintDetail}</div>
+              <SettingsHelpTitle
+                label={localCopy.installTitle}
+                title={localCopy.installTitle}
+                body={localHelpCopy.install}
+              />
             </div>
 
             <div className="space-y-2">
@@ -1897,11 +2040,45 @@ export default function Settings({ project }: { project: Project | null }) {
                 {localAsrModels.length === 0 && (
                   <div className="text-[11px] text-outline">{localCopy.noInstalledModels}</div>
                 )}
-                {localAsrModels.map((model) => (
-                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4">
+                {localAsrModels.map((model, index) => (
+                  <div
+                    key={model.id}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      void handleLocalModelDrop('local-asr', model.id);
+                      setDragState(null);
+                    }}
+                    className={`rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4 ${
+                      dragState?.scope === 'local-asr' && dragState.id === model.id ? 'opacity-55 ring-2 ring-primary/35' : ''
+                    }`}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          draggable={!localCatalogLoading}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', model.id);
+                            setDragState({ scope: 'local-asr', id: model.id });
+                          }}
+                          onDragEnd={() => setDragState(null)}
+                          disabled={localCatalogLoading}
+                          className="inline-flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg border border-white/10 text-outline transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 active:cursor-grabbing"
+                          aria-label={`Reorder ${model.name}`}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </button>
                         <div className="text-sm font-bold text-secondary">{model.name}</div>
+                        {index === 0 ? (
+                          <span className="rounded-full border border-tertiary/20 bg-tertiary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-tertiary">
+                            {localCopy.selected}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-outline sm:grid-cols-2">
                         <div>{localCopy.sourceFormat}: {formatLocalModelSourceFormat(language, model.sourceFormat)}</div>
@@ -1921,25 +2098,12 @@ export default function Settings({ project }: { project: Project | null }) {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => void handleSelectLocalModel('asr', model.id)}
-                        disabled={model.selected || localCatalogLoading}
-                        className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-bold transition-all disabled:cursor-not-allowed ${
-                          model.selected
-                            ? 'border-tertiary/20 bg-tertiary/10 text-tertiary disabled:opacity-100'
-                            : 'border-primary/20 text-primary hover:bg-primary/10 disabled:opacity-60'
-                        }`}
-                      >
-                        {model.selected ? <CheckCircle2 className="w-4 h-4" /> : null}
-                        {model.selected ? localCopy.selected : localCopy.setDefaultAsr}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => void handleRemoveLocalModel(model.id)}
                         disabled={localRemovingModelId === model.id}
-                        className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        className="flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-2.5 text-sm font-bold text-outline transition-all hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                        {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
+                        {localRemovingModelId === model.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        <span>{t('settings.delete')}</span>
                       </button>
                     </div>
                     {model.installError && (
@@ -1965,11 +2129,45 @@ export default function Settings({ project }: { project: Project | null }) {
                 {localTranslateModels.length === 0 && (
                   <div className="text-[11px] text-outline">{localCopy.noInstalledModels}</div>
                 )}
-                {localTranslateModels.map((model) => (
-                  <div key={model.id} className="rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4">
+                {localTranslateModels.map((model, index) => (
+                  <div
+                    key={model.id}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      void handleLocalModelDrop('local-translate', model.id);
+                      setDragState(null);
+                    }}
+                    className={`rounded-xl border border-white/5 bg-surface-container-high p-4 flex flex-col gap-4 ${
+                      dragState?.scope === 'local-translate' && dragState.id === model.id ? 'opacity-55 ring-2 ring-primary/35' : ''
+                    }`}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          draggable={!localCatalogLoading}
+                          onDragStart={(event) => {
+                            event.dataTransfer.effectAllowed = 'move';
+                            event.dataTransfer.setData('text/plain', model.id);
+                            setDragState({ scope: 'local-translate', id: model.id });
+                          }}
+                          onDragEnd={() => setDragState(null)}
+                          disabled={localCatalogLoading}
+                          className="inline-flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-lg border border-white/10 text-outline transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary disabled:cursor-not-allowed disabled:opacity-50 active:cursor-grabbing"
+                          aria-label={`Reorder ${model.name}`}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </button>
                         <div className="text-sm font-bold text-secondary">{model.name}</div>
+                        {index === 0 ? (
+                          <span className="rounded-full border border-tertiary/20 bg-tertiary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-tertiary">
+                            {localCopy.selected}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] text-outline sm:grid-cols-2">
                         <div>{localCopy.sourceFormat}: {formatLocalModelSourceFormat(language, model.sourceFormat)}</div>
@@ -1989,25 +2187,12 @@ export default function Settings({ project }: { project: Project | null }) {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => void handleSelectLocalModel('translate', model.id)}
-                        disabled={model.selected || localCatalogLoading}
-                        className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-bold transition-all disabled:cursor-not-allowed ${
-                          model.selected
-                            ? 'border-tertiary/20 bg-tertiary/10 text-tertiary disabled:opacity-100'
-                            : 'border-primary/20 text-primary hover:bg-primary/10 disabled:opacity-60'
-                        }`}
-                      >
-                        {model.selected ? <CheckCircle2 className="w-4 h-4" /> : null}
-                        {model.selected ? localCopy.selected : localCopy.setDefaultTranslate}
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => void handleRemoveLocalModel(model.id)}
                         disabled={localRemovingModelId === model.id}
-                        className="px-4 py-2 rounded-lg border border-white/10 text-sm font-bold text-secondary hover:bg-white/5 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        className="flex items-center justify-center gap-2 rounded-xl border border-white/10 px-4 py-2.5 text-sm font-bold text-outline transition-all hover:border-red-400/30 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {localRemovingModelId === model.id ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                        {localRemovingModelId === model.id ? t('settings.localRemoving') : t('settings.localRemove')}
+                        {localRemovingModelId === model.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        <span>{t('settings.delete')}</span>
                       </button>
                     </div>
                     {model.installError && (
@@ -2191,14 +2376,30 @@ const ModelItem: React.FC<{
   onSave: (model: ApiConfig) => void, 
   onDelete: () => void,
   isNew?: boolean,
-  onCancelNew?: () => void
+  onCancelNew?: () => void,
+  isDefault?: boolean,
+  defaultLabel?: string,
+  isDragging?: boolean,
+  dragScope?: ModelDragScope,
+  onDragStart?: (scope: ModelDragScope, id: string) => void,
+  onDragOverItem?: (event: React.DragEvent, id: string) => void,
+  onDropItem?: (event: React.DragEvent, id: string) => void,
+  onDragEnd?: () => void,
 }> = ({ 
   model, 
   modelType,
   onSave, 
   onDelete, 
   isNew = false,
-  onCancelNew
+  onCancelNew,
+  isDefault = false,
+  defaultLabel,
+  isDragging = false,
+  dragScope,
+  onDragStart,
+  onDragOverItem,
+  onDropItem,
+  onDragEnd,
 }) => {
   const { t } = useLanguage();
   const [isEditing, setIsEditing] = React.useState(isNew);
@@ -2413,12 +2614,43 @@ const ModelItem: React.FC<{
 
   if (!isEditing) {
     return (
-      <div className="rounded-2xl border border-white/5 bg-surface-container-lowest p-5 transition-all hover:border-white/10 hover:bg-surface-container-lowest/90">
+      <div
+        onDragOver={(event) => onDragOverItem?.(event, model.id)}
+        onDrop={(event) => onDropItem?.(event, model.id)}
+        className={`rounded-2xl border border-white/5 bg-surface-container-lowest p-5 transition-all hover:border-white/10 hover:bg-surface-container-lowest/90 ${
+          isDragging ? 'opacity-55 ring-2 ring-primary/35' : ''
+        }`}
+      >
         <div className="space-y-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-outline">{t('settings.modelName')}</div>
-              <div className="mt-1 truncate text-base font-bold text-secondary">{model.name}</div>
+            <div className="flex min-w-0 items-start gap-3">
+              {!isNew && dragScope ? (
+                <button
+                  type="button"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', model.id);
+                    onDragStart?.(dragScope, model.id);
+                  }}
+                  onDragEnd={onDragEnd}
+                  className="mt-0.5 inline-flex h-9 w-9 shrink-0 cursor-grab items-center justify-center rounded-lg border border-white/10 text-outline transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-primary active:cursor-grabbing"
+                  aria-label={`Reorder ${model.name}`}
+                >
+                  <GripVertical className="h-4 w-4" />
+                </button>
+              ) : null}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="text-[10px] font-bold uppercase tracking-widest text-outline">{t('settings.modelName')}</div>
+                  {isDefault ? (
+                    <span className="rounded-full border border-tertiary/20 bg-tertiary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest text-tertiary">
+                      {defaultLabel || 'Default'}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1 truncate text-base font-bold text-secondary">{model.name}</div>
+              </div>
             </div>
             <div className="inline-flex w-fit items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-bold text-outline">
               {model.model || getDefaultProviderModelId(modelType, model.url)}
