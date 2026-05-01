@@ -47,6 +47,9 @@ const releaseCopies = [
   { source: 'tools_src/export_pyannote.py', destination: 'tools_src/export_pyannote.py' },
   { source: '.env.example', destination: '.env.example' },
   { source: 'README.md', destination: 'README.md' },
+  { source: 'README.zh-TW.md', destination: 'README.zh-TW.md' },
+  { source: 'README.ja.md', destination: 'README.ja.md' },
+  { source: 'docs', destination: 'docs' },
   { source: 'collect-diagnostics.ps1', destination: 'collect-diagnostics.ps1' },
   { source: 'collect-diagnostics.sh', destination: 'collect-diagnostics.sh' },
   { source: 'deploy.ps1', destination: 'deploy.ps1' },
@@ -171,7 +174,6 @@ async function bundleReleaseRuntime() {
       '-File',
       path.join(releaseRoot, 'deploy.ps1'),
       '-SkipBuild',
-      '-SkipSmoke',
       '-SkipPyannote',
     ]);
   } else if (target.startsWith('linux')) {
@@ -187,6 +189,9 @@ async function bundleReleaseRuntime() {
 async function main() {
   await assertExists('build/server/index.js');
   await assertExists('dist/index.html');
+  for (const entry of releaseCopies) {
+    await assertExists(entry.source);
+  }
 
   await fs.remove(releaseRoot);
   await fs.ensureDir(releaseRoot);

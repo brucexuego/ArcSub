@@ -90,9 +90,9 @@ ensure_pyannote() {
       return 0
     fi
 
-    printf '[ArcSub] Pyannote needs a Hugging Face access token for gated assets.\n'
-    printf '[ArcSub] Approve the pyannote model access on Hugging Face first, then paste HF_TOKEN.\n'
-    read -r -s -p 'HF_TOKEN (leave blank to skip pyannote for now): ' token_input
+    printf '[ArcSub] HF_TOKEN is optional and is used for Pyannote assets plus Hugging Face models that require approval, login, or private access.\n'
+    printf '[ArcSub] Accept the pyannote model access on Hugging Face before installing Pyannote assets. The same token is saved for later local-model downloads.\n'
+    read -r -s -p 'HF_TOKEN (leave blank to skip Pyannote asset install for now): ' token_input
     printf '\n'
     token_input="${token_input#"${token_input%%[![:space:]]*}"}"
     token_input="${token_input%"${token_input##*[![:space:]]}"}"
@@ -474,16 +474,28 @@ run_npm_cmd() {
 
 ensure_dotenv_file() {
   local env_path="$script_dir/.env"
-  if [[ -f "$env_path" ]]; then
-    resolved_env_path="$env_path"
-    return 0
+  if [[ ! -f "$env_path" ]]; then
+    if [[ -f "$script_dir/.env.example" ]]; then
+      cp "$script_dir/.env.example" "$env_path"
+    else
+      : > "$env_path"
+    fi
   fi
 
-  if [[ -f "$script_dir/.env.example" ]]; then
-    cp "$script_dir/.env.example" "$env_path"
-  else
-    : > "$env_path"
+  local current_key
+  current_key="$(dotenv_get "$env_path" "ENCRYPTION_KEY")"
+  if [[ ! "$current_key" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    local generated_key
+    generated_key="$("${python_bin:-python3}" - <<'PY'
+import secrets
+
+print(secrets.token_hex(32))
+PY
+)"
+    dotenv_set "$env_path" "ENCRYPTION_KEY" "$generated_key"
+    log "Generated a fresh ENCRYPTION_KEY in .env"
   fi
+
   resolved_env_path="$env_path"
 }
 
