@@ -731,7 +731,9 @@ function Test-NodeNativeRuntimes([string]$RootDir, [string]$NodeExe) {
 await import("onnxruntime-node");
 await import("@huggingface/transformers");
 '@
-  $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("arcsub-native-runtime-probe-" + [Guid]::NewGuid().ToString("N") + ".mjs")
+  $probeDir = Join-Path $RootDir ".arcsub-bootstrap\downloads"
+  New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+  $scriptPath = Join-Path $probeDir ("arcsub-native-runtime-probe-" + [Guid]::NewGuid().ToString("N") + ".mjs")
   $stdoutPath = [System.IO.Path]::GetTempFileName()
   $stderrPath = [System.IO.Path]::GetTempFileName()
   try {
