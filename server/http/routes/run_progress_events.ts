@@ -51,6 +51,7 @@ function inferCodeFromMessage(kind: 'asr' | 'translation', message: string): str
   if (normalized.includes('calling translation provider') && normalized.includes('whole-document mode')) return 'provider.call.whole_document';
   if (normalized.includes('calling translation provider') && normalized.includes('cloud context window')) return 'provider.call.cloud_context';
   if (normalized.includes('calling translation provider')) return 'provider.call.started';
+  if (normalized.includes('waiting for translation provider') && normalized.includes('response')) return 'provider.waiting.response';
   if (normalized.includes('translating local subtitle batch')) return 'provider.translation.local_batch';
   if (normalized.includes('translating remote subtitle batch with cloud context')) return 'provider.translation.remote_context_batch';
   if (normalized.includes('translating remote subtitle batch')) return 'provider.translation.remote_batch';

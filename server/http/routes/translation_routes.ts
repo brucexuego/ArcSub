@@ -1,5 +1,9 @@
 import express from 'express';
-import { persistTranslationArtifacts, readProjectSourceAsset } from '../text_utils.js';
+import {
+  persistTranslationArtifacts,
+  readProjectSourceAsset,
+  rebuildTranslationWithSourceTimecodes,
+} from '../text_utils.js';
 import { PROJECT_STATUS } from '../../../src/project_status.js';
 import { buildLegacyProcessingEvent, buildRunFailureIssue } from './run_progress_events.js';
 
@@ -120,7 +124,9 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
         writeAsrLog(`[TR ${requestId}] skipped completion because client disconnected`);
         return;
       }
-      const artifacts = await persistTranslationArtifacts(projectId, String(result.translatedText || ''));
+      const translatedText = rebuildTranslationWithSourceTimecodes(sourceText, String(result.translatedText || ''));
+      const normalizedResult = { ...result, translatedText };
+      const artifacts = await persistTranslationArtifacts(projectId, translatedText);
       const actualModelId =
         typeof result.debug?.provider?.modelId === 'string' && result.debug.provider.modelId.trim()
           ? result.debug.provider.modelId.trim()
@@ -128,8 +134,8 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
             ? modelId.trim()
             : null;
       await ProjectManager.updateProject(projectId, {
-        originalSubtitles: String(project.originalSubtitles || sourceText || '').trim(),
-        translatedSubtitles: String(result.translatedText || '').trim(),
+        originalSubtitles: String(sourceText || '').trim(),
+        translatedSubtitles: translatedText.trim(),
         status: PROJECT_STATUS.COMPLETED,
         translationMetadata: {
           lastModelId: actualModelId,
@@ -159,7 +165,7 @@ export function registerTranslationRoutes(app: express.Express, deps: Translatio
           message: 'Translation completed.',
           data: { kind: 'translation' },
         },
-        result: { ...result, exports: { hasTimecodes: artifacts.hasTimecodes } },
+        result: { ...normalizedResult, exports: { hasTimecodes: artifacts.hasTimecodes } },
       })}\n\n`);
       return res.end();
     } catch (error: any) {

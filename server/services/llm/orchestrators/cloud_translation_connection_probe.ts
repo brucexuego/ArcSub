@@ -3,7 +3,11 @@ import {
   type CloudTranslationOrchestratorDeps,
   type CloudTranslationOrchestratorInput,
 } from './cloud_translation_orchestrator.js';
-import { resolveCloudTranslateProvider, type ResolvedCloudTranslateProvider } from '../../cloud_translate_provider.js';
+import {
+  redactUrlSecrets,
+  resolveCloudTranslateProvider,
+  type ResolvedCloudTranslateProvider,
+} from '../../cloud_translate_provider.js';
 import type { ApiModelRequestOptions } from '../../../../src/types.js';
 
 export interface CloudTranslationConnectionProbeInput {
@@ -36,6 +40,15 @@ export interface CloudTranslationConnectionProbeDeps {
   mapConnectionError(error: unknown): string;
 }
 
+function sanitizeResolvedProviderForResponse(
+  resolvedProvider: ResolvedCloudTranslateProvider
+): ResolvedCloudTranslateProvider {
+  return {
+    ...resolvedProvider,
+    endpointUrl: redactUrlSecrets(resolvedProvider.endpointUrl),
+  };
+}
+
 export async function runCloudTranslationConnectionProbe(
   input: CloudTranslationConnectionProbeInput,
   deps: CloudTranslationConnectionProbeDeps
@@ -52,6 +65,7 @@ export async function runCloudTranslationConnectionProbe(
       modelName: name,
       model,
       apiKey: key,
+      options,
     });
     await runCloudTranslationOrchestrator(
       deps.buildOrchestratorInput(
@@ -73,7 +87,7 @@ export async function runCloudTranslationConnectionProbe(
     return {
       success: true,
       message: 'Connection succeeded.',
-      resolvedProvider,
+      resolvedProvider: sanitizeResolvedProviderForResponse(resolvedProvider),
     };
   } catch (error) {
     return {

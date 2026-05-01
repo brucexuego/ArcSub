@@ -35,6 +35,17 @@ export const PRESET_LLM_MODEL_PROFILES: LlmModelProfile[] = [
     defaultSampling: { temperature: 0.2, topP: 0.95, topK: 40 },
   },
   {
+    id: 'gemma',
+    family: 'gemma',
+    adapterKey: 'gemini-native',
+    defaultModel: 'gemma-4-31b-it',
+    matchPrefixes: ['gemma-', 'google/gemma-'],
+    supportsJsonSchema: true,
+    supportsReasoning: true,
+    supportsTools: false,
+    defaultSampling: { temperature: 0.2, topP: 0.95, topK: 40 },
+  },
+  {
     id: 'mistral',
     family: 'mistral',
     adapterKey: 'mistral-chat',

@@ -1,6 +1,11 @@
 import fs from 'fs-extra';
-import path from 'path';
 import { PathManager } from '../path_manager.js';
+import {
+  normalizeSubtitleSourceForTranslation,
+  rebuildTranslationWithSourceTimecodes,
+} from '../../src/utils/subtitle_normalizer.js';
+
+export { rebuildTranslationWithSourceTimecodes };
 
 function toSingleLineText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
@@ -77,39 +82,7 @@ export function extractErrorMessage(bodyText: string, contentType: string) {
 }
 
 function normalizeTranslationSourceText(fileName: string, rawContent: string) {
-  const clean = String(rawContent || '').replace(/^\uFEFF/, '').trim();
-  if (!clean) return '';
-
-  const ext = path.extname(fileName).toLowerCase();
-  if (ext !== '.json') return clean;
-
-  try {
-    const parsed = JSON.parse(clean);
-    if (typeof parsed === 'string') return parsed.trim();
-    if (typeof parsed?.originalSubtitles === 'string') return parsed.originalSubtitles.trim();
-    if (typeof parsed?.translatedSubtitles === 'string') return parsed.translatedSubtitles.trim();
-    if (typeof parsed?.text === 'string') return parsed.text.trim();
-
-    if (Array.isArray(parsed?.segments)) {
-      const merged = parsed.segments
-        .map((seg: any) => String(seg?.text || '').trim())
-        .filter(Boolean)
-        .join('\n');
-      if (merged) return merged;
-    }
-
-    if (Array.isArray(parsed?.chunks)) {
-      const merged = parsed.chunks
-        .map((chunk: any) => String(chunk?.text || '').trim())
-        .filter(Boolean)
-        .join('\n');
-      if (merged) return merged;
-    }
-  } catch {
-    // Fallback to raw text.
-  }
-
-  return clean;
+  return normalizeSubtitleSourceForTranslation(fileName, rawContent);
 }
 
 function parseBracketTimecodeSeconds(raw: string) {
@@ -132,8 +105,12 @@ function formatSubtitleTime(seconds: number, type: 'srt' | 'vtt') {
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}${msSep}${ms.toString().padStart(3, '0')}`;
 }
 
+function stripLineSafeMarkers(text: string) {
+  return String(text || '').replace(/\[\[L\d{5}\]\]\s*/g, '').trim();
+}
+
 function buildTranslationArtifacts(sourceText: string) {
-  const sourceLines = String(sourceText || '').split('\n');
+  const sourceLines = String(sourceText || '').split('\n').map((line) => stripLineSafeMarkers(line));
   const timedRows: Array<{ start: number; text: string }> = [];
   const txtLines = sourceLines.map((line) => {
     const matched = String(line).match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/);

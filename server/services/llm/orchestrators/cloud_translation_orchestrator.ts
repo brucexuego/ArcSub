@@ -1,4 +1,5 @@
 import type { CloudTranslateProvider } from '../../cloud_translate_provider.js';
+import type { CloudTranslateBatchingSource } from '../../cloud_translate/types.js';
 import type { ApiModelRequestOptions } from '../../../../src/types.js';
 import {
   usesJsonStrictAlignment,
@@ -6,9 +7,9 @@ import {
   type TranslationQualityMode,
 } from './translation_quality_policy.js';
 
-export type CloudTranslationStrategy = 'plain' | 'forced_alignment' | 'context_window' | 'provider_batch';
+export type CloudTranslationStrategy = 'plain' | 'line_locked' | 'cloud_strict';
 
-export type CloudTranslationBatchSource = 'nvidia-hosted';
+export type CloudTranslationBatchSource = CloudTranslateBatchingSource;
 export type CloudTranslationProviderBatchMode = 'line_safe' | 'plain_ordered';
 
 export interface CloudTranslationLineSafeUnit {
@@ -70,6 +71,20 @@ export interface CloudTranslationBatchDebugInfo {
   maxDurationMs: number;
 }
 
+export interface CloudTranslationQuotaDebugInfo {
+  applied: boolean;
+  profileId: string | null;
+  tokenEstimator: string | null;
+  estimatedInputTokens: number | null;
+  estimatedTotalTokens: number | null;
+  waitedMs: number;
+  waitReason: string | null;
+  waitEvents: Array<{
+    reason: string;
+    waitedMs: number;
+  }>;
+}
+
 export interface CloudTranslationProviderResult {
   text: string;
   meta: {
@@ -77,6 +92,8 @@ export interface CloudTranslationProviderResult {
     fallbackUsed: boolean;
     fallbackType: string | null;
     requestWarnings?: string[];
+    quota?: CloudTranslationQuotaDebugInfo | null;
+    responseHeaders?: Record<string, string>;
   };
 }
 
@@ -101,6 +118,7 @@ export interface CloudTranslationOrchestratorInput {
   isConnectionTest?: boolean;
   providerRequest: CloudTranslationProviderRequest;
   providerBatching?: CloudTranslationProviderBatchConfig | null;
+  initialWarnings?: string[];
   signal?: AbortSignal;
 }
 
@@ -197,6 +215,8 @@ export interface CloudTranslationOrchestratorResult {
   cloudContextChunkCount: number;
   cloudContextFallbackCount: number;
   cloudBatching: CloudTranslationBatchDebugInfo | null;
+  cloudQuota: CloudTranslationQuotaDebugInfo | null;
+  cloudStrategyReason: string;
   sourceLineCount: number;
   sourceHasStructuredPrefixes: boolean;
   sourceSpeakerTaggedLineCount: number;
@@ -295,6 +315,49 @@ function buildProviderBatchChunks(
   return chunks;
 }
 
+function stripLineSafeMarkers(text: string) {
+  return String(text || '').replace(/\[\[L\d{5}\]\]\s*/g, '').trim();
+}
+
+function mergeQuotaDebug(
+  current: CloudTranslationQuotaDebugInfo | null,
+  next: CloudTranslationQuotaDebugInfo | null | undefined
+) {
+  if (!next) return current;
+  if (!current) {
+    return {
+      ...next,
+      waitEvents: [...(next.waitEvents || [])],
+    } satisfies CloudTranslationQuotaDebugInfo;
+  }
+  return {
+    applied: current.applied || next.applied,
+    profileId: current.profileId || next.profileId,
+    tokenEstimator: current.tokenEstimator || next.tokenEstimator,
+    estimatedInputTokens:
+      (current.estimatedInputTokens ?? 0) + (next.estimatedInputTokens ?? 0),
+    estimatedTotalTokens:
+      (current.estimatedTotalTokens ?? 0) + (next.estimatedTotalTokens ?? 0),
+    waitedMs: current.waitedMs + next.waitedMs,
+    waitReason: next.waitReason || current.waitReason,
+    waitEvents: [...(current.waitEvents || []), ...(next.waitEvents || [])],
+  } satisfies CloudTranslationQuotaDebugInfo;
+}
+
+function startProviderProgressPulse(input: {
+  provider: CloudTranslateProvider;
+  signal?: AbortSignal;
+  onProgress?: (message: string) => void;
+}) {
+  if (!input.onProgress) return null;
+  const startedAt = Date.now();
+  return setInterval(() => {
+    if (input.signal?.aborted) return;
+    const elapsedSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    input.onProgress?.(`Waiting for translation provider (${input.provider}) response (${elapsedSec}s)...`);
+  }, 15_000);
+}
+
 export async function runCloudTranslationOrchestrator(
   input: CloudTranslationOrchestratorInput,
   deps: CloudTranslationOrchestratorDeps,
@@ -306,13 +369,13 @@ export async function runCloudTranslationOrchestrator(
   const sourceLineCount = String(input.text).split('\n').length;
   const sourceHasStructuredPrefixes = lineSafeUnits.some((unit) => Boolean(unit.prefix));
   const sourceSpeakerTaggedLineCount = lineSafeUnits.filter((unit) => Boolean(unit.speakerTag)).length;
-  const useLineSafeMode = sourceLineCount > 1;
-  const useCloudForcedAlignment = useLineSafeMode && input.enableJsonLineRepair && usesJsonStrictAlignment(input.qualityMode);
+  const hasMultipleSourceLines = sourceLineCount > 1;
+  const useCloudStrictAlignment = input.enableJsonLineRepair && usesJsonStrictAlignment(input.qualityMode);
+  const useCloudLineLocked = !useCloudStrictAlignment && usesTemplateValidatedQualityChecks(input.qualityMode);
   const cloudContextConfig = deps.getCloudContextConfig();
   const useCloudContextMode =
-    !useCloudForcedAlignment &&
-    useLineSafeMode &&
-    usesTemplateValidatedQualityChecks(input.qualityMode) &&
+    hasMultipleSourceLines &&
+    useCloudLineLocked &&
     cloudContextConfig.enabled &&
     input.supportsContextMode;
   const providerBatching =
@@ -320,15 +383,24 @@ export async function runCloudTranslationOrchestrator(
   const providerBatchTotalChars = lineSafeUnits.reduce((sum, unit) => sum + getUnitSourceChars(unit), 0);
   const useProviderBatchMode = Boolean(
     providerBatching &&
-      !useCloudForcedAlignment &&
+      !useCloudStrictAlignment &&
       !useCloudContextMode &&
-      useLineSafeMode &&
+      hasMultipleSourceLines &&
       (lineSafeUnits.length > providerBatching.targetLines || providerBatchTotalChars > providerBatching.charBudget)
   );
+  const cloudStrategyReason = useCloudStrictAlignment
+    ? 'json_line_repair_enabled'
+    : useCloudContextMode
+      ? 'template_or_custom_prompt_with_context_profile'
+      : useProviderBatchMode
+        ? 'provider_batch_profile_threshold'
+        : useCloudLineLocked
+          ? 'template_or_custom_prompt'
+          : 'plain_cloud_request';
 
   const { maxRetries, baseRetryMs, rateLimitRetryMs } = deps.getRetryConfig();
 
-  const warnings: string[] = [];
+  const warnings: string[] = [...(input.initialWarnings || [])];
   const addWarning = (code: string) => {
     if (!warnings.includes(code)) warnings.push(code);
   };
@@ -339,16 +411,15 @@ export async function runCloudTranslationOrchestrator(
   let fallbackUsed = false;
   let fallbackType: string | null = null;
   let endpointUsed = input.providerRequest.endpointUrl;
-  let cloudStrategy: CloudTranslationStrategy = useCloudForcedAlignment
-    ? 'forced_alignment'
-    : useCloudContextMode
-      ? 'context_window'
-      : useProviderBatchMode
-        ? 'provider_batch'
+  let cloudStrategy: CloudTranslationStrategy = useCloudStrictAlignment
+    ? 'cloud_strict'
+    : useCloudLineLocked
+      ? 'line_locked'
       : 'plain';
   let cloudContextChunkCount = 0;
   let cloudContextFallbackCount = 0;
   let cloudBatching: CloudTranslationBatchDebugInfo | null = null;
+  let cloudQuota: CloudTranslationQuotaDebugInfo | null = null;
 
   const requestCloudTranslation = async (requestOptions: {
     text: string;
@@ -364,6 +435,11 @@ export async function runCloudTranslationOrchestrator(
       deps.throwIfAborted(input.signal);
       try {
         onProgress?.(requestOptions.progressMessage || `Calling translation provider (${input.providerRequest.provider})...`);
+        const progressPulse = startProviderProgressPulse({
+          provider: input.providerRequest.provider,
+          signal: input.signal,
+          onProgress,
+        });
         const result = await deps.requestTranslationByProvider(
           input.providerRequest.provider,
           endpointUsed,
@@ -384,10 +460,13 @@ export async function runCloudTranslationOrchestrator(
             signal: input.signal,
           },
           onProgress
-        );
+        ).finally(() => {
+          if (progressPulse) clearInterval(progressPulse);
+        });
         for (const warning of result.meta.requestWarnings || []) {
           addWarning(warning);
         }
+        cloudQuota = mergeQuotaDebug(cloudQuota, result.meta.quota);
         if (result.meta.fallbackUsed) {
           fallbackUsed = true;
           fallbackType = result.meta.fallbackType;
@@ -540,7 +619,7 @@ export async function runCloudTranslationOrchestrator(
     }
 
     addWarning('line_alignment_repair_failed');
-    return chunkOutput;
+    return stripLineSafeMarkers(chunkOutput);
   };
 
   const runCloudLineSafeFlow = async () => {
@@ -644,7 +723,7 @@ export async function runCloudTranslationOrchestrator(
 
     addWarning('cloud_provider_batch_translation_applied');
     const providerBatchMode: CloudTranslationProviderBatchMode =
-      input.qualityMode === 'plain_probe' ? 'plain_ordered' : 'line_safe';
+      useCloudLineLocked ? 'line_safe' : 'plain_ordered';
     const durationsMs: number[] = [];
     const lineCounts: number[] = [];
     const charCounts: number[] = [];
@@ -730,7 +809,7 @@ export async function runCloudTranslationOrchestrator(
       lineCounts.push(units.length);
       charCounts.push(charCount);
       estimatedOutputTokens.push(outputTokenLimit);
-      return normalized;
+      return providerBatchMode === 'line_safe' ? stripLineSafeMarkers(normalized) : normalized;
     };
 
     const chunks = buildProviderBatchChunks(
@@ -768,12 +847,14 @@ export async function runCloudTranslationOrchestrator(
     };
   };
 
-  if (useCloudForcedAlignment) {
+  if (useCloudStrictAlignment) {
     await runCloudLineSafeFlow();
   } else if (useCloudContextMode) {
     await runCloudContextFlow();
   } else if (useProviderBatchMode) {
     await runProviderBatchFlow();
+  } else if (useCloudLineLocked) {
+    await runCloudLineSafeFlow();
   } else {
     output = await requestCloudTranslation({
       text: input.text,
@@ -796,6 +877,8 @@ export async function runCloudTranslationOrchestrator(
     cloudContextChunkCount,
     cloudContextFallbackCount,
     cloudBatching,
+    cloudQuota,
+    cloudStrategyReason,
     sourceLineCount,
     sourceHasStructuredPrefixes,
     sourceSpeakerTaggedLineCount,

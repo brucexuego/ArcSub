@@ -81,13 +81,43 @@ export interface ApiConfig {
 export interface ApiModelSamplingOptions {
   temperature?: number | null;
   topP?: number | null;
+  topK?: number | null;
   maxOutputTokens?: number | null;
+}
+
+export interface ApiModelQuotaOptions {
+  rpm?: number | null;
+  tpm?: number | null;
+  rpd?: number | null;
+  maxConcurrency?: number | null;
+}
+
+export interface ApiModelTranslationBatchingOptions {
+  enabled?: boolean | null;
+  targetLines?: number | null;
+  minTargetLines?: number | null;
+  charBudget?: number | null;
+  maxSplitDepth?: number | null;
+  maxOutputTokens?: number | null;
+  timeoutMs?: number | null;
+  stream?: boolean | null;
+}
+
+export interface ApiModelTranslationOptions {
+  executionMode?: 'auto' | 'cloud_context' | 'cloud_strict' | 'cloud_relaxed' | 'provider_native';
+  quota?: ApiModelQuotaOptions;
+  batching?: ApiModelTranslationBatchingOptions;
+  contextWindow?: number | null;
+  targetLines?: number | null;
+  charBudget?: number | null;
 }
 
 export interface ApiModelRequestOptions {
   sampling?: ApiModelSamplingOptions;
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
+  quota?: ApiModelQuotaOptions;
+  translation?: ApiModelTranslationOptions;
   timeoutMs?: number | null;
 }
 

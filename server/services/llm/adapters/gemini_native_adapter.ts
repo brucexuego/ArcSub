@@ -3,6 +3,8 @@ import type { CanonicalLlmResponse } from '../canonical/llm_types.js';
 import {
   buildGeminiContents,
   buildGeminiSystemInstruction,
+  getCanonicalInstructions,
+  getCanonicalUserText,
   wantsJsonObject,
   wantsJsonSchema,
 } from '../mapping/provider_payloads.js';
@@ -11,7 +13,34 @@ import type { LlmAdapter, ProviderHttpResponse } from './base.js';
 function parseGeminiContent(data: any) {
   const parts = data?.candidates?.[0]?.content?.parts;
   if (!Array.isArray(parts)) return '';
-  return parts.map((part: any) => (typeof part?.text === 'string' ? part.text : '')).join('');
+  return parts
+    .map((part: any) => (!part?.thought && typeof part?.text === 'string' ? part.text : ''))
+    .join('');
+}
+
+function stripModelPrefix(model: string | undefined) {
+  return String(model || '').replace(/^models\//i, '').trim();
+}
+
+function isGemma3Model(model: string | undefined) {
+  return /^gemma-3[-_]/i.test(stripModelPrefix(model));
+}
+
+function buildGeminiSingleUserContents(input: Parameters<LlmAdapter['buildRequest']>[0]) {
+  const instructions = getCanonicalInstructions(input);
+  const userText = getCanonicalUserText(input);
+  return [
+    {
+      role: 'user',
+      parts: [{
+        text: [
+          instructions,
+          instructions && userText ? 'Input:' : '',
+          userText,
+        ].filter(Boolean).join('\n\n'),
+      }],
+    },
+  ];
 }
 
 export const geminiNativeAdapter: LlmAdapter = {
@@ -24,8 +53,9 @@ export const geminiNativeAdapter: LlmAdapter = {
       headers['x-goog-api-key'] = context.apiKey;
     }
 
+    const omitDeveloperInstruction = isGemma3Model(input.model);
     const body: Record<string, any> = {
-      contents: buildGeminiContents(input),
+      contents: omitDeveloperInstruction ? buildGeminiSingleUserContents(input) : buildGeminiContents(input),
       generationConfig: {
         temperature: input.sampling?.temperature ?? 0.2,
         maxOutputTokens: input.sampling?.maxOutputTokens,
@@ -46,7 +76,7 @@ export const geminiNativeAdapter: LlmAdapter = {
       body.generationConfig.responseSchema = jsonSchema.schema;
     }
 
-    const systemInstruction = buildGeminiSystemInstruction(input);
+    const systemInstruction = omitDeveloperInstruction ? null : buildGeminiSystemInstruction(input);
     if (systemInstruction) {
       body.systemInstruction = systemInstruction;
     }
