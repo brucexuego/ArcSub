@@ -5,6 +5,7 @@ import https from 'https';
 import unzipper from 'unzipper';
 import { pipeline } from 'stream/promises';
 import { getBundledToolPath, isCommandAvailable } from '../runtime_tools.js';
+import { OpenvinoBackend } from '../openvino_backend.js';
 
 interface BaselineAssetDefinition {
   id: string;
@@ -17,8 +18,10 @@ export interface BaselineAssetEnsureResult {
   id: string;
   category: string;
   path: string;
+  irPath?: string;
   sourceUrl: string;
   installed: boolean;
+  converted: boolean;
   skipped: boolean;
   ready: boolean;
 }
@@ -109,17 +112,61 @@ export class ResourceManager {
     return asset;
   }
 
+  private static getBaselineIrPath(asset: BaselineAssetDefinition, sourcePath: string) {
+    if (asset.category !== 'speaker_embedding') {
+      return null;
+    }
+    if (!sourcePath.toLowerCase().endsWith('.onnx')) {
+      return null;
+    }
+    return sourcePath.replace(/\.onnx$/i, '.xml');
+  }
+
+  private static async ensureBaselineIrAsset(asset: BaselineAssetDefinition, sourcePath: string) {
+    const irPath = this.getBaselineIrPath(asset, sourcePath);
+    if (!irPath) {
+      return { irPath: undefined, converted: false };
+    }
+
+    const binPath = irPath.replace(/\.xml$/i, '.bin');
+    const [hasXml, hasBin] = await Promise.all([
+      fs.pathExists(irPath),
+      fs.pathExists(binPath),
+    ]);
+    if (hasXml && hasBin) {
+      return { irPath, converted: false };
+    }
+
+    console.log(`[ResourceManager] Converting baseline asset ${asset.id} to OpenVINO IR -> ${irPath}`);
+    await fs.remove(irPath).catch(() => {});
+    await fs.remove(binPath).catch(() => {});
+    await OpenvinoBackend.convertModelToIr(sourcePath, irPath, { compressToFp16: false });
+
+    const [convertedXml, convertedBin] = await Promise.all([
+      fs.pathExists(irPath),
+      fs.pathExists(binPath),
+    ]);
+    if (!convertedXml || !convertedBin) {
+      throw new Error(`OpenVINO IR conversion did not produce expected files for ${asset.id}.`);
+    }
+
+    return { irPath, converted: true };
+  }
+
   static async ensureBaselineAsset(identifier: string, manifestOverride?: any): Promise<BaselineAssetEnsureResult> {
     const asset = await this.getRequiredBaselineAsset(identifier, manifestOverride);
     const destination = path.join(PathManager.getModelsPath(), asset.targetRelativePath);
 
     if (await fs.pathExists(destination)) {
+      const irResult = await this.ensureBaselineIrAsset(asset, destination);
       return {
         id: asset.id,
         category: asset.category,
         path: destination,
+        irPath: irResult.irPath,
         sourceUrl: asset.sourceUrl,
         installed: false,
+        converted: irResult.converted,
         skipped: true,
         ready: true,
       };
@@ -132,12 +179,15 @@ export class ResourceManager {
     const task = (async () => {
       console.log(`[ResourceManager] Downloading baseline asset ${asset.id} -> ${destination}`);
       await this.downloadWithRedirect(asset.sourceUrl, destination);
+      const irResult = await this.ensureBaselineIrAsset(asset, destination);
       return {
         id: asset.id,
         category: asset.category,
         path: destination,
+        irPath: irResult.irPath,
         sourceUrl: asset.sourceUrl,
         installed: true,
+        converted: irResult.converted,
         skipped: false,
         ready: true,
       };
@@ -156,10 +206,14 @@ export class ResourceManager {
 
   static async ensureRequiredBaselineAssets(manifestOverride?: any) {
     const installed: Array<{ id: string; path: string }> = [];
+    const converted: Array<{ id: string; path: string }> = [];
     const skipped: Array<{ id: string; path: string }> = [];
 
     for (const asset of await this.getRequiredBaselineAssets(manifestOverride)) {
       const result = await this.ensureBaselineAsset(asset.id, manifestOverride);
+      if (result.converted && result.irPath) {
+        converted.push({ id: result.id, path: result.irPath });
+      }
       if (result.installed) {
         installed.push({ id: result.id, path: result.path });
       } else {
@@ -167,7 +221,7 @@ export class ResourceManager {
       }
     }
 
-    return { installed, skipped };
+    return { installed, converted, skipped };
   }
 
   static async ensureTools() {

@@ -102,6 +102,17 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
     }
   });
 
+  app.post('/api/runtime/pyannote/clear-error', async (req, res) => {
+    try {
+      const status = await PyannoteSetupService.clearError();
+      return res.json({ success: true, status });
+    } catch (error: any) {
+      return res.status(500).json({
+        error: error?.message || 'Failed to clear pyannote error.',
+      });
+    }
+  });
+
   app.get('/api/local-models', async (req, res) => {
     try {
       const LocalModelService = await getLocalModelService();
@@ -223,6 +234,17 @@ export function registerSystemAndLocalModelRoutes(app: express.Express) {
       return res.json(data);
     } catch (error: any) {
       return res.status(400).json({ error: error?.message || 'Failed to remove local model.' });
+    }
+  });
+
+  app.post('/api/local-models/install-status/clear', async (req, res) => {
+    try {
+      const LocalModelService = await getLocalModelService();
+      const modelId = typeof req.body?.modelId === 'string' ? req.body.modelId.trim() : '';
+      const data = await LocalModelService.clearInstallErrors({ modelId });
+      return res.json(data);
+    } catch (error: any) {
+      return res.status(400).json({ error: error?.message || 'Failed to clear local model install status.' });
     }
   });
 

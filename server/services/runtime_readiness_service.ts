@@ -150,6 +150,26 @@ async function getFileReadiness(targetPath: string): Promise<FileReadiness> {
   };
 }
 
+async function getOpenvinoIrReadiness(xmlPath: string): Promise<FileReadiness> {
+  const binPath = xmlPath.replace(/\.xml$/i, '.bin');
+  const [hasXml, hasBin] = await Promise.all([
+    fs.pathExists(xmlPath),
+    fs.pathExists(binPath),
+  ]);
+  return {
+    path: xmlPath,
+    exists: hasXml && hasBin,
+  };
+}
+
+async function getPreferredBaselineModelReadiness(paths: { irXmlPath: string; onnxPath: string }): Promise<FileReadiness> {
+  const ir = await getOpenvinoIrReadiness(paths.irXmlPath);
+  if (ir.exists) return ir;
+  const onnx = await getFileReadiness(paths.onnxPath);
+  if (onnx.exists) return onnx;
+  return ir;
+}
+
 async function hasConfiguredEnvValue(filePath: string, key: string) {
   if (!(await fs.pathExists(filePath))) return false;
   const content = await fs.readFile(filePath, 'utf8');
@@ -323,9 +343,15 @@ export class RuntimeReadinessService {
     const python = getPythonReadiness();
     const ffmpeg = getToolReadiness('ffmpeg');
     const ytDlp = getToolReadiness('yt-dlp');
-    const vad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'silero_vad.onnx'));
+    const vad = await getPreferredBaselineModelReadiness({
+      irXmlPath: path.join(PathManager.getModelsPath(), 'silero_vad.xml'),
+      onnxPath: path.join(PathManager.getModelsPath(), 'silero_vad.onnx'),
+    });
     const tenVad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ten-vad.onnx'));
-    const speakerEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ecapa-tdnn.onnx'));
+    const speakerEmbedding = await getPreferredBaselineModelReadiness({
+      irXmlPath: path.join(PathManager.getModelsPath(), 'ecapa-tdnn.xml'),
+      onnxPath: path.join(PathManager.getModelsPath(), 'ecapa-tdnn.onnx'),
+    });
     const pyannoteSegmentation = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'segmentation', 'model.xml'));
     const pyannoteEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'embedding', 'model.xml'));
     const pyannotePlda = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'plda', 'vbx.json'));

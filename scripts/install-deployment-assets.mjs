@@ -65,6 +65,7 @@ function printSummary(snapshot, assetSummary, pyannoteSummary) {
     `[deploy-assets] vad_ready=${snapshot.vad_ready} speaker_embedding_ready=${snapshot.speaker_embedding_ready}`,
     `[deploy-assets] pyannote_ready=${snapshot.pyannote_ready} pyannote_state=${snapshot.pyannote_state}`,
     `[deploy-assets] required_assets_installed=${assetSummary.installed.length} skipped=${assetSummary.skipped.length}`,
+    `[deploy-assets] required_assets_converted=${assetSummary.converted?.length || 0}`,
     `[deploy-assets] pyannote_step=${pyannoteSummary.status}`,
   ];
   for (const line of lines) {

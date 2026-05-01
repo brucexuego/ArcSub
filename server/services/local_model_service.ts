@@ -128,6 +128,14 @@ export class LocalModelService {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  private static clearInstallErrorState(modelId: string) {
+    this.installErrors.delete(modelId);
+    const state = this.installStates.get(modelId);
+    if (state?.phase === 'failed' && !state.installing) {
+      this.installStates.delete(modelId);
+    }
+  }
+
   private static getArtifactInstallPhase(model: LocalModelDefinition): LocalModelInstallPhase {
     return model.installMode === 'hf-direct' ? 'downloading' : 'converting';
   }
@@ -1338,6 +1346,24 @@ export class LocalModelService {
     const nextInstalled = registered.filter((item) => item.id !== modelId);
     await this.persistInstalledModels(settings, nextInstalled);
 
+    this.invalidateOverviewCache();
+    return this.getLocalModelsOverview({ forceFresh: true });
+  }
+
+  static async clearInstallErrors(input?: { modelId?: string | null }) {
+    const modelId = String(input?.modelId || '').trim();
+    if (modelId) {
+      this.clearInstallErrorState(modelId);
+    } else {
+      for (const id of Array.from(this.installErrors.keys())) {
+        this.clearInstallErrorState(id);
+      }
+      for (const [id, state] of Array.from(this.installStates.entries())) {
+        if (state.phase === 'failed' && !state.installing) {
+          this.installStates.delete(id);
+        }
+      }
+    }
     this.invalidateOverviewCache();
     return this.getLocalModelsOverview({ forceFresh: true });
   }

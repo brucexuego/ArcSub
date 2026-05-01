@@ -200,6 +200,32 @@ export class PyannoteDiarizationService {
     });
   }
 
+  private static async ensurePythonPackagingTools() {
+    const probe = [
+      'import importlib.util',
+      'missing = [name for name in ("setuptools", "wheel") if importlib.util.find_spec(name) is None]',
+      'print("\\n".join(missing))',
+    ].join('\n');
+
+    const probeResult = await this.runPythonChecked(
+      ['-c', probe],
+      'Failed to inspect Python packaging tools.'
+    );
+    const missing = String(probeResult.stdout || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    if (missing.length === 0) {
+      return;
+    }
+
+    await this.runPythonChecked(
+      ['-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel'],
+      'Failed to install Python packaging tools required for pyannote dependencies.'
+    );
+  }
+
   private static async ensurePythonDependencies() {
     if (this.pythonDepsPromise) {
       return this.pythonDepsPromise;
@@ -257,8 +283,9 @@ export class PyannoteDiarizationService {
         return;
       }
 
+      await this.ensurePythonPackagingTools();
       await this.runPythonChecked(
-        ['-m', 'pip', 'install', '--upgrade', ...packages],
+        ['-m', 'pip', 'install', '--upgrade', '--no-build-isolation', ...packages],
         'Failed to install pyannote Python dependencies.'
       );
     })();

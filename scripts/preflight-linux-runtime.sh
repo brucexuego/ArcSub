@@ -46,6 +46,9 @@ require_file "scripts/finalize-runtime-install.mjs"
 require_file "deploy.sh"
 require_file "start.production.sh"
 require_file "collect-diagnostics.sh"
+require_file "runtime/models/silero_vad.onnx"
+require_file "runtime/models/ecapa-tdnn.xml"
+require_file "runtime/models/ecapa-tdnn.bin"
 require_dir "node_modules"
 
 node_bin="$(resolve_node)"
@@ -73,6 +76,16 @@ for package_dir in \
   "sherpa-onnx"; do
   require_dir "node_modules/$package_dir"
 done
+
+if ! (
+  cd "$script_dir"
+  "$node_bin" --input-type=module - <<'NODE'
+await import('onnxruntime-node');
+await import('@huggingface/transformers');
+NODE
+); then
+  fail "Native ML runtime preload failed. Run ./deploy.sh again to refresh runtime dependencies."
+fi
 
 if [[ ! -f "$script_dir/.env" ]]; then
   warn ".env is not present yet. Run ./deploy.sh to create it and generate ENCRYPTION_KEY."

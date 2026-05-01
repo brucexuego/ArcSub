@@ -1,7 +1,8 @@
 param(
   [switch]$SkipBuild,
   [switch]$SkipPyannote,
-  [switch]$PreinstallLocalModelPython
+  [switch]$PreinstallLocalModelPython,
+  [switch]$SkipLocalModelPython
 )
 
 $ErrorActionPreference = "Stop"
@@ -315,6 +316,101 @@ function Ensure-PipAvailable([string]$PythonExe, [string]$RootDir, $Manifest) {
   $null = Invoke-Process -FilePath $PythonExe -ArgumentList @($getPipPath, "--no-warn-script-location") -WorkingDirectory $RootDir -ExtraEnv $envPatch
 }
 
+function Ensure-PythonPackagingTools([string]$PythonExe, [string]$RootDir) {
+  $probeScript = @'
+import importlib.util
+
+missing = [
+    name
+    for name in ("setuptools", "wheel")
+    if importlib.util.find_spec(name) is None
+]
+print("\n".join(missing))
+'@
+
+  $probeScriptPath = Join-Path $RootDir ".arcsub-bootstrap\downloads\probe_python_packaging_tools.py"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $probeScriptPath) | Out-Null
+  [System.IO.File]::WriteAllText($probeScriptPath, $probeScript, [System.Text.UTF8Encoding]::new($false))
+
+  $missingOutput = & $PythonExe $probeScriptPath 2>$null
+  $missing = @(
+    ($missingOutput -split "`r?`n" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  )
+  if ($missing.Count -eq 0) {
+    Write-Info "Python packaging tools already available."
+    return
+  }
+
+  Write-Step "Installing Python packaging tools..."
+  $pythonDir = Split-Path -Parent $PythonExe
+  $envPatch = @{
+    PATH = "$pythonDir;$env:PATH"
+  }
+  $null = Invoke-Process -FilePath $PythonExe -ArgumentList @("-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel") -WorkingDirectory $RootDir -ExtraEnv $envPatch
+}
+
+function Ensure-WhisperAsrHelperPythonDependencies([string]$PythonExe, [string]$RootDir) {
+  Write-Step "Ensuring Whisper ASR helper Python dependencies..."
+  $probeScript = @'
+import importlib.util
+
+def missing(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is None
+    except ModuleNotFoundError:
+        return True
+
+modules = [
+    "openvino",
+    "openvino_genai",
+    "transformers",
+    "librosa",
+    "numpy",
+]
+missing_names = [name for name in modules if missing(name)]
+print("\n".join(missing_names))
+'@
+
+  $probeScriptPath = Join-Path $RootDir ".arcsub-bootstrap\downloads\probe_whisper_asr_helper_deps.py"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $probeScriptPath) | Out-Null
+  [System.IO.File]::WriteAllText($probeScriptPath, $probeScript, [System.Text.UTF8Encoding]::new($false))
+
+  $missingOutput = & $PythonExe $probeScriptPath 2>$null
+  $missing = @(
+    ($missingOutput -split "`r?`n" | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  )
+  if ($missing.Count -eq 0) {
+    Write-Info "Whisper ASR helper Python dependencies already available."
+    return
+  }
+
+  $packageMap = @{
+    "openvino" = @("openvino")
+    "openvino_genai" = @("openvino-genai")
+    "transformers" = @("transformers")
+    "librosa" = @("librosa")
+    "numpy" = @("numpy")
+  }
+
+  $packages = New-Object System.Collections.Generic.List[string]
+  foreach ($name in $missing) {
+    foreach ($package in ($packageMap[$name] | Where-Object { $_ })) {
+      if (-not $packages.Contains($package)) {
+        $packages.Add($package)
+      }
+    }
+  }
+  if ($packages.Count -eq 0) {
+    return
+  }
+
+  $envPatch = @{
+    PATH = "$(Split-Path -Parent $PythonExe);$env:PATH"
+  }
+  $args = @("-m", "pip", "install", "--upgrade") + @($packages.ToArray())
+  $null = Invoke-Process -FilePath $PythonExe -ArgumentList $args -WorkingDirectory $RootDir -ExtraEnv $envPatch
+}
+
 function Ensure-AsrHelperPythonDependencies([string]$PythonExe, [string]$RootDir) {
   Write-Step "Ensuring ASR helper Python dependencies..."
   $probeScript = @'
@@ -626,6 +722,53 @@ function Invoke-Npm([string]$NodeExe, [string]$NpmCmd, [string]$WorkingDirectory
   $null = Invoke-Process -FilePath $NpmCmd -ArgumentList $Arguments -WorkingDirectory $WorkingDirectory -ExtraEnv $envPatch
 }
 
+function Test-NodeNativeRuntimes([string]$RootDir, [string]$NodeExe) {
+  if (-not (Test-Path (Join-Path $RootDir "node_modules"))) {
+    return $false
+  }
+
+  $probeScript = @'
+await import("onnxruntime-node");
+await import("@huggingface/transformers");
+'@
+  $probeDir = Join-Path $RootDir ".arcsub-bootstrap\downloads"
+  New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+  $scriptPath = Join-Path $probeDir ("arcsub-native-runtime-probe-" + [Guid]::NewGuid().ToString("N") + ".mjs")
+  $stdoutPath = [System.IO.Path]::GetTempFileName()
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    [System.IO.File]::WriteAllText($scriptPath, $probeScript, [System.Text.UTF8Encoding]::new($false))
+    $nodeDir = Split-Path -Parent $NodeExe
+    $originalPath = [Environment]::GetEnvironmentVariable("PATH", "Process")
+    [Environment]::SetEnvironmentVariable("PATH", "$nodeDir;$originalPath", "Process")
+    try {
+      $process = Start-Process `
+        -FilePath $NodeExe `
+        -ArgumentList @($scriptPath) `
+        -WorkingDirectory $RootDir `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath `
+        -NoNewWindow `
+        -Wait `
+        -PassThru
+      return $process.ExitCode -eq 0
+    } finally {
+      [Environment]::SetEnvironmentVariable("PATH", $originalPath, "Process")
+    }
+  } finally {
+    Remove-Item $scriptPath, $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Install-ReleaseRuntimeDependencies([string]$RootDir, [string]$NodeExe, [string]$NpmCmd) {
+  Write-Step "Installing release runtime dependencies..."
+  Invoke-Npm -NodeExe $NodeExe -NpmCmd $NpmCmd -WorkingDirectory $RootDir -Arguments @("install", "--omit=dev", "--no-fund", "--no-audit")
+  $finalizer = Join-Path $RootDir "scripts\finalize-runtime-install.mjs"
+  if (Test-Path $finalizer) {
+    $null = Invoke-Process -FilePath $NodeExe -ArgumentList @($finalizer) -WorkingDirectory $RootDir
+  }
+}
+
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $manifest = Get-DeployManifest -RootDir $scriptPath
 Set-ConsoleUtf8
@@ -635,11 +778,24 @@ Write-Info "Workspace: $scriptPath"
 $nodeExe = Ensure-PortableNode -RootDir $scriptPath
 $pythonExe = Ensure-PortablePython -RootDir $scriptPath -Manifest $manifest
 Ensure-PipAvailable -PythonExe $pythonExe -RootDir $scriptPath -Manifest $manifest
-if ($PreinstallLocalModelPython) {
+Ensure-PythonPackagingTools -PythonExe $pythonExe -RootDir $scriptPath
+if (-not $SkipLocalModelPython) {
+  if ($PreinstallLocalModelPython) {
+    Ensure-WhisperAsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
+  } else {
+    try {
+      Ensure-WhisperAsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
+    } catch {
+      Write-Info "Whisper ASR helper Python dependency preinstall failed; continuing because local ASR helper setup is optional. Run deploy.ps1 -PreinstallLocalModelPython to require it."
+      Write-Info ([string]$_.Exception.Message)
+    }
+  }
+} else {
+  Write-Info "Skipping local ASR helper Python dependency preinstall."
+}
+if ($PreinstallLocalModelPython -and -not $SkipLocalModelPython) {
   Ensure-AsrHelperPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
   Ensure-AlignmentPythonDependencies -PythonExe $pythonExe -RootDir $scriptPath
-} else {
-  Write-Info "Deferring local-model Python dependency install until helper/conversion use."
 }
 $npmCmd = Get-NpmCmd -NodeExe $nodeExe
 $isSourceWorkspace = (Test-Path (Join-Path $scriptPath "src")) -and (Test-Path (Join-Path $scriptPath "server\index.ts"))
@@ -669,8 +825,12 @@ if ($isSourceWorkspace) {
   }
 } else {
   if (-not (Test-Path (Join-Path $scriptPath "node_modules"))) {
-    Write-Step "Installing release runtime dependencies..."
-    Invoke-Npm -NodeExe $nodeExe -NpmCmd $npmCmd -WorkingDirectory $scriptPath -Arguments @("install", "--omit=dev", "--no-fund", "--no-audit")
+    Install-ReleaseRuntimeDependencies -RootDir $scriptPath -NodeExe $nodeExe -NpmCmd $npmCmd
+  } elseif (-not (Test-NodeNativeRuntimes -RootDir $scriptPath -NodeExe $nodeExe)) {
+    Write-Step "Runtime dependencies failed native preload; reinstalling release runtime dependencies..."
+    Remove-Item -LiteralPath (Join-Path $scriptPath "node_modules") -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $scriptPath "package-lock.json") -Force -ErrorAction SilentlyContinue
+    Install-ReleaseRuntimeDependencies -RootDir $scriptPath -NodeExe $nodeExe -NpmCmd $npmCmd
   }
 }
 
