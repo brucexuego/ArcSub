@@ -172,10 +172,12 @@ function Ensure-DotEnvFile([string]$WorkspaceRoot) {
   }
 
   $currentKey = Get-DotEnvValue -Path $envPath -Key "ENCRYPTION_KEY"
-  if ($currentKey -notmatch "^[0-9a-fA-F]{64}$") {
+  if ([string]::IsNullOrWhiteSpace($currentKey) -or $currentKey -eq "replace_with_random_64_hex") {
     $newKey = New-RandomHex 32
     Set-DotEnvValue -Path $envPath -Key "ENCRYPTION_KEY" -Value $newKey
     Write-Info "Generated a fresh ENCRYPTION_KEY in .env"
+  } elseif ($currentKey -notmatch "^[0-9a-fA-F]{64}$") {
+    Write-Info "Keeping existing custom ENCRYPTION_KEY in .env"
   }
 
   return $envPath

@@ -484,7 +484,7 @@ ensure_dotenv_file() {
 
   local current_key
   current_key="$(dotenv_get "$env_path" "ENCRYPTION_KEY")"
-  if [[ ! "$current_key" =~ ^[0-9a-fA-F]{64}$ ]]; then
+  if [[ -z "$current_key" || "$current_key" == "replace_with_random_64_hex" ]]; then
     local generated_key
     generated_key="$("${python_bin:-python3}" - <<'PY'
 import secrets
@@ -494,6 +494,8 @@ PY
 )"
     dotenv_set "$env_path" "ENCRYPTION_KEY" "$generated_key"
     log "Generated a fresh ENCRYPTION_KEY in .env"
+  elif [[ ! "$current_key" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    log "Keeping existing custom ENCRYPTION_KEY in .env"
   fi
 
   resolved_env_path="$env_path"
