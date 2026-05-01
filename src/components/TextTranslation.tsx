@@ -15,14 +15,17 @@ import SubtitleRowsEditor from './SubtitleRowsEditor';
 import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
 import {
   EditableSubtitleRow,
-  extractLeadingTimeTag,
   hasStrictBracketTimecodes,
   parseTimedSubtitleLine,
-  stripLeadingTimeTag,
   subtitleRowsFromText,
   subtitleRowsToLines,
   validateSubtitleRows,
 } from '../utils/subtitle_editor';
+import {
+  normalizeSubtitleSourceForTranslation,
+  rebuildTranslationWithSourceTimecodes,
+  stripLineSafeMarkers,
+} from '../utils/subtitle_normalizer';
 import type { RunIssue, RunProgressEvent } from '../../shared/run_monitor';
 
 interface TextTranslationProps {
@@ -86,7 +89,13 @@ interface LocalTranslationBatchDebugInfo {
 }
 
 interface CloudTranslationBatchDebugInfo {
-  source?: 'nvidia-hosted';
+  source?:
+    | 'provider-profile'
+    | 'model-options'
+    | 'nvidia-hosted'
+    | 'github-models'
+    | 'gemini-native'
+    | 'openai-compatible';
   mode?: 'line_safe' | 'plain_ordered';
   batchCount?: number;
   lineCounts?: number[];
@@ -102,6 +111,20 @@ interface CloudTranslationBatchDebugInfo {
   splitCount?: number;
   totalDurationMs?: number | null;
   maxDurationMs?: number | null;
+}
+
+interface CloudTranslationQuotaDebugInfo {
+  applied?: boolean;
+  profileId?: string | null;
+  tokenEstimator?: string | null;
+  estimatedInputTokens?: number | null;
+  estimatedTotalTokens?: number | null;
+  waitedMs?: number | null;
+  waitReason?: string | null;
+  waitEvents?: Array<{
+    reason?: string | null;
+    waitedMs?: number | null;
+  }>;
 }
 
 interface TranslationPipelineDebug {
@@ -124,10 +147,12 @@ interface TranslationPipelineDebug {
     translationQualityMode?: 'plain_probe' | 'template_validated' | 'json_strict';
     qualityRetryCount?: number;
     strictRetrySucceeded?: boolean;
-    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window' | 'provider_batch';
+    cloudStrategy?: 'plain' | 'line_locked' | 'cloud_strict';
+    cloudStrategyReason?: string | null;
     cloudContextChunkCount?: number;
     cloudContextFallbackCount?: number;
     cloudBatching?: CloudTranslationBatchDebugInfo | null;
+    cloudQuota?: CloudTranslationQuotaDebugInfo | null;
     localModelFamily?: string;
     localModelProfileId?: string | null;
     localPromptStyle?: string;
@@ -398,54 +423,7 @@ function isAllowedTextFileName(fileName: string) {
 }
 
 function normalizeProjectTextSource(fileName: string, rawContent: string) {
-  const clean = String(rawContent || '').replace(/^﻿/, '').trim();
-  if (!clean) return '';
-  if (getFileExt(fileName) !== '.json') return clean;
-
-  try {
-    const parsed = JSON.parse(clean);
-    if (typeof parsed === 'string') return parsed.trim();
-    if (typeof parsed?.originalSubtitles === 'string') return parsed.originalSubtitles.trim();
-    if (typeof parsed?.translatedSubtitles === 'string') return parsed.translatedSubtitles.trim();
-    if (typeof parsed?.text === 'string') return parsed.text.trim();
-    if (Array.isArray(parsed?.segments)) {
-      const merged = parsed.segments
-        .map((seg: any) => String(seg?.text || '').trim())
-        .filter(Boolean)
-        .join('\n');
-      if (merged) return merged;
-    }
-    if (Array.isArray(parsed?.chunks)) {
-      const merged = parsed.chunks
-        .map((chunk: any) => String(chunk?.text || '').trim())
-        .filter(Boolean)
-        .join('\n');
-      if (merged) return merged;
-    }
-  } catch {
-    // Fallback to raw text.
-  }
-
-  return clean;
-}
-
-function rebuildTranslationWithSourceTimecodes(sourceText: string, translatedText: string) {
-  const sourceLines = String(sourceText || '').split('\n');
-  const translatedLines = String(translatedText || '').split('\n');
-  if (sourceLines.length === 0) return String(translatedText || '').trim();
-
-  const allSourceTimed = sourceLines.every((line) => Boolean(extractLeadingTimeTag(line.trim())));
-  if (!allSourceTimed) return String(translatedText || '').trim();
-
-  const rebuilt = sourceLines.map((sourceLine, index) => {
-    const parsed = extractLeadingTimeTag(sourceLine.trim());
-    if (!parsed) return stripLeadingTimeTag(translatedLines[index] || '');
-    const translatedPayload = stripLeadingTimeTag(translatedLines[index] || '');
-    if (!translatedPayload) return `${parsed.tag} ${parsed.text}`.trim();
-    return `${parsed.tag} ${translatedPayload}`.trim();
-  });
-
-  return rebuilt.join('\n').trim();
+  return normalizeSubtitleSourceForTranslation(fileName, rawContent);
 }
 
 function rebuildSourceWithTranslatedTimecodes(sourceText: string, translatedRows: EditableSubtitleRow[]) {
@@ -823,7 +801,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
 
     const restoredTranslatedLines = storedTranslated
       .split('\n')
-      .map((line) => line.trim())
+      .map((line) => stripLineSafeMarkers(line.trim()))
       .filter(Boolean);
     const storedSource = String(project?.originalSubtitles || '')
       .replace(/\r\n/g, '\n')
@@ -1002,6 +980,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       return t('translation.msgCallingProvider').replace('{provider}', providerLabel(providerCallMatch[1]));
     }
 
+    const providerWaitMatch = message.match(/^Waiting for translation provider \(([^)]+)\) response \((\d+)s\)\.\.\.$/);
+    if (providerWaitMatch) {
+      return t('translation.msgWaitingProviderResponse')
+        .replace('{provider}', providerLabel(providerWaitMatch[1]))
+        .replace('{seconds}', providerWaitMatch[2]);
+    }
+
     const retryMatch = message.match(/^Retrying translation request \((\d+)\/(\d+)\) after transient error \(([^)]+)\)\.\.\.$/);
     if (retryMatch) {
       return t('translation.msgRetrying')
@@ -1096,6 +1081,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       case 'provider.call.whole_document':
       case 'provider.call.cloud_context':
       case 'provider.call.started':
+      case 'provider.waiting.response':
       case 'provider.translation.local_batch':
       case 'provider.translation.remote_batch':
       case 'provider.translation.remote_context_batch':
@@ -1125,6 +1111,10 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     switch (String(strategy || '')) {
       case 'plain':
         return t('translation.strategyPlain');
+      case 'line_locked':
+        return t('translation.strategyLineLocked');
+      case 'cloud_strict':
+        return t('translation.strategyCloudStrict');
       case 'forced_alignment':
         return t('translation.strategyForcedAlignment');
       case 'context_window':
@@ -1324,6 +1314,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       `${t('translation.monitorStrictRetrySucceeded')}: ${applied.strictRetrySucceeded ? t('translation.monitorYes') : t('translation.monitorNo')}`,
       `${t('translation.monitorFallback')}: ${fallbackText}`,
     ];
+    if (applied.cloudStrategyReason) {
+      parts.push(`${t('translation.monitorStrategyReason')}: ${formatTechnicalValue(applied.cloudStrategyReason)}`);
+    }
     if (applied.localModelFamily) {
       parts.push(`${t('translation.monitorLocalModelFamily')}: ${localizeLocalModelFamily(applied.localModelFamily)}`);
     }
@@ -1363,6 +1356,10 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
     if (typeof applied.cloudBatching?.batchCount === 'number' && applied.cloudBatching.batchCount > 0) {
       parts.push(`${t('translation.monitorCloudBatchCount')}: ${applied.cloudBatching.batchCount}`);
+    }
+    if (applied.cloudQuota?.applied) {
+      const quotaWaitedMs = typeof applied.cloudQuota.waitedMs === 'number' ? applied.cloudQuota.waitedMs : 0;
+      parts.push(`${t('translation.monitorCloudQuotaWait')}: ${formatElapsedTime(quotaWaitedMs)}`);
     }
     if (inference?.acceleratorModel) {
       const memorySource = inference.memorySource ? ` / ${inference.memorySource}` : '';
@@ -1444,6 +1441,10 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
             return t('translation.warnCloudProviderBatchTranslation');
           case 'cloud_provider_batch_split_applied':
             return t('translation.warnCloudProviderBatchSplit');
+          case 'cloud_quota_limiter_applied':
+            return t('translation.warnCloudQuotaLimiter');
+          case 'cloud_quota_wait_applied':
+            return t('translation.warnCloudQuotaWait');
           case 'quality_issue_empty_output':
             return t('translation.warnQualityIssueEmptyOutput');
           case 'quality_issue_repetition_loop':
@@ -1695,6 +1696,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (!translationDebug?.requested) return null;
     const localBatching = translationDebug.applied?.localBatching || null;
     const cloudBatching = translationDebug.applied?.cloudBatching || null;
+    const cloudQuota = translationDebug.applied?.cloudQuota || null;
     const localBatchCount =
       typeof localBatching?.batchCount === 'number'
         ? localBatching.batchCount
@@ -1741,11 +1743,31 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         ? `${t('translation.monitorCloudBatchStream')}: ${cloudBatching.stream ? t('translation.monitorYes') : t('translation.monitorNo')}`
         : null,
     ].filter(Boolean);
+    const cloudQuotaEstimateParts = [
+      typeof cloudQuota?.estimatedInputTokens === 'number'
+        ? `${t('translation.monitorCloudQuotaInputTokens')}: ${cloudQuota.estimatedInputTokens.toLocaleString()}`
+        : null,
+      typeof cloudQuota?.estimatedTotalTokens === 'number'
+        ? `${t('translation.monitorCloudQuotaTotalTokens')}: ${cloudQuota.estimatedTotalTokens.toLocaleString()}`
+        : null,
+    ].filter(Boolean);
+    const cloudQuotaWaitEvents = Array.isArray(cloudQuota?.waitEvents)
+      ? cloudQuota.waitEvents
+          .map((event: any) => {
+            const reason = formatTechnicalValue(event?.reason);
+            const waited = formatElapsedTime(event?.waitedMs);
+            if (reason === '-' && waited === '-') return '';
+            return reason === '-' ? waited : `${reason}: ${waited}`;
+          })
+          .filter(Boolean)
+          .join(' / ')
+      : '';
     return {
       targetLanguage: String(translationDebug.requested.targetLanguageDescriptor || langLabel || '').trim() || '-',
       promptTemplate: promptTemplateLabel(translationDebug.requested.promptTemplateId),
       effectiveGlossary: String(translationDebug.requested.effectiveGlossary || '').trim(),
       strategy: localizeCloudStrategy(translationDebug.applied?.cloudStrategy),
+      strategyReason: formatTechnicalValue(translationDebug.applied?.cloudStrategyReason),
       qualityMode: localizeTranslationQualityMode(translationDebug.applied?.translationQualityMode),
       qualityRetryCount:
         typeof translationDebug.applied?.qualityRetryCount === 'number'
@@ -1788,6 +1810,16 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
       cloudBatchSplitCount:
         typeof cloudBatching?.splitCount === 'number' ? String(cloudBatching.splitCount) : '-',
       cloudBatchBudget: cloudBatchBudgetParts.length > 0 ? cloudBatchBudgetParts.join(' · ') : '-',
+      cloudQuotaApplied:
+        typeof cloudQuota?.applied === 'boolean'
+          ? (cloudQuota.applied ? t('translation.monitorYes') : t('translation.monitorNo'))
+          : '-',
+      cloudQuotaProfileId: formatTechnicalValue(cloudQuota?.profileId),
+      cloudQuotaTokenEstimator: formatTechnicalValue(cloudQuota?.tokenEstimator),
+      cloudQuotaWaited: formatElapsedTime(cloudQuota?.waitedMs),
+      cloudQuotaReason: formatTechnicalValue(cloudQuota?.waitReason),
+      cloudQuotaEstimate: cloudQuotaEstimateParts.length > 0 ? cloudQuotaEstimateParts.join(' · ') : '-',
+      cloudQuotaEvents: cloudQuotaWaitEvents || '-',
       strictJsonRepair:
         typeof translationDebug.requested.jsonLineRepairEnabled === 'boolean'
           ? (translationDebug.requested.jsonLineRepairEnabled ? t('translation.monitorYes') : t('translation.monitorNo'))
@@ -1936,10 +1968,13 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     if (translationSummary?.cloudBatchCount && translationSummary.cloudBatchCount !== '-') {
       parts.push(`${t('translation.monitorCloudBatchCount')}: ${translationSummary.cloudBatchCount}`);
     }
+    if (translationSummary?.cloudQuotaWaited && translationSummary.cloudQuotaWaited !== '-') {
+      parts.push(`${t('translation.monitorCloudQuotaWait')}: ${translationSummary.cloudQuotaWaited}`);
+    }
     if (pipelineWarnings.length > 0) parts.push(`${t('translation.pipelineWarnings')} ${pipelineWarnings.length}`);
     if (pipelineErrors.length > 0) parts.push(`${t('translation.pipelineErrors')} ${pipelineErrors.length}`);
     return parts.join(' · ');
-  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.cloudBatchCount, translationSummary?.localBatchCount, translationSummary?.qualityMode]);
+  }, [formatElapsedTime, pipelineErrors.length, pipelineWarnings.length, t, translationDebug?.timing, translationSummary?.cloudBatchCount, translationSummary?.cloudQuotaWaited, translationSummary?.localBatchCount, translationSummary?.qualityMode]);
   const translationMonitorBadges = React.useMemo<RunMonitorBadge[]>(() => {
     const badges: RunMonitorBadge[] = [];
     if (pipelineMode) {
@@ -1971,6 +2006,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           { label: t('translation.targetLanguage'), value: translationSummary.targetLanguage },
           { label: t('translation.promptLabel'), value: translationSummary.promptTemplate },
           { label: t('translation.monitorStrategy'), value: translationSummary.strategy },
+          { label: t('translation.monitorStrategyReason'), value: translationSummary.strategyReason },
           { label: t('translation.monitorQualityMode'), value: translationSummary.qualityMode },
           { label: t('translation.monitorQualityRetry'), value: translationSummary.qualityRetryCount },
           { label: t('translation.monitorStrictRetrySucceeded'), value: translationSummary.strictRetrySucceeded },
@@ -2008,6 +2044,17 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                 { label: t('translation.monitorCloudBatchMaxDuration'), value: translationSummary.cloudBatchMaxDuration },
                 { label: t('translation.monitorCloudBatchSplitCount'), value: translationSummary.cloudBatchSplitCount },
                 { label: t('translation.monitorLocalBatchBudget'), value: translationSummary.cloudBatchBudget },
+              ]
+            : []),
+          ...(translationSummary.cloudQuotaApplied !== '-'
+            ? [
+                { label: t('translation.monitorCloudQuotaApplied'), value: translationSummary.cloudQuotaApplied },
+                { label: t('translation.monitorCloudQuotaProfile'), value: translationSummary.cloudQuotaProfileId },
+                { label: t('translation.monitorCloudQuotaEstimator'), value: translationSummary.cloudQuotaTokenEstimator },
+                { label: t('translation.monitorCloudQuotaWait'), value: translationSummary.cloudQuotaWaited },
+                { label: t('translation.monitorCloudQuotaReason'), value: translationSummary.cloudQuotaReason },
+                { label: t('translation.monitorCloudQuotaEstimate'), value: translationSummary.cloudQuotaEstimate },
+                { label: t('translation.monitorCloudQuotaEvents'), value: translationSummary.cloudQuotaEvents },
               ]
             : []),
           { label: t('translation.strictJsonRepairToggle'), value: translationSummary.strictJsonRepair },

@@ -35,6 +35,14 @@ import {
   type CloudTranslationProviderBatchConfig,
 } from './llm/orchestrators/cloud_translation_orchestrator.js';
 import { runCloudTranslationConnectionProbe } from './llm/orchestrators/cloud_translation_connection_probe.js';
+import { buildCloudTranslateExecutionPlan } from './cloud_translate/execution_planner.js';
+import { extractCloudTranslateErrorMessage } from './cloud_translate/errors.js';
+import { resolveCloudTranslateBatchingProfile } from './cloud_translate/profiles/batching.js';
+import {
+  enforceCloudTranslateQuotaLimit,
+  recordCloudTranslateQuotaBackoff,
+  recordCloudTranslateRateLimitHeaders,
+} from './cloud_translate/quota_limiter.js';
 import { inferLocalTranslateModelStrategy as inferLocalTranslateModelStrategyModule } from './local_llm/strategy.js';
 import {
   buildLocalGenerationOptions as buildLocalGenerationOptionsModule,
@@ -103,6 +111,20 @@ interface TranslateProviderResult {
     fallbackUsed: boolean;
     fallbackType: string | null;
     requestWarnings?: string[];
+    responseHeaders?: Record<string, string>;
+    quota?: {
+      applied: boolean;
+      profileId: string | null;
+      tokenEstimator: string | null;
+      estimatedInputTokens: number | null;
+      estimatedTotalTokens: number | null;
+      waitedMs: number;
+      waitReason: string | null;
+      waitEvents: Array<{
+        reason: string;
+        waitedMs: number;
+      }>;
+    } | null;
   };
 }
 
@@ -151,6 +173,8 @@ export interface TranslationDebugInfo {
     adapterKey?: string | null;
     profileId?: string | null;
     profileFamily?: string | null;
+    defaultExecutionMode?: string | null;
+    quotaProfile?: Record<string, unknown> | null;
   };
   runtime?: OpenvinoTranslateRuntimeDebug | null;
   applied: {
@@ -162,10 +186,24 @@ export interface TranslationDebugInfo {
     strictRetrySucceeded?: boolean;
     relaxedWholeRequest?: boolean;
     relaxedWholeRequestFallback?: boolean;
-    cloudStrategy?: 'plain' | 'forced_alignment' | 'context_window' | 'provider_batch';
+    cloudStrategy?: 'plain' | 'line_locked' | 'cloud_strict';
+    cloudStrategyReason?: string;
     cloudContextChunkCount?: number;
     cloudContextFallbackCount?: number;
     cloudBatching?: CloudTranslationBatchDebugInfo | null;
+    cloudQuota?: {
+      applied: boolean;
+      profileId: string | null;
+      tokenEstimator: string | null;
+      estimatedInputTokens: number | null;
+      estimatedTotalTokens: number | null;
+      waitedMs: number;
+      waitReason: string | null;
+      waitEvents: Array<{
+        reason: string;
+        waitedMs: number;
+      }>;
+    } | null;
     localModelFamily?: string;
     localModelProfileId?: string | null;
     localPromptStyle?: string;
@@ -1391,35 +1429,18 @@ export class TranslationService {
     } as CloudContextConfig;
   }
 
-  private static isNvidiaHostedCloudProvider(resolvedProvider: ResolvedCloudTranslateProvider) {
-    if (resolvedProvider.provider !== 'openai-compatible') return false;
-    try {
-      const host = new URL(resolvedProvider.endpointUrl).hostname.toLowerCase();
-      return host === 'integrate.api.nvidia.com';
-    } catch {
-      return false;
-    }
-  }
-
-  private static getNvidiaCloudBatchConfig(
-    resolvedProvider: ResolvedCloudTranslateProvider
+  private static getCloudProviderBatchConfig(
+    resolvedProvider: ResolvedCloudTranslateProvider,
+    modelOptions?: ApiModelRequestOptions
   ): CloudTranslationProviderBatchConfig | null {
-    if (!this.isNvidiaHostedCloudProvider(resolvedProvider)) return null;
-    if (!this.getEnvBoolean('TRANSLATE_NVIDIA_CLOUD_BATCHING', true)) return null;
-
-    return {
-      enabled: true,
-      source: 'nvidia-hosted',
-      targetLines: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_BATCH_SIZE', 24, 4, 120)),
-      minTargetLines: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MIN_BATCH_SIZE', 6, 1, 60)),
-      charBudget: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_BATCH_CHAR_BUDGET', 2400, 200, 20000)),
-      maxSplitDepth: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_SPLIT_DEPTH', 4, 0, 8)),
-      maxOutputTokens: Math.round(this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_MAX_OUTPUT_TOKENS', 2048, 256, 16384)),
-      timeoutMs: Math.round(
-        this.getEnvNumber('TRANSLATE_NVIDIA_CLOUD_TIMEOUT_MS', this.getCloudTranslationRequestTimeoutMs(), 30000, 900000)
-      ),
-      stream: this.getEnvBoolean('TRANSLATE_NVIDIA_CLOUD_STREAM', false),
-    };
+    const profile = resolveCloudTranslateBatchingProfile({
+      resolvedProvider,
+      modelOptions,
+      readEnvNumber: this.getEnvNumber.bind(this),
+      readEnvBoolean: this.getEnvBoolean.bind(this),
+      requestTimeoutMs: this.getCloudTranslationRequestTimeoutMs(),
+    });
+    return profile && profile.enabled ? profile : null;
   }
 
   private static buildCloudContextSystemPrompt(input: {
@@ -1433,11 +1454,12 @@ export class TranslationService {
     const customPrompt = String(input.prompt || '').trim();
     const sourceLanguageDescriptor = this.buildSourceLanguageDescriptor(input.sourceLang);
     const localized = this.getLocalizedSystemPromptProfile(input.targetLang);
+    const normalizeTargetMarker = (value: string) => String(value || '').replace(/\[TRANSLATE_00001\]/g, '[[L00001]]');
     if (localized) {
       return [
         localized.cloudContextIntro,
         ...(sourceLanguageDescriptor ? [`Source language: ${sourceLanguageDescriptor}.`] : []),
-        ...localized.cloudContextRules,
+        ...localized.cloudContextRules.map(normalizeTargetMarker),
         effectiveGlossary ? `${localized.glossaryLabel} ${effectiveGlossary}` : '',
         ...(customPrompt
           ? [
@@ -1455,10 +1477,10 @@ export class TranslationService {
       ...(sourceLanguageDescriptor ? [`The source language is ${sourceLanguageDescriptor}.`] : []),
       ...this.getTargetLanguageInstructionLines(input.targetLang),
       'Input contains two kinds of lines:',
-      '- [TRANSLATE_00001] lines must be translated.',
+      '- [[L00001]] lines must be translated.',
       '- [CONTEXT] lines are reference only and must never be translated or echoed.',
       'Return only translated TARGET lines in the exact same order.',
-      'Each output line must start with the same [TRANSLATE_00001] label followed by the translated text.',
+      'Each output line must start with the same [[L00001]] marker followed by the translated text.',
       'Do not output [CONTEXT] lines.',
       'Do not add commentary, notes, markdown, or analysis.',
       'Keep speaker metadata tokens such as <<SPEAKER:...>> out of the output.',
@@ -3027,8 +3049,7 @@ export class TranslationService {
         const body = this.stripStructuredPrefix(unit.content);
         const speakerContext = this.buildInjectedSpeakerContext(unit.speakerTag);
         const content = [speakerContext, body].filter(Boolean).join(' ').trim();
-        const label =
-          unit.index >= chunkStart + 1 && unit.index <= chunkEnd ? `[TRANSLATE_${String(unit.index).padStart(5, '0')}]` : '[CONTEXT]';
+        const label = unit.index >= chunkStart + 1 && unit.index <= chunkEnd ? unit.marker : '[CONTEXT]';
         return content ? `${label} ${content}` : label;
       })
       .join('\n');
@@ -3042,7 +3063,9 @@ export class TranslationService {
     String(output || '')
       .split('\n')
       .forEach((line) => {
-        const matched = String(line).match(/\[TRANSLATE_(\d{5})\]\s*(.*)$/i);
+        const matched =
+          String(line).match(/\[\[L(\d{5})\]\]\s*(.*)$/) ||
+          String(line).match(/\[TRANSLATE_(\d{5})\]\s*(.*)$/i);
         if (!matched) return;
         const index = Number(matched[1]);
         if (!Number.isFinite(index) || translatedMap.has(index)) return;
@@ -3206,19 +3229,12 @@ export class TranslationService {
 
     try {
       const parsed = JSON.parse(text);
-      const nested = parsed?.error;
-      const nestedMessage =
-        typeof nested === 'string'
-          ? nested
-          : nested?.message || parsed?.message || parsed?.detail || parsed?.error_description;
-      if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
-        return nestedMessage.trim();
-      }
+      return extractCloudTranslateErrorMessage(parsed, fallback);
     } catch {
       // fall through
     }
 
-    return text;
+    return extractCloudTranslateErrorMessage(text, fallback);
   }
 
   private static async fetchWithTimeout(url: string, init: RequestInit, timeoutMs?: number, signal?: AbortSignal) {
@@ -3255,7 +3271,9 @@ export class TranslationService {
   private static parseGeminiContent(data: any) {
     const parts = data?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts)) return '';
-    return parts.map((part: any) => (typeof part?.text === 'string' ? part.text : '')).join('');
+    return parts
+      .map((part: any) => (!part?.thought && typeof part?.text === 'string' ? part.text : ''))
+      .join('');
   }
 
   private static parseAnthropicContent(data: any) {
@@ -3379,6 +3397,21 @@ export class TranslationService {
     options: TranslateRequestOptions,
     onProgress?: TranslateProgressFn
   ): Promise<TranslateProviderResult> {
+    const quotaResolvedProvider = resolveCloudTranslateProvider({
+      url: endpointUrl,
+      modelName: provider,
+      model: options.model,
+      apiKey: options.key,
+      options: options.modelOptions,
+    });
+    const quotaState = await enforceCloudTranslateQuotaLimit({
+      resolvedProvider: quotaResolvedProvider,
+      key: options.key,
+      text: options.text,
+      modelOptions: options.modelOptions,
+      signal: options.signal,
+      onProgress,
+    });
     const adapter = getCloudTranslateAdapter(provider);
     const deps: CloudTranslateAdapterDeps = {
       throwIfAborted: this.throwIfAborted.bind(this),
@@ -3405,7 +3438,48 @@ export class TranslationService {
         new ProviderHttpError(prefix, status, detail, retryAfterMs),
       isProviderHttpError: this.isProviderHttpError.bind(this),
     };
-    return adapter.request(endpointUrl, options, deps, onProgress);
+    try {
+      const result = await adapter.request(endpointUrl, options, deps, onProgress);
+      recordCloudTranslateRateLimitHeaders({
+        resolvedProvider: quotaResolvedProvider,
+        key: options.key,
+        headers: result.meta.responseHeaders,
+      });
+      const quotaWarnings = [
+        ...(quotaState.applied ? ['cloud_quota_limiter_applied'] : []),
+        ...(quotaState.waitedMs > 0 ? ['cloud_quota_wait_applied'] : []),
+      ];
+      return {
+        ...result,
+        meta: {
+          ...result.meta,
+          requestWarnings: this.mergeUniqueWarnings(result.meta.requestWarnings || [], quotaWarnings),
+          quota: {
+            applied: quotaState.applied,
+            profileId: quotaState.profileId,
+            tokenEstimator: quotaState.tokenEstimator,
+            estimatedInputTokens: quotaState.estimatedInputTokens,
+            estimatedTotalTokens: quotaState.estimatedTotalTokens,
+            waitedMs: quotaState.waitedMs,
+            waitReason: quotaState.waitReason,
+            waitEvents: quotaState.waitEvents,
+          },
+        },
+      };
+    } catch (error) {
+      if (this.isProviderHttpError(error) && error.status === 429) {
+        recordCloudTranslateQuotaBackoff({
+          resolvedProvider: quotaResolvedProvider,
+          key: options.key,
+          retryAfterMs: error.retryAfterMs,
+          fallbackMs: this.getCloudTranslationRetryConfig().rateLimitRetryMs,
+          reason: 'provider_429',
+        });
+      }
+      throw error;
+    } finally {
+      quotaState.release?.();
+    }
   }
 
   private static async repairLineAlignmentWithJsonMap(
@@ -3706,10 +3780,18 @@ export class TranslationService {
     resolvedProvider: ResolvedCloudTranslateProvider,
     model: { key?: string; model?: string; options?: ApiModelRequestOptions }
   ): CloudTranslationOrchestratorInput {
+    const plan = buildCloudTranslateExecutionPlan({
+      resolvedProvider,
+      modelOptions: model.options,
+      requestedJsonLineRepair: input.enableJsonLineRepair,
+      hasPromptTemplate: Boolean(input.promptTemplateId),
+      hasCustomPrompt: Boolean(String(input.prompt || '').trim()),
+      isConnectionTest: input.isConnectionTest,
+    });
     const qualityMode = this.resolveTranslationQualityModeForRequest({
       promptTemplateId: input.promptTemplateId,
       prompt: input.prompt,
-      enableJsonLineRepair: input.enableJsonLineRepair,
+      enableJsonLineRepair: plan.enableJsonLineRepair,
     });
     return {
       text: input.text,
@@ -3718,9 +3800,9 @@ export class TranslationService {
       glossary: input.glossary,
       prompt: input.prompt,
       promptTemplateId: input.promptTemplateId,
-      enableJsonLineRepair: input.enableJsonLineRepair,
+      enableJsonLineRepair: plan.enableJsonLineRepair,
       qualityMode,
-      supportsContextMode: supportsCloudContextStrategy(resolvedProvider.provider),
+      supportsContextMode: plan.supportsContextMode && supportsCloudContextStrategy(resolvedProvider.provider),
       isConnectionTest: input.isConnectionTest,
       providerRequest: {
         provider: resolvedProvider.provider,
@@ -3729,7 +3811,8 @@ export class TranslationService {
         model: resolvedProvider.effectiveModel || model.model,
         modelOptions: model.options,
       },
-      providerBatching: this.getNvidiaCloudBatchConfig(resolvedProvider),
+      providerBatching: this.getCloudProviderBatchConfig(resolvedProvider, model.options),
+      initialWarnings: plan.warnings,
       signal: input.signal,
     };
   }
@@ -3812,6 +3895,16 @@ export class TranslationService {
         adapterKey: input.resolvedProvider.adapterKey,
         profileId: input.resolvedProvider.profileId,
         profileFamily: input.resolvedProvider.profileFamily,
+        defaultExecutionMode: input.resolvedProvider.defaultExecutionMode,
+        quotaProfile: input.resolvedProvider.quotaProfile
+          ? {
+              rpm: input.resolvedProvider.quotaProfile.rpm ?? null,
+              tpm: input.resolvedProvider.quotaProfile.tpm ?? null,
+              rpd: input.resolvedProvider.quotaProfile.rpd ?? null,
+              maxConcurrency: input.resolvedProvider.quotaProfile.maxConcurrency ?? null,
+              tokenEstimator: input.resolvedProvider.quotaProfile.tokenEstimator || null,
+            }
+          : null,
       },
       applied: {
         retryCount: input.orchestrated.retryCount,
@@ -3823,9 +3916,11 @@ export class TranslationService {
         relaxedWholeRequest: input.orchestrated.relaxedWholeRequestApplied,
         relaxedWholeRequestFallback: input.orchestrated.relaxedWholeRequestFallback,
         cloudStrategy: input.orchestrated.cloudStrategy,
+        cloudStrategyReason: input.orchestrated.cloudStrategyReason,
         cloudContextChunkCount: input.orchestrated.cloudContextChunkCount,
         cloudContextFallbackCount: input.orchestrated.cloudContextFallbackCount,
         cloudBatching: input.orchestrated.cloudBatching,
+        cloudQuota: input.orchestrated.cloudQuota,
       },
       quality: this.buildTranslationQualitySummary({
         sourceLineCount: input.orchestrated.sourceLineCount,
@@ -4087,7 +4182,6 @@ export class TranslationService {
   ): Promise<TranslationResult> {
     this.throwIfAborted(input.signal);
     const { text, targetLang, glossary, prompt, promptTemplateId, modelId } = input;
-    const enableJsonLineRepair = input.enableJsonLineRepair !== false;
     if (!text || !text.trim()) throw new Error('Source text is required');
 
     onProgress?.('Loading translation model configuration...');
@@ -4103,7 +4197,7 @@ export class TranslationService {
           glossary,
           prompt,
           promptTemplateId,
-          enableJsonLineRepair,
+          enableJsonLineRepair: input.enableJsonLineRepair !== false,
           signal: input.signal,
         },
         localModel,
@@ -4121,6 +4215,7 @@ export class TranslationService {
       modelName: model.name,
       model: model.model,
       apiKey: model.key,
+      options: model.options,
     });
     return this.translateWithCloudModel(
       {
@@ -4130,7 +4225,7 @@ export class TranslationService {
         glossary,
         prompt,
         promptTemplateId,
-        enableJsonLineRepair,
+        enableJsonLineRepair: input.enableJsonLineRepair === true,
         signal: input.signal,
       },
       resolvedProvider,

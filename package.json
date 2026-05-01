@@ -39,6 +39,7 @@
     "test:asr-source": "tsx scripts/asr-source-guard.ts",
     "test:asr-local": "tsx scripts/asr-local-smoke.ts",
     "test:asr-providers": "tsx scripts/asr-provider-tests.ts",
+    "test:cloud-translation": "tsx scripts/cloud-translation-orchestrator-smoke.ts",
     "check": "npm run -s typecheck && npm run -s build",
     "lint": "npm run -s typecheck"
   },

@@ -171,6 +171,34 @@ export const PROVIDER_TRANSLATION_PROFILES: ProviderTranslationProfile[] = [
     },
   },
   {
+    id: 'gemma-google-native',
+    providerFamily: 'google',
+    modelFamily: 'gemma',
+    runtimeFamily: 'gemini-native',
+    confidence: 'arcsub_empirical',
+    officialRecommendations: {
+      verifiedOn: '2026-04-30',
+      sourceLinks: ['https://ai.google.dev/gemini-api/docs/models/gemma'],
+      promptNotes: [
+        'Use direct translation wording and collect only non-thought output parts.',
+        'Keep subtitle marker requirements short and explicit.',
+      ],
+      parameterNotes: [
+        'Streaming is useful for long requests, but thought parts must not be treated as final text.',
+      ],
+    },
+    arcsubDefaults: {
+      temperature: 0.2,
+      topP: 0.95,
+      topK: 40,
+      preferSchemaMode: true,
+      preferJsonStrictForSubtitles: true,
+      notes: [
+        'Gemma hosted through Gemini native APIs is more sensitive to long rule lists, so ArcSub keeps concise provider-native prompting available.',
+      ],
+    },
+  },
+  {
     id: 'mistral',
     providerFamily: 'mistral',
     modelFamily: 'mistral',

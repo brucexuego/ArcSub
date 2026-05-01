@@ -392,6 +392,7 @@ function parseTimestamp(raw: string) {
 
 function cleanSubtitleText(raw: string) {
   return String(raw || '')
+    .replace(/\[\[L\d{5}\]\]\s*/g, '')
     .replace(/\{\\[^}]*\}/g, '')
     .replace(/<[^>]*>/g, '')
     .replace(/\\N/g, '\n')

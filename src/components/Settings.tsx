@@ -2123,6 +2123,56 @@ function parseModelOptions(raw: string): {
   }
 }
 
+function cloneModelOptions(options: ApiModelRequestOptions | undefined): ApiModelRequestOptions {
+  return JSON.parse(JSON.stringify(options || {}));
+}
+
+function pruneEmptyOptionObjects(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(pruneEmptyOptionObjects);
+  }
+  if (!isPlainObject(value)) return value;
+
+  const next: Record<string, unknown> = {};
+  for (const [key, rawValue] of Object.entries(value)) {
+    if (rawValue === undefined || rawValue === null || rawValue === '') continue;
+    const pruned = pruneEmptyOptionObjects(rawValue);
+    if (isPlainObject(pruned) && Object.keys(pruned).length === 0) continue;
+    next[key] = pruned;
+  }
+  return next;
+}
+
+function normalizeOptionsForText(options: ApiModelRequestOptions) {
+  return pruneEmptyOptionObjects(options) as ApiModelRequestOptions;
+}
+
+function parseOptionsForControls(raw: string): ApiModelRequestOptions {
+  return parseModelOptions(raw).value || {};
+}
+
+function toNullableNumber(value: string): number | null {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function updateModelOptionText(
+  raw: string,
+  mutator: (draft: ApiModelRequestOptions) => void
+) {
+  const parsed = parseModelOptions(raw);
+  const draft = cloneModelOptions(parsed.value);
+  mutator(draft);
+  return serializeModelOptions(normalizeOptionsForText(draft));
+}
+
+function isGeminiTranslateModel(model: ApiConfig) {
+  const combined = `${model.url || ''} ${model.name || ''} ${model.model || ''}`.toLowerCase();
+  return combined.includes('generativelanguage.googleapis.com') || combined.includes('gemini') || combined.includes('gemma');
+}
+
 function getDefaultProviderModelId(modelType: 'asr' | 'translate', url?: string) {
   if (modelType === 'translate') return 'gpt-4o-mini';
   const normalizedUrl = String(url || '').toLowerCase();
@@ -2157,12 +2207,96 @@ const ModelItem: React.FC<{
   const [testStatus, setTestStatus] = React.useState<'idle' | 'testing' | 'success' | 'failed'>('idle');
   const [testError, setTestError] = React.useState<string | null>(null);
   const [errors, setErrors] = React.useState<{name?: string, url?: string, key?: string, options?: string}>({});
+  const [showAdvancedControls, setShowAdvancedControls] = React.useState(false);
+  const [showAdvancedJson, setShowAdvancedJson] = React.useState(false);
 
   React.useEffect(() => {
     if (isEditing) return;
     setEditedModel(model);
     setModelOptionsText(serializeModelOptions(model.options));
   }, [isEditing, model]);
+
+  React.useEffect(() => {
+    if (errors.options) setShowAdvancedJson(true);
+  }, [errors.options]);
+
+  const structuredOptions = React.useMemo(() => parseOptionsForControls(modelOptionsText), [modelOptionsText]);
+  const geminiOptions = isPlainObject(structuredOptions.body?.gemini)
+    ? (structuredOptions.body?.gemini as Record<string, unknown>)
+    : {};
+  const thinkingConfig = isPlainObject(geminiOptions.thinkingConfig)
+    ? (geminiOptions.thinkingConfig as Record<string, unknown>)
+    : {};
+  const showGeminiControls = modelType === 'translate' && isGeminiTranslateModel(editedModel);
+  const hasAdvancedOptions = React.useMemo(() => {
+    const parsed = parseModelOptions(modelOptionsText);
+    return Boolean(parsed.value && Object.keys(normalizeOptionsForText(parsed.value)).length > 0);
+  }, [modelOptionsText]);
+  const updateOptions = React.useCallback((mutator: (draft: ApiModelRequestOptions) => void) => {
+    setModelOptionsText((current) => updateModelOptionText(current, mutator));
+    if (errors.options) setErrors((prev) => ({ ...prev, options: undefined }));
+  }, [errors.options]);
+  const setOptionNumber = React.useCallback((
+    path: Array<'sampling' | 'translation' | 'quota' | 'batching' | 'timeoutMs' | 'body' | 'gemini' | 'thinkingConfig' | string>,
+    rawValue: string
+  ) => {
+    updateOptions((draft) => {
+      let target: Record<string, any> = draft as Record<string, any>;
+      for (let i = 0; i < path.length - 1; i += 1) {
+        const key = path[i];
+        if (!isPlainObject(target[key])) target[key] = {};
+        target = target[key] as Record<string, any>;
+      }
+      const value = toNullableNumber(rawValue);
+      const leaf = path[path.length - 1];
+      if (value === null) {
+        delete target[leaf];
+      } else {
+        target[leaf] = value;
+      }
+    });
+  }, [updateOptions]);
+
+  const renderOptionLabel = React.useCallback((labelKey: string, helpKey: string) => (
+    <span className="inline-flex max-w-full min-w-0 items-center gap-1 text-[10px] font-bold uppercase leading-tight text-outline">
+      <span className="min-w-0 break-words">{t(labelKey)}</span>
+      <span className="group/help relative inline-flex shrink-0">
+        <span
+          tabIndex={0}
+          aria-label={t(helpKey)}
+          className="inline-flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-white/20 text-[10px] font-black leading-none text-outline transition-colors hover:border-primary/60 hover:text-primary focus:border-primary/60 focus:text-primary focus:outline-none"
+        >
+          ?
+        </span>
+        <span className="pointer-events-none absolute left-1/2 top-5 z-30 hidden w-72 max-w-[calc(100vw-3rem)] -translate-x-1/2 whitespace-pre-line rounded-lg border border-white/10 bg-surface-container-high px-3 py-2 text-left text-[11px] font-medium normal-case leading-relaxed text-secondary shadow-xl shadow-black/30 group-hover/help:block group-focus-within/help:block">
+          {t(helpKey)}
+        </span>
+      </span>
+    </span>
+  ), [t]);
+
+  const ToggleSectionButton = React.useCallback((props: {
+    open: boolean;
+    onToggle: () => void;
+    title: string;
+    badge?: string | null;
+  }) => (
+    <button
+      type="button"
+      onClick={props.onToggle}
+      className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-left transition-colors hover:bg-white/8"
+    >
+      <span className="flex items-center gap-2 text-xs font-bold text-secondary">
+        <ChevronDown className={`h-4 w-4 transition-transform ${props.open ? 'rotate-180' : ''}`} />
+        {props.title}
+      </span>
+      {props.badge ? (
+        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+          {props.badge}
+        </span>
+      ) : null}
+    </button>
+  ), []);
 
   const validate = (data: ApiConfig, optionsError?: string | null) => {
     const newErrors: {name?: string, url?: string, key?: string, options?: string} = {};
@@ -2395,7 +2529,7 @@ const ModelItem: React.FC<{
               setEditedModel({...editedModel, name: e.target.value});
               if (errors.name) setErrors({...errors, name: undefined});
             }}
-            placeholder={t('settings.namePlaceholder')}
+            placeholder={modelType === 'asr' ? t('settings.namePlaceholderAsr') : t('settings.namePlaceholderTranslate')}
             className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
               errors.name ? 'border-error/50' : 'border-white/10'
             }`}
@@ -2408,7 +2542,7 @@ const ModelItem: React.FC<{
             type="text"
             value={editedModel.model || ''}
             onChange={e => setEditedModel({...editedModel, model: e.target.value})}
-            placeholder={modelType === 'asr' ? 'whisper-1 / scribe_v2 / nova-3 / gladia-v2' : 'gpt-4o-mini'}
+            placeholder={modelType === 'asr' ? 'whisper-1' : 'gemini-2.5-flash'}
             className="w-full bg-surface-container-lowest border border-white/10 rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30"
           />
         </div>
@@ -2421,7 +2555,7 @@ const ModelItem: React.FC<{
               setEditedModel({...editedModel, url: e.target.value});
               if (errors.url) setErrors({...errors, url: undefined});
             }}
-            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions, https://api.elevenlabs.io/v1/speech-to-text, https://api.deepgram.com/v1/listen, https://api.gladia.io/v2/pre-recorded, https://models.github.ai/inference/chat/completions, https://generativelanguage.googleapis.com, or https://us-speech.googleapis.com/v2/projects/PROJECT/locations/us/recognizers/_:recognize' : 'https://api.openai.com/v1/chat/completions'}
+            placeholder={modelType === 'asr' ? 'https://api.openai.com/v1/audio/transcriptions' : 'https://generativelanguage.googleapis.com'}
             className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
               errors.url ? 'border-error/50' : 'border-white/10'
             }`}
@@ -2437,7 +2571,7 @@ const ModelItem: React.FC<{
               setEditedModel({...editedModel, key: e.target.value});
               if (errors.key) setErrors({...errors, key: undefined});
             }}
-            placeholder="sk-..."
+            placeholder={modelType === 'asr' ? 'sk-...' : 'AIza...'}
             className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
               errors.key ? 'border-error/50' : 'border-white/10'
             }`}
@@ -2447,26 +2581,233 @@ const ModelItem: React.FC<{
         {modelType === 'translate' && (
           <div className="space-y-2 md:col-span-2">
             <label className="text-[10px] font-bold text-primary uppercase tracking-widest">
-              {t('settings.advancedOptionsJsonTitle')}
+              {t('settings.advancedOptionsTitle')}
             </label>
-            <textarea
-              value={modelOptionsText}
-              onChange={(e) => {
-                setModelOptionsText(e.target.value);
-                if (errors.options) setErrors({ ...errors, options: undefined });
-              }}
-              placeholder={`{\n  \"sampling\": {\n    \"temperature\": 1,\n    \"topP\": 0.95,\n    \"maxOutputTokens\": 16384\n  },\n  \"body\": {\n    \"stream\": true,\n    \"chat_template_kwargs\": {\n      \"enable_thinking\": true,\n      \"clear_thinking\": false\n    }\n  },\n  \"headers\": {\n    \"Accept\": \"text/event-stream\"\n  },\n  \"timeoutMs\": 180000\n}`}
-              rows={12}
-              className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary font-mono focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
-                errors.options ? 'border-error/50' : 'border-white/10'
-              }`}
-            />
-            {errors.options ? (
-              <p className="text-[10px] text-error font-bold mt-1">{errors.options}</p>
-            ) : (
-              <p className="text-[10px] text-outline/50 mt-1">
-                {t('settings.advancedOptionsHint')}
-              </p>
+            <div className="space-y-3 rounded-xl border border-white/10 bg-surface-container-lowest p-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="space-y-1.5">
+                  {renderOptionLabel('settings.executionMode', 'settings.help.executionMode')}
+                  <select
+                    value={structuredOptions.translation?.executionMode || 'auto'}
+                    onChange={(e) => updateOptions((draft) => {
+                      draft.translation = { ...(draft.translation || {}) };
+                      if (e.target.value === 'auto') {
+                        delete draft.translation.executionMode;
+                      } else {
+                        draft.translation.executionMode = e.target.value as any;
+                      }
+                    })}
+                    className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container [&>option]:bg-surface-container-high [&>option]:text-white"
+                  >
+                    <option value="auto">{t('settings.executionModeAuto')}</option>
+                    <option value="cloud_relaxed">{t('settings.executionModeRelaxed')}</option>
+                    <option value="cloud_context">{t('settings.executionModeContext')}</option>
+                    <option value="cloud_strict">{t('settings.executionModeStrict')}</option>
+                    <option value="provider_native">{t('settings.executionModeProviderNative')}</option>
+                  </select>
+                </label>
+              </div>
+
+              <ToggleSectionButton
+                open={showAdvancedControls}
+                onToggle={() => setShowAdvancedControls((open) => !open)}
+                title={t('settings.advancedParameterToggle')}
+                badge={hasAdvancedOptions ? t('settings.advancedOptionsConfigured') : null}
+              />
+
+              {showAdvancedControls && (
+                <div className="space-y-4 rounded-xl border border-white/10 bg-surface-container-low/30 p-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="space-y-1.5">
+                      {renderOptionLabel('settings.timeoutMs', 'settings.help.timeoutMs')}
+                      <input
+                        type="number"
+                        min="30000"
+                        step="1000"
+                        value={structuredOptions.timeoutMs ?? ''}
+                        onChange={(e) => setOptionNumber(['timeoutMs'], e.target.value)}
+                        placeholder="180000"
+                        className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container"
+                      />
+                    </label>
+                    <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={structuredOptions.translation?.batching?.enabled === true}
+                        onChange={(e) => updateOptions((draft) => {
+                          draft.translation = {
+                            ...(draft.translation || {}),
+                            batching: {
+                              ...(draft.translation?.batching || {}),
+                            },
+                          };
+                          if (e.target.checked) {
+                            draft.translation.batching!.enabled = true;
+                          } else {
+                            draft.translation.batching!.enabled = false;
+                          }
+                        })}
+                        className="h-4 w-4 accent-primary"
+                      />
+                      {renderOptionLabel('settings.providerBatching', 'settings.help.providerBatching')}
+                    </label>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-primary">{t('settings.quotaSection')}</div>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {[
+                        ['settings.quotaRpm', 'settings.help.quotaRpm', ['translation', 'quota', 'rpm'], structuredOptions.translation?.quota?.rpm, '60'],
+                        ['settings.quotaTpm', 'settings.help.quotaTpm', ['translation', 'quota', 'tpm'], structuredOptions.translation?.quota?.tpm, '250000'],
+                        ['settings.quotaRpd', 'settings.help.quotaRpd', ['translation', 'quota', 'rpd'], structuredOptions.translation?.quota?.rpd, '1000'],
+                        ['settings.quotaConcurrency', 'settings.help.quotaConcurrency', ['translation', 'quota', 'maxConcurrency'], structuredOptions.translation?.quota?.maxConcurrency, '1'],
+                      ].map(([labelKey, helpKey, path, value, placeholder]) => (
+                        <label key={labelKey as string} className="space-y-1.5">
+                          {renderOptionLabel(labelKey as string, helpKey as string)}
+                          <input
+                            type="number"
+                            min="0"
+                            value={(value as number | null | undefined) ?? ''}
+                            onChange={(e) => setOptionNumber(path as string[], e.target.value)}
+                            placeholder={placeholder as string}
+                            className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-primary">{t('settings.samplingSection')}</div>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {[
+                        ['settings.temperature', 'settings.help.temperature', ['sampling', 'temperature'], structuredOptions.sampling?.temperature, '0.2'],
+                        ['settings.topP', 'settings.help.topP', ['sampling', 'topP'], structuredOptions.sampling?.topP, '0.95'],
+                        ['settings.topK', 'settings.help.topK', ['sampling', 'topK'], structuredOptions.sampling?.topK, '40'],
+                        ['settings.maxOutputTokens', 'settings.help.maxOutputTokens', ['sampling', 'maxOutputTokens'], structuredOptions.sampling?.maxOutputTokens, '4096'],
+                      ].map(([labelKey, helpKey, path, value, placeholder]) => (
+                        <label key={labelKey as string} className="space-y-1.5">
+                          {renderOptionLabel(labelKey as string, helpKey as string)}
+                          <input
+                            type="number"
+                            min="0"
+                            step={labelKey === 'settings.temperature' || labelKey === 'settings.topP' ? '0.05' : '1'}
+                            value={(value as number | null | undefined) ?? ''}
+                            onChange={(e) => setOptionNumber(path as string[], e.target.value)}
+                            placeholder={placeholder as string}
+                            className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-primary">{t('settings.batchingSection')}</div>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {[
+                        ['settings.batchTargetLines', 'settings.help.batchTargetLines', ['translation', 'batching', 'targetLines'], structuredOptions.translation?.batching?.targetLines, '24'],
+                        ['settings.batchMinLines', 'settings.help.batchMinLines', ['translation', 'batching', 'minTargetLines'], structuredOptions.translation?.batching?.minTargetLines, '6'],
+                        ['settings.batchCharBudget', 'settings.help.batchCharBudget', ['translation', 'batching', 'charBudget'], structuredOptions.translation?.batching?.charBudget, '2400'],
+                        ['settings.batchMaxOutputTokens', 'settings.help.batchMaxOutputTokens', ['translation', 'batching', 'maxOutputTokens'], structuredOptions.translation?.batching?.maxOutputTokens, '2048'],
+                      ].map(([labelKey, helpKey, path, value, placeholder]) => (
+                        <label key={labelKey as string} className="space-y-1.5">
+                          {renderOptionLabel(labelKey as string, helpKey as string)}
+                          <input
+                            type="number"
+                            min="0"
+                            value={(value as number | null | undefined) ?? ''}
+                            onChange={(e) => setOptionNumber(path as string[], e.target.value)}
+                            placeholder={placeholder as string}
+                            className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {showGeminiControls && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-primary">{t('settings.providerSection')}</div>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                        <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5">
+                          <input
+                            type="checkbox"
+                            checked={geminiOptions.stream !== false}
+                            onChange={(e) => updateOptions((draft) => {
+                              draft.body = { ...(draft.body || {}) };
+                              const body = draft.body as Record<string, any>;
+                              body.gemini = { ...(isPlainObject(body.gemini) ? body.gemini : {}), stream: e.target.checked };
+                            })}
+                            className="h-4 w-4 accent-primary"
+                          />
+                          {renderOptionLabel('settings.geminiStream', 'settings.help.geminiStream')}
+                        </label>
+                        <label className="space-y-1.5">
+                          {renderOptionLabel('settings.geminiPromptMode', 'settings.help.geminiPromptMode')}
+                          <select
+                            value={String(geminiOptions.promptMode || 'concise')}
+                            onChange={(e) => updateOptions((draft) => {
+                              draft.body = { ...(draft.body || {}) };
+                              const body = draft.body as Record<string, any>;
+                              body.gemini = { ...(isPlainObject(body.gemini) ? body.gemini : {}), promptMode: e.target.value };
+                            })}
+                            className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container [&>option]:bg-surface-container-high [&>option]:text-white"
+                          >
+                            <option value="concise">{t('settings.geminiPromptConcise')}</option>
+                            <option value="system_instruction">{t('settings.geminiPromptSystemInstruction')}</option>
+                          </select>
+                        </label>
+                        <label className="space-y-1.5">
+                          {renderOptionLabel('settings.geminiThinkingBudget', 'settings.help.geminiThinkingBudget')}
+                          <input
+                            type="number"
+                            min="0"
+                            value={(thinkingConfig.thinkingBudget as number | null | undefined) ?? ''}
+                            onChange={(e) => setOptionNumber(['body', 'gemini', 'thinkingConfig', 'thinkingBudget'], e.target.value)}
+                            placeholder="0"
+                            className="w-full rounded-xl border border-white/10 bg-surface-container-high px-3 py-2.5 text-sm text-secondary outline-none focus:ring-2 focus:ring-primary-container"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <ToggleSectionButton
+                open={showAdvancedJson}
+                onToggle={() => setShowAdvancedJson((open) => !open)}
+                title={t('settings.advancedJsonToggle')}
+                badge={errors.options ? t('settings.advancedJsonNeedsFix') : null}
+              />
+            </div>
+
+            {showAdvancedJson && (
+              <div className="mt-4">
+                <label className="mb-2 block">
+                  {renderOptionLabel('settings.advancedOptionsJsonTitle', 'settings.help.advancedJson')}
+                </label>
+                <textarea
+                  value={modelOptionsText}
+                  onChange={(e) => {
+                    setModelOptionsText(e.target.value);
+                    if (errors.options) setErrors({ ...errors, options: undefined });
+                  }}
+                  placeholder={`{\n  \"sampling\": {\n    \"temperature\": 1,\n    \"topP\": 0.95,\n    \"topK\": 40,\n    \"maxOutputTokens\": 16384\n  },\n  \"translation\": {\n    \"targetLines\": 24,\n    \"charBudget\": 2400,\n    \"quota\": {\n      \"rpm\": 10,\n      \"tpm\": 250000,\n      \"rpd\": 500,\n      \"maxConcurrency\": 1\n    }\n  },\n  \"body\": {\n    \"stream\": false,\n    \"gemini\": {\n      \"stream\": true,\n      \"promptMode\": \"concise\",\n      \"thinkingConfig\": {\n        \"thinkingBudget\": 0\n      }\n    }\n  },\n  \"headers\": {\n    \"Accept\": \"text/event-stream\"\n  },\n  \"timeoutMs\": 180000\n}`}
+                  rows={12}
+                  className={`w-full bg-surface-container-lowest border rounded-xl text-sm py-3.5 px-4 text-secondary font-mono focus:ring-2 focus:ring-primary-container outline-none transition-all placeholder:text-outline/30 ${
+                    errors.options ? 'border-error/50' : 'border-white/10'
+                  }`}
+                />
+                {errors.options ? (
+                  <p className="text-[10px] text-error font-bold mt-1">{errors.options}</p>
+                ) : (
+                  <p className="text-[10px] text-outline/50 mt-1">
+                    {t('settings.advancedOptionsHint')}
+                  </p>
+                )}
+              </div>
             )}
           </div>
         )}
