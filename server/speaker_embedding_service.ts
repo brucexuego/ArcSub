@@ -11,8 +11,20 @@ export class SpeakerEmbeddingService {
   private static modelPath = path.join(PathManager.getModelsPath(), "ecapa-tdnn.onnx");
   private static irModelPath = path.join(PathManager.getModelsPath(), "ecapa-tdnn.xml");
 
+  private static get irWeightsPath() {
+    return this.irModelPath.replace(/\.xml$/i, ".bin");
+  }
+
+  private static async hasIrModelPair() {
+    const [hasXml, hasBin] = await Promise.all([
+      fs.pathExists(this.irModelPath),
+      fs.pathExists(this.irWeightsPath),
+    ]);
+    return hasXml && hasBin;
+  }
+
   private static async getPreferredModelPath() {
-    if (await fs.pathExists(this.irModelPath)) {
+    if (await this.hasIrModelPair()) {
       return this.irModelPath;
     }
     return this.modelPath;
@@ -23,7 +35,7 @@ export class SpeakerEmbeddingService {
    */
   static async init() {
     if (this.compiledModel) return;
-    const hasAnyModel = (await fs.pathExists(this.irModelPath)) || (await fs.pathExists(this.modelPath));
+    const hasAnyModel = (await this.hasIrModelPair()) || (await fs.pathExists(this.modelPath));
     if (!hasAnyModel) {
       try {
         await ResourceManager.ensureBaselineAsset("speaker_embedding");

@@ -153,7 +153,12 @@ export class VadService {
     }
 
     const xmlCandidate = this.modelPath.replace(/\.onnx$/i, ".xml");
-    if (xmlCandidate !== this.modelPath && (await fs.pathExists(xmlCandidate))) {
+    const binCandidate = xmlCandidate.replace(/\.xml$/i, ".bin");
+    const [hasXml, hasBin] = await Promise.all([
+      fs.pathExists(xmlCandidate),
+      fs.pathExists(binCandidate),
+    ]);
+    if (xmlCandidate !== this.modelPath && hasXml && hasBin) {
       return xmlCandidate;
     }
 
