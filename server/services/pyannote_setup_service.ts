@@ -65,6 +65,11 @@ export class PyannoteSetupService {
     return this.getStatus();
   }
 
+  static async clearError() {
+    this.lastError = null;
+    return this.getStatus();
+  }
+
   static async ensureInstalled(input?: { token?: string }) {
     const token = String(input?.token || '').trim();
     if (token) {

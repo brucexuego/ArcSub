@@ -67,23 +67,67 @@ async function runNodeScript(scriptRelativePath, args = []) {
   });
 }
 
+async function collectPackageInstallScripts(packageName, candidateScripts) {
+  const scripts = [];
+  const seen = new Set();
+
+  async function addIfPackageDir(packageDir) {
+    for (const candidate of candidateScripts) {
+      const scriptPath = path.join(packageDir, candidate);
+      if (!(await fs.pathExists(scriptPath))) continue;
+      const relativePath = path.relative(root, scriptPath).replace(/\\/g, '/');
+      if (!seen.has(relativePath)) {
+        seen.add(relativePath);
+        scripts.push(relativePath);
+      }
+      return;
+    }
+  }
+
+  async function scanPackageDir(packageDir) {
+    if (path.basename(packageDir) === packageName) {
+      await addIfPackageDir(packageDir);
+    }
+
+    const nestedNodeModules = path.join(packageDir, 'node_modules');
+    if (await fs.pathExists(nestedNodeModules)) {
+      await scanNodeModules(nestedNodeModules);
+    }
+  }
+
+  async function scanNodeModules(nodeModulesDir) {
+    if (!(await fs.pathExists(nodeModulesDir))) return;
+    const entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const entryPath = path.join(nodeModulesDir, entry.name);
+      if (entry.name.startsWith('@')) {
+        const scopedEntries = await fs.readdir(entryPath, { withFileTypes: true }).catch(() => []);
+        for (const scopedEntry of scopedEntries) {
+          if (!scopedEntry.isDirectory() || scopedEntry.name.startsWith('.')) continue;
+          await scanPackageDir(path.join(entryPath, scopedEntry.name));
+        }
+        continue;
+      }
+
+      await scanPackageDir(entryPath);
+    }
+  }
+
+  await scanNodeModules(path.join(root, 'node_modules'));
+  return scripts;
+}
+
 async function main() {
   log(`Working directory: ${root}`);
 
-  const maybeOnnx = [
-    'node_modules/onnxruntime-node/script/install',
-    'node_modules/onnxruntime-node/script/install.js',
-  ];
-  const onnxInstallScript = [];
-  for (const candidate of maybeOnnx) {
-    if (await pathExists(candidate)) {
-      onnxInstallScript.push(candidate);
-      break;
-    }
-  }
-  if (onnxInstallScript.length > 0) {
-    log('Running onnxruntime-node install script...');
-    await runNodeScript(onnxInstallScript[0]);
+  const onnxInstallScripts = await collectPackageInstallScripts('onnxruntime-node', [
+    'script/install',
+    'script/install.js',
+  ]);
+  for (const script of onnxInstallScripts) {
+    log(`Running onnxruntime-node install script: ${script}`);
+    await runNodeScript(script);
   }
 
   const hasOpenvinoNode = await patchOpenvinoTimeout();

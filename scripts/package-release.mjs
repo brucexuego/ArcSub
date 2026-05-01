@@ -29,6 +29,15 @@ const runtimeDependencyNames = [
   'unzipper',
 ];
 
+async function readPackageLock() {
+  const lockPath = path.join(root, 'package-lock.json');
+  if (!(await fs.pathExists(lockPath))) {
+    return null;
+  }
+
+  return fs.readJson(lockPath);
+}
+
 const releaseCopies = [
   { source: 'build', destination: 'build' },
   { source: 'dist', destination: 'dist' },
@@ -210,6 +219,7 @@ async function main() {
 
   const packageJsonPath = path.join(root, 'package.json');
   const packageJson = await fs.readJson(packageJsonPath);
+  const packageLock = await readPackageLock();
   const gitHead = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
     cwd: root,
     encoding: 'utf8',
@@ -227,7 +237,10 @@ async function main() {
   const runtimeDependencies = Object.fromEntries(
     runtimeDependencyNames
       .filter((name) => packageJson.dependencies?.[name])
-      .map((name) => [name, packageJson.dependencies[name]])
+      .map((name) => [
+        name,
+        packageLock?.packages?.[`node_modules/${name}`]?.version || packageJson.dependencies[name],
+      ])
   );
 
   const releasePackageJson = {

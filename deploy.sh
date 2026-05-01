@@ -7,6 +7,7 @@ required_python_minor=12
 skip_build=0
 skip_pyannote=0
 preinstall_local_model_python=0
+skip_local_model_python=0
 
 log() {
   printf '[ArcSub] %s\n' "$1"
@@ -117,6 +118,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --preinstall-local-model-python)
       preinstall_local_model_python=1
+      ;;
+    --skip-local-model-python)
+      skip_local_model_python=1
       ;;
     *)
       fail "Unknown argument: $1"
@@ -283,6 +287,61 @@ PY
       librosa) add_package "librosa" ;;
       accelerate) add_package "accelerate" ;;
       optimum.intel) add_package "optimum-intel[openvino]" ;;
+    esac
+  done
+
+  [[ "${#packages[@]}" -gt 0 ]] || return 0
+  run_cmd "$script_dir" "$python_bin" -m pip install --upgrade "${packages[@]}"
+}
+
+ensure_whisper_asr_helper_python_dependencies() {
+  log "Ensuring Whisper ASR helper Python dependencies..."
+  local probe_output
+  probe_output="$("$python_bin" - <<'PY'
+import importlib.util
+
+def missing(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is None
+    except ModuleNotFoundError:
+        return True
+
+modules = [
+    "openvino",
+    "openvino_genai",
+    "transformers",
+    "librosa",
+    "numpy",
+]
+missing_names = [name for name in modules if missing(name)]
+print("\n".join(missing_names))
+PY
+)"
+
+  mapfile -t missing_modules < <(printf '%s\n' "$probe_output" | sed '/^\s*$/d')
+  if [[ "${#missing_modules[@]}" -eq 0 ]]; then
+    log "Whisper ASR helper Python dependencies already available."
+    return 0
+  fi
+
+  local packages=()
+  local add_package
+  add_package() {
+    local pkg="$1"
+    for existing in "${packages[@]:-}"; do
+      [[ "$existing" == "$pkg" ]] && return 0
+    done
+    packages+=("$pkg")
+  }
+
+  local name
+  for name in "${missing_modules[@]}"; do
+    case "$name" in
+      openvino) add_package "openvino" ;;
+      openvino_genai) add_package "openvino-genai" ;;
+      transformers) add_package "transformers" ;;
+      librosa) add_package "librosa" ;;
+      numpy) add_package "numpy" ;;
     esac
   done
 
@@ -472,6 +531,23 @@ run_npm_cmd() {
   run_cmd "$workdir" "$(command -v npm)" "$@"
 }
 
+verify_node_native_runtimes() {
+  [[ -d "$script_dir/node_modules" ]] || return 1
+  (
+    cd "$script_dir"
+    "$node_bin" --input-type=module - <<'NODE'
+await import('onnxruntime-node');
+await import('@huggingface/transformers');
+NODE
+  ) >/dev/null 2>&1
+}
+
+install_release_runtime_dependencies() {
+  log "Installing release runtime dependencies..."
+  run_npm_cmd "$script_dir" install --omit=dev --no-fund --no-audit --ignore-scripts
+  run_cmd "$script_dir" "$node_bin" scripts/finalize-runtime-install.mjs
+}
+
 ensure_dotenv_file() {
   local env_path="$script_dir/.env"
   if [[ ! -f "$env_path" ]]; then
@@ -511,11 +587,14 @@ export OPENVINO_HELPER_PYTHON="$python_bin"
 ensure_dotenv_file
 env_path="$resolved_env_path"
 dotenv_set "$env_path" "OPENVINO_HELPER_PYTHON" "$python_bin"
-if [[ "$preinstall_local_model_python" -eq 1 ]]; then
+if [[ "$skip_local_model_python" -eq 0 ]]; then
+  ensure_whisper_asr_helper_python_dependencies
+else
+  log "Skipping local ASR helper Python dependency preinstall."
+fi
+if [[ "$preinstall_local_model_python" -eq 1 && "$skip_local_model_python" -eq 0 ]]; then
   ensure_asr_helper_python_dependencies
   ensure_alignment_python_dependencies
-else
-  log "Deferring local-model Python dependency install until helper/conversion use."
 fi
 
 ensure_portable_node
@@ -544,9 +623,11 @@ if [[ "$is_source_workspace" -eq 1 ]]; then
   fi
 else
   if [[ ! -d "$script_dir/node_modules" ]]; then
-    log "Installing release runtime dependencies..."
-    run_npm_cmd "$script_dir" install --omit=dev --no-fund --no-audit --ignore-scripts
-    run_cmd "$script_dir" "$node_bin" scripts/finalize-runtime-install.mjs
+    install_release_runtime_dependencies
+  elif ! verify_node_native_runtimes; then
+    log "Runtime dependencies failed native preload; reinstalling release runtime dependencies..."
+    rm -rf "$script_dir/node_modules" "$script_dir/package-lock.json"
+    install_release_runtime_dependencies
   fi
 fi
 

@@ -173,6 +173,15 @@ export class OpenvinoBackend {
     return core.compileModel(modelPath, device, config);
   }
 
+  static async convertModelToIr(sourcePath: string, outputXmlPath: string, options: { compressToFp16?: boolean } = {}) {
+    const core = await this.getCore();
+    const ov = await this.getAddon();
+    const outputDir = path.dirname(outputXmlPath);
+    await fs.ensureDir(outputDir);
+    const model = await core.readModel(sourcePath);
+    ov.saveModelSync(model, outputXmlPath, options.compressToFp16 ?? false);
+  }
+
   static async createTensor(type: string, shape: number[], data: any) {
     const ov = await this.getAddon();
     return new ov.Tensor(type, shape, data);

@@ -150,6 +150,16 @@ async function getFileReadiness(targetPath: string): Promise<FileReadiness> {
   };
 }
 
+async function getPreferredFileReadiness(targetPaths: string[]): Promise<FileReadiness> {
+  let fallback: FileReadiness | null = null;
+  for (const targetPath of targetPaths) {
+    const readiness = await getFileReadiness(targetPath);
+    if (!fallback) fallback = readiness;
+    if (readiness.exists) return readiness;
+  }
+  return fallback ?? { path: targetPaths[0] ?? '', exists: false };
+}
+
 async function hasConfiguredEnvValue(filePath: string, key: string) {
   if (!(await fs.pathExists(filePath))) return false;
   const content = await fs.readFile(filePath, 'utf8');
@@ -323,9 +333,12 @@ export class RuntimeReadinessService {
     const python = getPythonReadiness();
     const ffmpeg = getToolReadiness('ffmpeg');
     const ytDlp = getToolReadiness('yt-dlp');
-    const vad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'silero_vad.onnx'));
+    const vad = await getPreferredFileReadiness([
+      path.join(PathManager.getModelsPath(), 'silero_vad.xml'),
+      path.join(PathManager.getModelsPath(), 'silero_vad.onnx'),
+    ]);
     const tenVad = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ten-vad.onnx'));
-    const speakerEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ecapa-tdnn.onnx'));
+    const speakerEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'ecapa-tdnn.xml'));
     const pyannoteSegmentation = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'segmentation', 'model.xml'));
     const pyannoteEmbedding = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'embedding', 'model.xml'));
     const pyannotePlda = await getFileReadiness(path.join(PathManager.getModelsPath(), 'pyannote', 'plda', 'vbx.json'));

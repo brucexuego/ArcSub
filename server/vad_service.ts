@@ -14,6 +14,7 @@ export interface SpeechSegment {
 }
 
 type VadEngine = "silero" | "ten" | "auto" | "compare";
+type OnnxRuntimeVadProvider = "cpu" | "dml" | "webgpu";
 
 const require = createRequire(import.meta.url);
 
@@ -74,6 +75,46 @@ export class VadService {
     const raw = String(process.env.VAD_ENGINE ?? "silero").trim().toLowerCase();
     if (raw === "ten" || raw === "auto" || raw === "compare") return raw;
     return "silero";
+  }
+
+  private static normalizeOnnxRuntimeProvider(raw: string): OnnxRuntimeVadProvider | null {
+    const value = raw.trim().toLowerCase();
+    if (!value) return null;
+    if (value === "cpu" || value === "cpuexecutionprovider") return "cpu";
+    if (value === "dml" || value === "directml" || value === "directmlexecutionprovider") return "dml";
+    if (value === "webgpu" || value === "webgpuexecutionprovider") return "webgpu";
+    return null;
+  }
+
+  private static getOnnxRuntimeProviderLabel(provider: OnnxRuntimeVadProvider) {
+    return provider === "dml" ? "directml" : provider;
+  }
+
+  private static getOnnxRuntimeProviders(): OnnxRuntimeVadProvider[] {
+    const raw = String(process.env.VAD_ONNXRUNTIME_PROVIDERS ?? "").trim();
+    if (!raw) return ["cpu"];
+
+    const providers: OnnxRuntimeVadProvider[] = [];
+    const seen = new Set<OnnxRuntimeVadProvider>();
+    for (const part of raw.split(/[,\s;]+/)) {
+      const provider = this.normalizeOnnxRuntimeProvider(part);
+      if (!provider) {
+        if (part.trim()) {
+          console.warn(`[VAD] Ignoring unsupported VAD_ONNXRUNTIME_PROVIDERS entry: ${part}`);
+        }
+        continue;
+      }
+      if (seen.has(provider)) continue;
+      seen.add(provider);
+      providers.push(provider);
+    }
+
+    if (providers.length === 0) {
+      console.warn("[VAD] VAD_ONNXRUNTIME_PROVIDERS has no valid providers, falling back to cpu.");
+      return ["cpu"];
+    }
+
+    return providers;
   }
 
   private static getFfmpegBinary() {
@@ -508,10 +549,13 @@ export class VadService {
       console.log("[VAD] No OpenVINO-compatible VAD IR model found, using ONNX Runtime fallback.");
     }
 
-    const providers = process.platform === "win32" ? ["dml", "webgpu", "cpu"] : ["webgpu", "cpu"];
+    const providers = this.getOnnxRuntimeProviders();
+    console.log(
+      `[VAD] ONNX Runtime provider order: ${providers.map((provider) => this.getOnnxRuntimeProviderLabel(provider)).join(", ")}`
+    );
     for (const provider of providers) {
       try {
-        const label = provider === "dml" ? "directml" : provider;
+        const label = this.getOnnxRuntimeProviderLabel(provider);
         console.log(`[VAD] Trying ONNX Runtime execution provider: ${label}`);
         this.session = await ort.InferenceSession.create(this.modelPath, {
           executionProviders: [provider],
@@ -520,7 +564,7 @@ export class VadService {
         console.log(`[VAD] Using inference backend: ONNX Runtime (${label})`);
         return;
       } catch {
-        const label = provider === "dml" ? "directml" : provider;
+        const label = this.getOnnxRuntimeProviderLabel(provider);
         console.warn(`[VAD] Provider ${label} unavailable, trying next...`);
       }
     }

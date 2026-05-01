@@ -1435,6 +1435,22 @@ export default function Settings({ project }: { project: Project | null }) {
     }
   };
 
+  const handleClearLocalInstallStatus = async (modelId: string) => {
+    setLocalErrorScope(null);
+    setLocalError(null);
+    try {
+      const data = await postJson<LocalModelsResponse>(
+        '/api/local-models/install-status/clear',
+        { modelId },
+        { timeoutMs: 30_000, retries: 0 }
+      );
+      applyLocalModelsResponse(data);
+    } catch (error: any) {
+      setLocalErrorScope('install');
+      setLocalError(formatRequestError(error, t('settings.localInstallFailed')));
+    }
+  };
+
   const handleSavePyannoteToken = async () => {
     const token = pyannoteTokenInput.trim();
     if (!token) {
@@ -1480,6 +1496,23 @@ export default function Settings({ project }: { project: Project | null }) {
       setPyannoteMessage(String(error?.message || pyannoteCopy.installFailed));
     } finally {
       setPyannoteBusy(false);
+    }
+  };
+
+  const handleClearPyannoteError = async () => {
+    setPyannoteMessageScope(null);
+    setPyannoteMessage(null);
+    try {
+      const data = await postJson<{ success?: boolean; status?: PyannoteStatus }>(
+        '/api/runtime/pyannote/clear-error',
+        {},
+        { timeoutMs: 30_000, retries: 0 }
+      );
+      setPyannoteStatus(data.status || null);
+      await loadLocalModels();
+    } catch (error: any) {
+      setPyannoteMessageScope('install');
+      setPyannoteMessage(String(error?.message || pyannoteCopy.installFailed));
     }
   };
 
@@ -1845,7 +1878,18 @@ export default function Settings({ project }: { project: Project | null }) {
                   </span>
                 </div>
                 {pyannoteStatus?.lastError && !pyannoteStatus.ready && (
-                  <div className="mt-2 break-all text-[11px] text-error/80">{pyannoteStatus.lastError}</div>
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-error/15 bg-error/5 px-3 py-2 text-[11px] text-error/80">
+                    <div className="min-w-0 flex-1 break-all">{pyannoteStatus.lastError}</div>
+                    <button
+                      type="button"
+                      onClick={() => void handleClearPyannoteError()}
+                      className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-error/20 text-error/70 transition-colors hover:bg-error/10 hover:text-error"
+                      aria-label={t('dashboard.close')}
+                      title={t('dashboard.close')}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
                 )}
               </div>
               <button
@@ -2006,11 +2050,24 @@ export default function Settings({ project }: { project: Project | null }) {
                           </div>
                           <div className="mt-1 break-all text-outline">{status.repoId}</div>
                         </div>
-                        <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
-                          failed ? 'bg-error/10 text-error' : 'bg-primary-container/10 text-primary'
-                        }`}>
-                          {status.installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : failed ? <AlertCircle className="h-3.5 w-3.5" /> : null}
-                          {formatLocalInstallPhase(localCopy, status.phase)}
+                        <div className="flex items-center gap-2">
+                          <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${
+                            failed ? 'bg-error/10 text-error' : 'bg-primary-container/10 text-primary'
+                          }`}>
+                            {status.installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : failed ? <AlertCircle className="h-3.5 w-3.5" /> : null}
+                            {formatLocalInstallPhase(localCopy, status.phase)}
+                          </div>
+                          {failed && (
+                            <button
+                              type="button"
+                              onClick={() => void handleClearLocalInstallStatus(status.modelId)}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-error/20 text-error/70 transition-colors hover:bg-error/10 hover:text-error"
+                              aria-label={t('dashboard.close')}
+                              title={t('dashboard.close')}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                       {status.error && (
@@ -2107,8 +2164,17 @@ export default function Settings({ project }: { project: Project | null }) {
                       </button>
                     </div>
                     {model.installError && (
-                      <div className="rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
-                        {model.installError}
+                      <div className="flex items-start gap-2 rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
+                        <div className="min-w-0 flex-1 break-all">{model.installError}</div>
+                        <button
+                          type="button"
+                          onClick={() => void handleClearLocalInstallStatus(model.id)}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-error/20 text-error/70 transition-colors hover:bg-error/10 hover:text-error"
+                          aria-label={t('dashboard.close')}
+                          title={t('dashboard.close')}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       </div>
                     )}
                   </div>
@@ -2196,8 +2262,17 @@ export default function Settings({ project }: { project: Project | null }) {
                       </button>
                     </div>
                     {model.installError && (
-                      <div className="rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
-                        {model.installError}
+                      <div className="flex items-start gap-2 rounded-lg border border-error/20 bg-error/10 px-3 py-2 text-[11px] text-error">
+                        <div className="min-w-0 flex-1 break-all">{model.installError}</div>
+                        <button
+                          type="button"
+                          onClick={() => void handleClearLocalInstallStatus(model.id)}
+                          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-error/20 text-error/70 transition-colors hover:bg-error/10 hover:text-error"
+                          aria-label={t('dashboard.close')}
+                          title={t('dashboard.close')}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       </div>
                     )}
                   </div>

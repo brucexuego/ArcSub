@@ -773,6 +773,19 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
     [loadPyannoteStatus, pyannoteSetupCopy.installIncomplete]
   );
 
+  const clearPyannoteError = React.useCallback(async () => {
+    try {
+      const response = await postJson<{ success?: boolean; status?: PyannoteSetupStatus }>(
+        '/api/runtime/pyannote/clear-error',
+        {},
+        { timeoutMs: 30_000, retries: 0 }
+      );
+      setPyannoteStatus(response?.status || (await loadPyannoteStatus()));
+    } catch (error) {
+      console.error('Failed to clear pyannote error', error);
+    }
+  }, [loadPyannoteStatus]);
+
   const ensurePyannoteProviderReady = React.useCallback(async () => {
     let tokenConfigured = Boolean(pyannoteStatus?.tokenConfigured);
 
@@ -2315,8 +2328,17 @@ export default function SpeechToText({ project, onUpdateProject, onNext, onBack,
                             </div>
                           )}
                           {pyannoteStatus?.lastError && !pyannoteStatus.ready && (
-                            <div className="mt-2 text-[11px] leading-relaxed text-error/80">
-                              {pyannoteStatus.lastError}
+                            <div className="mt-2 flex items-start gap-2 rounded-lg border border-error/15 bg-error/5 px-3 py-2 text-[11px] leading-relaxed text-error/80">
+                              <div className="min-w-0 flex-1 break-all">{pyannoteStatus.lastError}</div>
+                              <button
+                                type="button"
+                                onClick={() => void clearPyannoteError()}
+                                className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-error/20 text-error/70 transition-colors hover:bg-error/10 hover:text-error"
+                                aria-label={t('dashboard.close')}
+                                title={t('dashboard.close')}
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
                             </div>
                           )}
                         </div>
