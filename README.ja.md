@@ -7,6 +7,7 @@ ArcSub は、クラウドサービスとローカル OpenVINO モデルをどち
 - English: [README.md](./README.md)
 - 繁體中文: [README.zh-TW.md](./README.zh-TW.md)
 - 日本語: [README.ja.md](./README.ja.md)
+- Deutsch: [README.de.md](./README.de.md)
 
 ## ドキュメント
 

@@ -7,6 +7,7 @@ ArcSub is an end-to-end subtitle translation workstation that treats cloud servi
 - English: [README.md](./README.md)
 - 繁體中文: [README.zh-TW.md](./README.zh-TW.md)
 - 日本語: [README.ja.md](./README.ja.md)
+- Deutsch: [README.de.md](./README.de.md)
 
 ## Documentation
 
