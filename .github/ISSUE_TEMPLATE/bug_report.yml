@@ -10,7 +10,7 @@ body:
         Thanks for reporting a bug.
 
         Please keep public reports free of `.env` content, personal media, and full `runtime/` snapshots.
-        DO NOT paste API keys, Hugging Face tokens or any other secrets.
+        Do not paste API keys, Hugging Face tokens or other secrets.
         For security related issues, please refer to [SECURITY.md](https://github.com/brucexuego/ArcSub/blob/main/SECURITY.md).
   - type: input
     id: version
@@ -50,6 +50,7 @@ body:
         - Settings
         - Model installation
         - Pyannote setup
+        - Other / Not sure
     validations:
       required: true
   - type: textarea
@@ -98,10 +99,11 @@ body:
   - type: dropdown
     id: after_restart
     attributes:
-      label: Does this issue happen after restarting ArcSub ?
+      label: Does this issue happen after restarting ArcSub?
       options:
         - "Yes"
         - "No"
+        - Not sure / Cannot test
     validations:
       required: true
   - type: textarea
@@ -111,9 +113,9 @@ body:
       description: Paste only the relevant excerpt. Remove secrets and personal paths if needed.
       render: text
   - type: textarea
-    id: complementary_indications
+    id: additional_context
     attributes:
-      label: Complementary indications
+      label: Additional context
       placeholder: You can add here any indications that you may find relevant to this issue.
   - type: checkboxes
     id: checks
