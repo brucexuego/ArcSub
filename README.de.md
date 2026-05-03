@@ -1,6 +1,6 @@
 # ArcSub
 
-ArcSub ist eine durchgängige Workstation für die Untertitelübersetzung, die Cloud-Dienste und lokale OpenVINO-Modelle gleichwertig behandelt. Sie umfasst die Medienaufnahme, die Spracherkennung, die Untertitelübersetzung und die Wiedergabe der fertigen Untertitel zusammen mit dem Video.
+ArcSub ist eine End-to-End-Workstation zur Untertitelübersetzung, die Cloud-Dienste und lokale OpenVINO-Modelle als gleichwertige, erstklassige Wege behandelt. Sie deckt den gesamten Workflow ab: Medienimport, Speech-to-Text, Untertitelübersetzung sowie das Ansehen der fertigen Untertitel zusammen mit dem Video.
 
 ## Sprachen
 
@@ -88,7 +88,7 @@ Es enthält nicht:
 
 - Lokale Medien importieren oder Online-Medien herunterladen
 - Spracherkennung mit Cloud-ASR-Diensten oder lokalen OpenVINO-ASR-Modellen
-- Wortausrichtung, VAD und Hilfsfunktionen für die Sprechblasensteuerung nutzen
+- Hilfsfunktionen wie Wort-Alignment, VAD und Sprecher-Diarisierung nutzen
 - Untertitel mit Cloud-Übersetzungsdiensten oder lokalen OpenVINO-Übersetzungsmodellen übersetzen
 - Untertitel zusammen mit dem Video anzeigen und das Styling für die Anzeigeseite anpassen
 
