@@ -95,11 +95,15 @@ body:
       placeholder: Describe what actually happened, including any visible error text.
     validations:
       required: true
-  - type: checkboxes
+  - type: dropdown
     id: after_restart
     attributes:
+      label: Does this issue happen after restarting ArcSub ?
       options:
-        - label: This issue happens after restarting ArcSub
+        - "Yes"
+        - "No"
+    validations:
+      required: true
   - type: textarea
     id: logs
     attributes:
