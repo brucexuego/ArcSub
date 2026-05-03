@@ -9,7 +9,50 @@ body:
       value: |
         Thanks for reporting a bug.
 
-        Please keep public reports free of secrets, `.env` content, personal media, and full `runtime/` snapshots.
+        Please keep public reports free of `.env` content, personal media, and full `runtime/` snapshots.
+        Do not paste API keys, Hugging Face tokens, or other secrets.
+        For security related issues, please refer to [SECURITY.md](https://github.com/brucexuego/ArcSub/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: ArcSub Version
+      description: App version, commit, or release tag if known.
+      placeholder: 0.9.0
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install_mode
+    attributes:
+      label: Install Mode
+      options:
+        - Packaged release
+        - Source repository
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: failed_step
+    attributes:
+      label: Failed Step
+      options:
+        - Video acquisition
+        - Speech-to-text
+        - Translation
+        - Video playback
+        - Settings
+        - Model installation
+        - Pyannote setup
+        - Other / Not sure
+    validations:
+      required: true
   - type: textarea
     id: summary
     attributes:
@@ -18,6 +61,13 @@ body:
       placeholder: ArcSub stops responding when I start local translation after switching models.
     validations:
       required: true
+  - type: dropdown
+    id: model_type
+    attributes:
+      label: Selected model type (if relevant)
+      options:
+        - Cloud model
+        - Local model
   - type: textarea
     id: steps
     attributes:
@@ -46,30 +96,14 @@ body:
       placeholder: Describe what actually happened, including any visible error text.
     validations:
       required: true
-  - type: input
-    id: version
-    attributes:
-      label: ArcSub Version
-      description: App version, commit, or release tag if known.
-      placeholder: 0.9.0
   - type: dropdown
-    id: install_mode
+    id: after_restart
     attributes:
-      label: Install Mode
+      label: Does this issue happen after restarting ArcSub?
       options:
-        - Packaged release
-        - Source repository
-        - Not sure
-    validations:
-      required: true
-  - type: dropdown
-    id: platform
-    attributes:
-      label: Platform
-      options:
-        - Windows
-        - Linux
-        - Other
+        - "Yes"
+        - "No"
+        - Not sure / Cannot test
     validations:
       required: true
   - type: textarea
@@ -78,6 +112,11 @@ body:
       label: Logs Or Screenshots
       description: Paste only the relevant excerpt. Remove secrets and personal paths if needed.
       render: text
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      placeholder: You can add here any indications that you may find relevant to this issue.
   - type: checkboxes
     id: checks
     attributes:
