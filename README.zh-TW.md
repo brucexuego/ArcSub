@@ -8,6 +8,7 @@ ArcSub 是一套雲端服務與本機 OpenVINO 模型並重的全流程字幕翻
 - 繁體中文: [README.zh-TW.md](./README.zh-TW.md)
 - 日本語: [README.ja.md](./README.ja.md)
 - Deutsch: [README.de.md](./README.de.md)
+- Français: [README.fr.md](./README.fr.md)
 
 ## 文件
 
