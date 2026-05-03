@@ -10,7 +10,7 @@ body:
         Thanks for reporting a bug.
 
         Please keep public reports free of `.env` content, personal media, and full `runtime/` snapshots.
-        Do not paste API keys, Hugging Face tokens or other secrets.
+        Do not paste API keys, Hugging Face tokens, or other secrets.
         For security related issues, please refer to [SECURITY.md](https://github.com/brucexuego/ArcSub/blob/main/SECURITY.md).
   - type: input
     id: version
