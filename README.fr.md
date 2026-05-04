@@ -81,7 +81,7 @@ Ce dépôt contient les codes sources de l'application et la documentation publi
 Il n'inclut pas:
 
 - les données d'exécution locales sous `runtime/`
-- Les modèles locaux ASR ou de traduction 
+- les modèles locaux ASR ou de traduction
 - les environnements d'exécution portables tels que `.arcsub-bootstrap/`
 - les identifiants personnels tels que `.env`
 
