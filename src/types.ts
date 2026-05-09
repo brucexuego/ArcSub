@@ -65,6 +65,8 @@ export interface AcceleratorStats {
   engineTypes?: string[];
   physIndex?: number;
   taskManagerIndex?: number;
+  openvinoDevice?: string;
+  openvinoIndex?: number;
 }
 
 export interface ApiConfig {

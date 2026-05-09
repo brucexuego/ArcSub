@@ -1,0 +1,54 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Current prompt template overlay: subtitle_srt_dubbing_adapter
+# Merged from reviewed glossary categories: concise spoken style, ASR recovery vocabulary, and formal subtitle wording
+thank you=ありがとうございます
+thank you very much=どうもありがとう
+I do not know=わからない
+I understand=承知しました
+all right=いいよ
+wait a second=ちょっと待って
+are you okay?=大丈夫？
+what happened?=どうしたの？
+let us go=行こう
+it is okay=問題ありません
+please do not worry=ご心配には及びません
+come on=ほら
+no problem=大丈夫
+let me think=ちょっと考えさせて
+utterance=発話
+speaker label=話者ラベル
+speaker turn=話者交替
+timecode=タイムコード
+word timestamp=単語タイムスタンプ
+filler word=フィラー
+background noise=背景ノイズ
+overlap speech=発話の重なり
+speaker overlap=話者の重なり
+inaudible=聞き取れない
+pause=間
+misrecognition=誤認識
+homophone=同音語
+misheard word=聞き間違い語
+dropped word=脱落語句
+repeated word=重複語
+truncated word=途中切れ語
+unclear speech=不明瞭音声
+cross-talk=クロストーク
+false start=言いさし
+self-correction=自己修正
+disfluency=非流暢性
+hesitation=ためらい
+partial word=不完全語
+cut-off=途中切れ
+speaker change=話者切り替え
+I am sorry=申し訳ありません
+please confirm=ご確認ください
+we need to=する必要があります
+for example=例えば
+according to=によれば
+please note=ご留意ください
+however=ただし
+therefore=したがって
+in addition=さらに
+as a result=その結果

@@ -127,6 +127,16 @@ export class PathManager {
     return path.resolve(this.rootPath, 'server', 'glossaries', 'translation');
   }
 
+  static getBuiltInTranslationPromptRootPath() {
+    return path.resolve(this.rootPath, 'server', 'prompts', 'translation', 'templates');
+  }
+
+  static getLocalTranslationPromptRootPath() {
+    const p = path.join(this.getLocalPath(), 'translation_prompts', 'templates');
+    fs.ensureDirSync(p);
+    return p;
+  }
+
   static getPublicPath() {
     return path.join(this.rootPath, 'public');
   }
@@ -215,6 +225,8 @@ export class PathManager {
       local: this.getLocalPath(),
       privateVideoSites: this.getPrivateVideoSitesPath(),
       glossaryRoot: this.getBuiltInGlossaryRootPath(),
+      builtInTranslationPrompts: this.getBuiltInTranslationPromptRootPath(),
+      localTranslationPrompts: this.getLocalTranslationPromptRootPath(),
     };
   }
 

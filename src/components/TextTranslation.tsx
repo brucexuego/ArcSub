@@ -1,16 +1,11 @@
 ﻿import React from 'react';
-import { ArrowRight, Download, Loader2, Play, CheckCircle2, FolderOpen, FileText, Upload, Square, X, Cloud, HardDrive } from 'lucide-react';
+import { ArrowRight, Download, Loader2, Play, CheckCircle2, FolderOpen, FileText, Upload, Square, X, Cloud, HardDrive, Save, RotateCcw } from 'lucide-react';
 import { Project, ApiConfig, Material } from '../types';
 import { useLanguage } from '../i18n/LanguageContext';
-import {
-  getCustomTargetTranslationPromptTemplateText,
-  getTranslationPromptTemplateText,
-  type Language,
-  type TranslationPromptTemplateId,
-} from '../i18n/translations';
+import { type Language } from '../i18n/translations';
 import { sanitizeInput } from '../utils/security';
 import { PROJECT_STATUS } from '../project_status';
-import { postJson } from '../utils/http_client';
+import { getJson, postJson } from '../utils/http_client';
 import SubtitleRowsEditor from './SubtitleRowsEditor';
 import RunMonitor, { type RunMonitorBadge, type RunMonitorSection } from './RunMonitor';
 import FieldHelp from './FieldHelp';
@@ -69,10 +64,38 @@ interface RuntimeModelsResponse {
   };
 }
 
-type PromptTemplateId = TranslationPromptTemplateId;
+interface PromptTemplateItem {
+  id: string;
+  labelKey?: string | null;
+  fallbackLabel?: string;
+  source?: 'built-in' | 'local';
+  contentSource?: 'built-in' | 'local';
+  hasLocalOverride?: boolean;
+  targetLang?: string;
+  language?: string;
+  content?: string;
+}
+
+interface PromptTemplateListResponse {
+  templates?: PromptTemplateItem[];
+}
+
+interface PromptTemplateResponse {
+  template?: PromptTemplateItem;
+  error?: string;
+}
+
+type PromptTemplateId = string;
 type DiarizationMode = 'auto' | 'fixed' | 'range' | 'many';
 type DiarizationScenePreset = 'interview' | 'podcast' | 'meeting' | 'presentation_qa' | 'custom';
 type DiarizationProvider = 'classic' | 'pyannote';
+
+const PROMPT_TEMPLATE_REQUEST_OPTIONS = {
+  dedupe: false,
+  timeoutMs: 30_000,
+  retries: 4,
+  retryDelayMs: 1_000,
+} as const;
 
 interface DiarizationDiagnostics {
   provider: 'acoustic';
@@ -533,6 +556,14 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const [glossaryText, setGlossaryText] = React.useState('');
   const [strictJsonLineRepairEnabled, setStrictJsonLineRepairEnabled] = React.useState(false);
   const [selectedPromptTemplateId, setSelectedPromptTemplateId] = React.useState<PromptTemplateId>('');
+  const [promptTemplates, setPromptTemplates] = React.useState<PromptTemplateItem[]>([]);
+  const [promptTemplateDraft, setPromptTemplateDraft] = React.useState('');
+  const [promptTemplateSnapshot, setPromptTemplateSnapshot] = React.useState('');
+  const [promptTemplateMeta, setPromptTemplateMeta] = React.useState<PromptTemplateItem | null>(null);
+  const [isLoadingPromptTemplates, setIsLoadingPromptTemplates] = React.useState(false);
+  const [isSavingPromptTemplate, setIsSavingPromptTemplate] = React.useState(false);
+  const [promptTemplateStatus, setPromptTemplateStatus] = React.useState<string | null>(null);
+  const [promptTemplateError, setPromptTemplateError] = React.useState<string | null>(null);
   const [translatedLines, setTranslatedLines] = React.useState<Array<{ original: string; translated: string }>>([]);
   const [translateModels, setTranslateModels] = React.useState<ApiConfig[]>([]);
   const [selectedModelId, setSelectedModelId] = React.useState('');
@@ -801,26 +832,100 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     hasSourceText &&
     hasProjectSourceSelection &&
     Boolean(String(effectiveTargetLanguage || '').trim());
+  const promptTemplateDirty = promptTemplateDraft !== promptTemplateSnapshot;
+  const getPromptTemplateLabel = React.useCallback((template: PromptTemplateItem) => {
+    if (template.labelKey) {
+      const localized = t(template.labelKey);
+      if (localized && localized !== template.labelKey) return localized;
+    }
+    return template.fallbackLabel || template.id;
+  }, [t]);
+
   const promptTemplateOptions = React.useMemo(
     () => [
       { id: '' as PromptTemplateId, label: t('translation.promptTemplateNone') },
-      { id: 'subtitle_general' as PromptTemplateId, label: t('translation.promptTemplateGeneral') },
-      { id: 'subtitle_concise_spoken' as PromptTemplateId, label: t('translation.promptTemplateConciseSpoken') },
-      { id: 'subtitle_formal_precise' as PromptTemplateId, label: t('translation.promptTemplateFormalPrecise') },
-      { id: 'subtitle_asr_recovery' as PromptTemplateId, label: t('translation.promptTemplateAsrRecovery') },
-      { id: 'subtitle_technical_terms' as PromptTemplateId, label: t('translation.promptTemplateTechnicalTerms') },
+      ...promptTemplates.map((template) => ({
+        id: template.id as PromptTemplateId,
+        label: getPromptTemplateLabel(template),
+      })),
     ],
-    [t]
+    [getPromptTemplateLabel, promptTemplates, t]
   );
+  const promptTemplateRefreshPhase =
+    selectedModelIsLocal && localModelPreloadEnabled ? modelLoadStatus : 'ready';
 
   React.useEffect(() => {
-    if (!selectedPromptTemplateId) return;
-    setPromptText(
-      targetLang === 'other'
-        ? getCustomTargetTranslationPromptTemplateText(selectedPromptTemplateId, effectiveTargetLanguage)
-        : getTranslationPromptTemplateText(selectedPromptTemplateId, effectiveTargetLanguage)
-    );
-  }, [selectedPromptTemplateId, targetLang, effectiveTargetLanguage]);
+    let cancelled = false;
+    const target = String(effectiveTargetLanguage || '').trim() || 'en';
+    setIsLoadingPromptTemplates(true);
+    setPromptTemplateError(null);
+    getJson<PromptTemplateListResponse>(
+      `/api/translation/prompt-templates?targetLang=${encodeURIComponent(target)}${effectiveSourceLanguage ? `&sourceLang=${encodeURIComponent(effectiveSourceLanguage)}` : ''}`,
+      PROMPT_TEMPLATE_REQUEST_OPTIONS
+    )
+      .then((payload) => {
+        if (cancelled) return;
+        const templates = Array.isArray(payload?.templates) ? payload.templates : [];
+        setPromptTemplates(templates);
+        setPromptTemplateError(null);
+        if (selectedPromptTemplateId && !templates.some((template) => template.id === selectedPromptTemplateId)) {
+          setSelectedPromptTemplateId('');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPromptTemplates([]);
+        if (promptTemplateRefreshPhase !== 'loading') {
+          setPromptTemplateError(t('translation.promptTemplateLoadError'));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingPromptTemplates(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSourceLanguage, effectiveTargetLanguage, promptTemplateRefreshPhase, selectedPromptTemplateId, t]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!selectedPromptTemplateId || translateGemmaPromptControlsDisabled) {
+      setPromptTemplateDraft('');
+      setPromptTemplateSnapshot('');
+      setPromptTemplateMeta(null);
+      setPromptTemplateStatus(null);
+      return;
+    }
+
+    const target = String(effectiveTargetLanguage || '').trim() || 'en';
+    setPromptTemplateError(null);
+    setPromptTemplateStatus(null);
+    getJson<PromptTemplateResponse>(
+      `/api/translation/prompt-templates/${encodeURIComponent(selectedPromptTemplateId)}?targetLang=${encodeURIComponent(target)}${effectiveSourceLanguage ? `&sourceLang=${encodeURIComponent(effectiveSourceLanguage)}` : ''}`,
+      PROMPT_TEMPLATE_REQUEST_OPTIONS
+    )
+      .then((payload) => {
+        if (cancelled) return;
+        const template = payload?.template || null;
+        const content = String(template?.content || '');
+        setPromptTemplateDraft(content);
+        setPromptTemplateSnapshot(content);
+        setPromptTemplateMeta(template);
+        setPromptTemplateError(null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPromptTemplateDraft('');
+        setPromptTemplateSnapshot('');
+        setPromptTemplateMeta(null);
+        if (promptTemplateRefreshPhase !== 'loading') {
+          setPromptTemplateError(t('translation.promptTemplateLoadError'));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSourceLanguage, effectiveTargetLanguage, promptTemplateRefreshPhase, selectedPromptTemplateId, t, translateGemmaPromptControlsDisabled]);
 
   const selectedSourceDescription = React.useMemo(() => {
     if (sourceType === 'project') {
@@ -1331,23 +1436,12 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   }, [t]);
 
   const promptTemplateLabel = React.useCallback((templateId: string | null | undefined) => {
-    switch (String(templateId || '')) {
-      case 'subtitle_general':
-        return t('translation.promptTemplateGeneral');
-      case 'subtitle_concise_spoken':
-        return t('translation.promptTemplateConciseSpoken');
-      case 'subtitle_formal_precise':
-        return t('translation.promptTemplateFormalPrecise');
-      case 'subtitle_strict_alignment':
-        return t('translation.promptTemplateStrictAlignment');
-      case 'subtitle_asr_recovery':
-        return t('translation.promptTemplateAsrRecovery');
-      case 'subtitle_technical_terms':
-        return t('translation.promptTemplateTechnicalTerms');
-      default:
-        return t('translation.promptTemplateNone');
-    }
-  }, [t]);
+    const id = String(templateId || '');
+    if (!id) return t('translation.promptTemplateNone');
+    const loaded = promptTemplates.find((template) => template.id === id);
+    if (loaded) return getPromptTemplateLabel(loaded);
+    return id;
+  }, [getPromptTemplateLabel, promptTemplates, t]);
 
   const formatTranslationPipeline = (debug: any) => {
     if (!debug || typeof debug !== 'object') return null;
@@ -1556,16 +1650,63 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
 
   const handleSelectPromptTemplate = React.useCallback((templateId: PromptTemplateId) => {
     setSelectedPromptTemplateId(templateId);
-    if (!templateId) {
-      setPromptText('');
-      return;
+    setPromptTemplateStatus(null);
+    setPromptTemplateError(null);
+  }, []);
+
+  const handleSavePromptTemplate = React.useCallback(async () => {
+    if (!selectedPromptTemplateId) return;
+    setIsSavingPromptTemplate(true);
+    setPromptTemplateError(null);
+    setPromptTemplateStatus(null);
+    try {
+      const payload = await postJson<PromptTemplateResponse>(
+        `/api/translation/prompt-templates/${encodeURIComponent(selectedPromptTemplateId)}`,
+        {
+          targetLang: effectiveTargetLanguage || 'en',
+          sourceLang: effectiveSourceLanguage || undefined,
+          content: promptTemplateDraft,
+          fallbackLabel: promptTemplateMeta?.fallbackLabel || selectedPromptTemplateId,
+        }
+      );
+      const template = payload?.template || null;
+      const content = String(template?.content || promptTemplateDraft);
+      setPromptTemplateMeta(template);
+      setPromptTemplateDraft(content);
+      setPromptTemplateSnapshot(content);
+      setPromptTemplateStatus(t('translation.promptTemplateSaved'));
+    } catch {
+      setPromptTemplateError(t('translation.promptTemplateSaveError'));
+    } finally {
+      setIsSavingPromptTemplate(false);
     }
-    setPromptText(
-      targetLang === 'other'
-        ? getCustomTargetTranslationPromptTemplateText(templateId, effectiveTargetLanguage)
-        : getTranslationPromptTemplateText(templateId, effectiveTargetLanguage)
-    );
-  }, [targetLang, effectiveTargetLanguage]);
+  }, [effectiveSourceLanguage, effectiveTargetLanguage, promptTemplateDraft, promptTemplateMeta?.fallbackLabel, selectedPromptTemplateId, t]);
+
+  const handleResetPromptTemplate = React.useCallback(async () => {
+    if (!selectedPromptTemplateId) return;
+    setIsSavingPromptTemplate(true);
+    setPromptTemplateError(null);
+    setPromptTemplateStatus(null);
+    try {
+      const payload = await postJson<PromptTemplateResponse>(
+        `/api/translation/prompt-templates/${encodeURIComponent(selectedPromptTemplateId)}/reset`,
+        {
+          targetLang: effectiveTargetLanguage || 'en',
+          sourceLang: effectiveSourceLanguage || undefined,
+        }
+      );
+      const template = payload?.template || null;
+      const content = String(template?.content || '');
+      setPromptTemplateMeta(template);
+      setPromptTemplateDraft(content);
+      setPromptTemplateSnapshot(content);
+      setPromptTemplateStatus(t('translation.promptTemplateResetDone'));
+    } catch {
+      setPromptTemplateError(t('translation.promptTemplateSaveError'));
+    } finally {
+      setIsSavingPromptTemplate(false);
+    }
+  }, [effectiveSourceLanguage, effectiveTargetLanguage, selectedPromptTemplateId, t]);
 
   const handleStartTranslation = async () => {
     if (!project?.id || !canStartTranslation) return;
@@ -2658,6 +2799,70 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
                   ))
                 )}
               </select>
+              {isLoadingPromptTemplates && (
+                <div className="text-xs text-outline">{t('translation.promptTemplateLoading')}</div>
+              )}
+              {!translateGemmaPromptControlsDisabled && selectedPromptTemplateId && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <HelpLabel
+                      label={t('translation.promptTemplateContentLabel')}
+                      ariaLabel={t('translation.help.promptTemplateContentAria')}
+                      title={t('translation.promptTemplateContentLabel')}
+                      body={t('translation.help.promptTemplateContentBody')}
+                      className="text-xs font-bold text-outline uppercase tracking-widest"
+                    />
+                    <span className="shrink-0 text-[11px] text-outline">
+                      {promptTemplateMeta?.contentSource === 'local'
+                        ? t('translation.promptTemplateContentLocal')
+                        : t('translation.promptTemplateContentBuiltIn')}
+                    </span>
+                  </div>
+                  <textarea
+                    value={promptTemplateDraft}
+                    onChange={(e) => {
+                      setPromptTemplateDraft(e.target.value);
+                      setPromptTemplateStatus(null);
+                    }}
+                    disabled={isSavingPromptTemplate}
+                    className="w-full h-48 bg-surface-container-lowest border border-white/10 rounded-xl px-5 py-4 text-sm text-secondary placeholder:text-outline/20 focus:ring-2 focus:ring-primary-container outline-none resize-none disabled:opacity-55 disabled:cursor-not-allowed"
+                    placeholder={t('translation.promptTemplateEmpty')}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSavePromptTemplate}
+                      disabled={!promptTemplateDirty || isSavingPromptTemplate}
+                      title={t('translation.promptTemplateSave')}
+                      aria-label={t('translation.promptTemplateSave')}
+                      className="inline-flex min-h-9 min-w-[9.5rem] items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-bold text-on-primary transition-colors hover:bg-primary/90 disabled:bg-white/10 disabled:text-outline disabled:opacity-100 disabled:cursor-not-allowed"
+                    >
+                      <Save className="w-4 h-4 shrink-0" />
+                      {isSavingPromptTemplate ? t('translation.promptTemplateSaving') : t('translation.promptTemplateSave')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetPromptTemplate}
+                      disabled={isSavingPromptTemplate || !promptTemplateMeta?.hasLocalOverride}
+                      title={t('translation.promptTemplateReset')}
+                      aria-label={t('translation.promptTemplateReset')}
+                      className="inline-flex min-h-9 min-w-[9.5rem] items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-xs font-bold text-secondary transition-colors hover:bg-white/15 disabled:border-white/10 disabled:bg-white/5 disabled:text-outline disabled:opacity-100 disabled:cursor-not-allowed"
+                    >
+                      <RotateCcw className="w-4 h-4 shrink-0" />
+                      {t('translation.promptTemplateReset')}
+                    </button>
+                    {promptTemplateDirty && (
+                      <span className="text-xs text-outline">{t('translation.promptTemplateUnsaved')}</span>
+                    )}
+                    {promptTemplateStatus && (
+                      <span className="text-xs text-primary">{promptTemplateStatus}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+              {promptTemplateError && (
+                <div className="text-xs text-error bg-error/10 border border-error/20 rounded-lg p-3">{promptTemplateError}</div>
+              )}
               <HelpLabel
                 label={t('translation.promptLabel')}
                 ariaLabel={t('translation.help.promptAria')}

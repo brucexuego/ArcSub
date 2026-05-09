@@ -186,7 +186,7 @@ export default function Sidebar({ activeTab, setActiveTab, canOpenPlayer, naviga
             typeof accelerator.taskManagerIndex === 'number' && Number.isFinite(accelerator.taskManagerIndex)
               ? accelerator.taskManagerIndex
               : index;
-          const title = `GPU ${displayIndex}`;
+          const title = accelerator.openvinoDevice || `GPU ${displayIndex}`;
 
           return (
             <div key={accelerator.id || `gpu-${index}`}>

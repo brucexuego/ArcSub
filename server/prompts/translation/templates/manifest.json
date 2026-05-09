@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "subtitle_structure_replacement",
+      "labelKey": "translation.promptTemplateStructureReplacement",
+      "fallbackLabel": "Structure-Locked Concise Replacement",
+      "order": 10,
+      "enabled": true
+    },
+    {
+      "id": "subtitle_srt_dubbing_adapter",
+      "labelKey": "translation.promptTemplateSrtDubbingAdapter",
+      "fallbackLabel": "Dubbing Subtitle Rewrite - Context Repair",
+      "order": 20,
+      "enabled": true
+    }
+  ]
+}

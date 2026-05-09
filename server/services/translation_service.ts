@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { SettingsManager } from './settings_manager.js';
 import { LocalModelService } from './local_model_service.js';
+import { PromptTemplateService } from './prompt_template_service.js';
 import {
   buildTranslationGlossaryLocaleChain,
   buildTargetLanguageDescriptor as buildResolvedTargetLanguageDescriptor,
@@ -77,12 +78,13 @@ type TranslateProvider = CloudTranslateProvider | 'openvino-local';
 
 type PromptTemplateId =
   | ''
-  | 'subtitle_general'
-  | 'subtitle_strict_alignment'
-  | 'subtitle_concise_spoken'
-  | 'subtitle_formal_precise'
-  | 'subtitle_asr_recovery'
-  | 'subtitle_technical_terms';
+  | 'subtitle_structure_replacement'
+  | 'subtitle_srt_dubbing_adapter';
+
+const PROMPT_TEMPLATE_GLOSSARY_LAYERS: Record<Exclude<PromptTemplateId, ''>, string[]> = {
+  subtitle_structure_replacement: ['subtitle_structure_replacement'],
+  subtitle_srt_dubbing_adapter: ['subtitle_srt_dubbing_adapter'],
+};
 
 type TranslateProgressFn = (message: string) => void;
 
@@ -523,6 +525,38 @@ export class TranslationService {
       ];
     }
     return [];
+  }
+
+  private static getLineIntegrityRules(input: { lineSafeMode?: boolean; jsonMode?: boolean; cloudContextMode?: boolean } = {}) {
+    if (input.jsonMode) {
+      return [
+        'Line-count integrity: return exactly one translated item for every input item.',
+        'Never merge, split, reorder, add, delete, duplicate, or leave empty any item.',
+        'If one sentence is fragmented across multiple items, translate the thought across the same item boundaries.',
+        'Keep every id unchanged.',
+      ];
+    }
+
+    if (input.cloudContextMode) {
+      return [
+        'Line-count integrity: output exactly one translated TARGET line for every input TARGET line.',
+        'Never merge two TARGET lines into one output line, even if they form one sentence.',
+        'Never create, delete, duplicate, leave empty, or reorder TARGET lines.',
+        'If one sentence is fragmented across multiple TARGET lines, split the translation across the same TARGET lines.',
+        'Keep every TARGET line marker exactly unchanged at the start of its matching output line.',
+      ];
+    }
+
+    return [
+      'Line-count integrity: the output must contain exactly the same number of translatable lines or subtitle blocks as the input.',
+      'Never merge two input lines into one output line, even if they form one grammatical sentence.',
+      'Never create, delete, duplicate, leave empty, or reorder lines.',
+      'If one sentence is fragmented across multiple input lines, split the translation across the same line boundaries.',
+      ...(input.lineSafeMode
+        ? ['Keep every [[Lxxxxx]] marker exactly unchanged at the start of its matching output line.']
+        : []),
+      'Keep timestamps, indexes, tags, structured prefixes, and metadata unchanged when they appear in the input.',
+    ];
   }
 
   private static analyzeSourceTextProfile(text: string): SourceTextProfile {
@@ -1234,16 +1268,33 @@ export class TranslationService {
 
   private static normalizePromptTemplateId(promptTemplateId?: string): PromptTemplateId {
     if (
-      promptTemplateId === 'subtitle_general' ||
-      promptTemplateId === 'subtitle_strict_alignment' ||
-      promptTemplateId === 'subtitle_concise_spoken' ||
-      promptTemplateId === 'subtitle_formal_precise' ||
-      promptTemplateId === 'subtitle_asr_recovery' ||
-      promptTemplateId === 'subtitle_technical_terms'
+      promptTemplateId === 'subtitle_structure_replacement' ||
+      promptTemplateId === 'subtitle_srt_dubbing_adapter'
     ) {
       return promptTemplateId;
     }
     return '';
+  }
+
+  private static async resolveEffectivePrompt(input: {
+    targetLang: string;
+    sourceLang?: string;
+    prompt?: string;
+    promptTemplateId?: string;
+  }) {
+    const customPrompt = String(input.prompt || '').trim();
+    const template = await PromptTemplateService.resolveTemplate({
+      templateId: input.promptTemplateId,
+      targetLang: input.targetLang,
+      sourceLang: input.sourceLang,
+    });
+    const templatePrompt = String(template?.content || '').trim();
+    return [
+      templatePrompt,
+      customPrompt ? `Additional user instructions:\n${customPrompt}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   private static resolveTranslationQualityModeForRequest(input: {
@@ -1306,12 +1357,14 @@ export class TranslationService {
     const baseEntryGroups = localeChain.map((localeKey) =>
       this.parseGlossaryFileEntries(path.join(glossaryRoot, localeKey, 'base.txt'))
     );
-    const templateEntryGroups =
-      normalizedTemplateId
-        ? localeChain.map((localeKey) =>
-            this.parseGlossaryFileEntries(path.join(glossaryRoot, localeKey, `${normalizedTemplateId}.txt`))
-          )
-        : [];
+    const templateGlossaryIds = normalizedTemplateId
+      ? PROMPT_TEMPLATE_GLOSSARY_LAYERS[normalizedTemplateId]
+      : [];
+    const templateEntryGroups = templateGlossaryIds.flatMap((templateGlossaryId) =>
+      localeChain.map((localeKey) =>
+        this.parseGlossaryFileEntries(path.join(glossaryRoot, localeKey, `${templateGlossaryId}.txt`))
+      )
+    );
     const merged = this.mergeGlossaryEntries([...baseEntryGroups, ...templateEntryGroups]);
     this.builtInGlossaryCache.set(cacheKey, merged);
     return merged;
@@ -1364,6 +1417,7 @@ export class TranslationService {
         ...localized.baseRules,
         ...(sourceLanguageDescriptor ? [`Source language: ${sourceLanguageDescriptor}.`] : []),
         ...this.getTargetLanguageHardeningLines(targetLang, lineSafeMode, false),
+        ...this.getLineIntegrityRules({ lineSafeMode }),
         ...(lineSafeMode ? localized.lineSafeRules : []),
         localized.baseReturn,
         effectiveGlossary ? `${localized.glossaryLabel} ${effectiveGlossary}` : '',
@@ -1374,9 +1428,6 @@ export class TranslationService {
 
     const lineSafeHints = lineSafeMode
       ? [
-          'Each input line starts with a marker like [[L00001]].',
-          'Keep every marker exactly unchanged and keep one output line per input line.',
-          'Do not merge, split, reorder, add, or remove lines/markers.',
           'Context tokens like <<SPEAKER:Speaker 1>> are metadata only. Use them for context but never output them.',
         ]
       : [];
@@ -1386,8 +1437,7 @@ export class TranslationService {
       ...(sourceLanguageDescriptor ? [`The source language is ${sourceLanguageDescriptor}.`] : []),
       ...this.getTargetLanguageInstructionLines(targetLang),
       ...this.getTargetLanguageHardeningLines(targetLang, lineSafeMode, false),
-      'Keep each input line aligned with the output line.',
-      'Keep timestamps and structured prefixes untouched.',
+      ...this.getLineIntegrityRules({ lineSafeMode }),
       ...lineSafeHints,
       'Return only translated text.',
       effectiveGlossary ? `Glossary: ${effectiveGlossary}` : '',
@@ -1460,6 +1510,7 @@ export class TranslationService {
         localized.cloudContextIntro,
         ...(sourceLanguageDescriptor ? [`Source language: ${sourceLanguageDescriptor}.`] : []),
         ...localized.cloudContextRules.map(normalizeTargetMarker),
+        ...this.getLineIntegrityRules({ cloudContextMode: true }),
         effectiveGlossary ? `${localized.glossaryLabel} ${effectiveGlossary}` : '',
         ...(customPrompt
           ? [
@@ -1481,6 +1532,7 @@ export class TranslationService {
       '- [CONTEXT] lines are reference only and must never be translated or echoed.',
       'Return only translated TARGET lines in the exact same order.',
       'Each output line must start with the same [[L00001]] marker followed by the translated text.',
+      ...this.getLineIntegrityRules({ cloudContextMode: true }),
       'Do not output [CONTEXT] lines.',
       'Do not add commentary, notes, markdown, or analysis.',
       'Keep speaker metadata tokens such as <<SPEAKER:...>> out of the output.',
@@ -1505,6 +1557,7 @@ export class TranslationService {
         localized.jsonIntro,
         ...localized.jsonRules,
         ...this.getTargetLanguageHardeningLines(targetLang, false, true),
+        ...this.getLineIntegrityRules({ jsonMode: true }),
         localized.jsonReturn,
         localized.jsonNoExtras,
         effectiveGlossary ? `${localized.glossaryLabel} ${effectiveGlossary}` : '',
@@ -1519,7 +1572,7 @@ export class TranslationService {
       'Input is JSON with field "lines", each item has "id", "text", and optional "speaker".',
       'Translate only each item.text, keep item.id unchanged.',
       'Use optional speaker metadata only as context. Do not output speaker metadata inside item.text.',
-      'Do not merge, split, reorder, add, or remove items.',
+      ...this.getLineIntegrityRules({ jsonMode: true }),
       'Return JSON only: {"lines":[{"id":"L00001","text":"..."}]}',
       'No markdown fences, no commentary, no extra keys.',
       effectiveGlossary ? `Glossary: ${effectiveGlossary}` : '',
@@ -1595,6 +1648,7 @@ export class TranslationService {
     const instructions = [
       `Translate the following text into ${descriptor}.`,
       input.lineSafeMode ? 'Preserve the original line breaks and return the same number of lines.' : 'Return only the translation.',
+      ...this.getLineIntegrityRules({ lineSafeMode: input.lineSafeMode }),
       'Do not explain the result.',
     ];
     if (String(input.glossary || '').trim()) {
@@ -1615,6 +1669,7 @@ export class TranslationService {
     const instructions = [
       `Translate every text field in the JSON payload into ${descriptor}.`,
       'Keep every id unchanged.',
+      ...this.getLineIntegrityRules({ jsonMode: true }),
       'Return valid JSON only.',
       'Use either {"lines":[{"id":"L00001","text":"..."}]} or a plain array of {"id","text"} objects.',
     ];
@@ -4185,6 +4240,12 @@ export class TranslationService {
     if (!text || !text.trim()) throw new Error('Source text is required');
 
     onProgress?.('Loading translation model configuration...');
+    const effectivePrompt = await this.resolveEffectivePrompt({
+      targetLang,
+      sourceLang: input.sourceLang,
+      prompt,
+      promptTemplateId,
+    });
 
     const settings = await SettingsManager.getSettings({ mask: false });
     const localModel = await LocalModelService.resolveLocalModelForRequest('translate', modelId, settings);
@@ -4195,7 +4256,7 @@ export class TranslationService {
           targetLang,
           sourceLang: input.sourceLang,
           glossary,
-          prompt,
+          prompt: effectivePrompt,
           promptTemplateId,
           enableJsonLineRepair: input.enableJsonLineRepair !== false,
           signal: input.signal,
@@ -4223,7 +4284,7 @@ export class TranslationService {
         targetLang,
         sourceLang: input.sourceLang,
         glossary,
-        prompt,
+        prompt: effectivePrompt,
         promptTemplateId,
         enableJsonLineRepair: input.enableJsonLineRepair === true,
         signal: input.signal,

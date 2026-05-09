@@ -30,6 +30,7 @@ const requiredDirectories = [
   'docs',
   'tools_src',
   'server/glossaries',
+  'server/prompts',
 ];
 
 async function assertFile(relativePath) {

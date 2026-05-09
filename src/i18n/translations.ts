@@ -1,74 +1,4 @@
 export type Language = 'zh-tw' | 'zh-cn' | 'en' | 'jp' | 'de';
-export type TranslationPromptTemplateId =
-  | ''
-  | 'subtitle_general'
-  | 'subtitle_strict_alignment'
-  | 'subtitle_concise_spoken'
-  | 'subtitle_formal_precise'
-  | 'subtitle_asr_recovery'
-  | 'subtitle_technical_terms';
-
-export function getCustomTargetTranslationPromptTemplateText(
-  templateId: TranslationPromptTemplateId,
-  customTargetLanguage: string
-): string {
-  const target = String(customTargetLanguage || '').trim();
-  if (!templateId || !target) return '';
-
-  const templates: Record<Exclude<TranslationPromptTemplateId, ''>, string[]> = {
-    subtitle_general: [
-      `Translate the subtitles into ${target}.`,
-      'Prefer natural, fluent phrasing suitable for subtitle reading.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'If markers like [[L00001]] are present, keep them unchanged and preserve one output line per input line.',
-      'Do not output commentary, alternatives, analysis, or <think> tags.',
-      'Keep proper nouns and brand names untranslated when appropriate.',
-      'Return final plain text only.',
-    ],
-    subtitle_strict_alignment: [
-      `Translate into ${target} with strict subtitle alignment.`,
-      'Preserve all timestamps, tags, and line markers exactly.',
-      'Keep one output line per input line in the exact same order.',
-      'Do not add commentary, alternatives, or explanations.',
-      'If uncertain, output the most likely translation directly.',
-      'Return plain text only.',
-    ],
-    subtitle_concise_spoken: [
-      `Translate the subtitles into ${target}.`,
-      'Prefer concise, spoken, subtitle-friendly phrasing.',
-      'Shorten wording when possible without losing meaning.',
-      'Avoid stiff or overly literal wording.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'Return final plain text only.',
-    ],
-    subtitle_formal_precise: [
-      `Translate the subtitles into ${target}.`,
-      'Prefer clear, formal, and precise wording.',
-      'Keep nuance and meaning accurate even when the phrasing becomes more neutral or less colloquial.',
-      'Avoid slang unless the source clearly requires it.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'Return final plain text only.',
-    ],
-    subtitle_asr_recovery: [
-      `Translate the subtitles into ${target}.`,
-      'First internally correct likely ASR errors such as misheard words, homophones, and broken sentence boundaries.',
-      'Do not expose your correction process or analysis.',
-      'Keep structure tokens unchanged (timestamps, prefixes, [[Lxxxxx]]).',
-      'If the source is incomplete or colloquial, infer the most likely meaning before translating.',
-      'Return plain text only.',
-    ],
-    subtitle_technical_terms: [
-      `Translate the subtitles into ${target}.`,
-      'This is technical, product, or engineering content. Prioritize terminology consistency.',
-      'Product names, model names, API names, programming languages, framework names, and brands may stay in the original language when appropriate.',
-      'Do not sacrifice technical precision for casual phrasing.',
-      'Keep timestamps, prefixes, and structure markers such as [[Lxxxxx]] unchanged.',
-      'Return plain text only.',
-    ],
-  };
-
-  return templates[templateId].join('\n');
-}
 
 const baseTranslations = {
   'zh-tw': {
@@ -340,12 +270,8 @@ const baseTranslations = {
     'translation.promptTemplateTranslateGemmaOfficial': 'TranslateGemma 官方範本',
     'translation.translateGemmaPromptDisabledPlaceholder': 'TranslateGemma 主翻譯不套用自訂提示詞。',
     'translation.translateGemmaGlossaryDisabledPlaceholder': 'TranslateGemma 官方範本不套用 ArcSub Glossary。',
-    'translation.promptTemplateGeneral': '字幕翻譯 - 一般模式',
-    'translation.promptTemplateConciseSpoken': '字幕翻譯 - 口語精簡',
-    'translation.promptTemplateFormalPrecise': '字幕翻譯 - 正式精確',
-    'translation.promptTemplateStrictAlignment': '字幕翻譯 - 嚴格對齊',
-    'translation.promptTemplateAsrRecovery': '字幕翻譯 - ASR 校正優先',
-    'translation.promptTemplateTechnicalTerms': '字幕翻譯 - 技術術語優先',
+    'translation.promptTemplateStructureReplacement': '字幕結構鎖定 - 精簡替換',
+    'translation.promptTemplateSrtDubbingAdapter': '配音字幕改寫 - 上下文修復',
     'translation.strictJsonRepairToggle': '\u81ea\u52d5\u4fee\u6b63\u5b57\u5e55\u5c0d\u9f4a',
     'translation.strictJsonRepairHint': '\u81ea\u52d5\u88dc\u4e0a\u884c\u6578\u5c0d\u9f4a\uff0c\u6e1b\u5c11\u5b57\u5e55\u5c0d\u4e0d\u4e0a\u6216\u884c\u6578\u8dd1\u6389\u3002',
     'translation.glossaryPlaceholder': '提供術語表 (Glossary) 來確保專有名詞翻譯一致性...',
@@ -848,12 +774,8 @@ const baseTranslations = {
     'translation.promptTemplateTranslateGemmaOfficial': 'TranslateGemma official template',
     'translation.translateGemmaPromptDisabledPlaceholder': 'TranslateGemma primary translation does not apply custom prompts.',
     'translation.translateGemmaGlossaryDisabledPlaceholder': 'TranslateGemma official template does not apply ArcSub Glossary.',
-    'translation.promptTemplateGeneral': 'Subtitle - General',
-    'translation.promptTemplateConciseSpoken': 'Subtitle - Concise Spoken',
-    'translation.promptTemplateFormalPrecise': 'Subtitle - Formal Precise',
-    'translation.promptTemplateStrictAlignment': 'Subtitle - Strict Alignment',
-    'translation.promptTemplateAsrRecovery': 'Subtitle - ASR Recovery',
-    'translation.promptTemplateTechnicalTerms': 'Subtitle - Technical Terms',
+    'translation.promptTemplateStructureReplacement': 'Subtitle Structure-Locked Replacement',
+    'translation.promptTemplateSrtDubbingAdapter': 'Dubbing Subtitle Rewrite - Context Repair',
     'translation.strictJsonRepairToggle': 'Auto-fix subtitle alignment',
     'translation.strictJsonRepairHint': 'Helps keep subtitle lines aligned when the model merges or drops rows.',
     'translation.glossaryPlaceholder': 'Provide a glossary to ensure consistent translation of specific terms...',
@@ -1342,12 +1264,8 @@ const baseTranslations = {
     'translation.promptTemplateTranslateGemmaOfficial': 'TranslateGemma 公式テンプレート',
     'translation.translateGemmaPromptDisabledPlaceholder': 'TranslateGemma の主翻訳ではカスタムプロンプトを適用しません。',
     'translation.translateGemmaGlossaryDisabledPlaceholder': 'TranslateGemma 公式テンプレートでは ArcSub Glossary を適用しません。',
-    'translation.promptTemplateGeneral': '字幕翻訳 - 一般モード',
-    'translation.promptTemplateConciseSpoken': '字幕翻訳 - 口語で簡潔',
-    'translation.promptTemplateFormalPrecise': '字幕翻訳 - 正式で正確',
-    'translation.promptTemplateStrictAlignment': '字幕翻訳 - 厳密整列',
-    'translation.promptTemplateAsrRecovery': '字幕翻訳 - ASR補正優先',
-    'translation.promptTemplateTechnicalTerms': '字幕翻訳 - 技術用語優先',
+    'translation.promptTemplateStructureReplacement': '字幕構造固定 - 簡潔置換',
+    'translation.promptTemplateSrtDubbingAdapter': '吹き替え字幕リライト - 文脈修復',
     'translation.strictJsonRepairToggle': '\u5b57\u5e55\u306e\u884c\u305a\u308c\u3092\u81ea\u52d5\u88dc\u6b63',
     'translation.strictJsonRepairHint': '\u884c\u6570\u306e\u305a\u308c\u3084\u5b57\u5e55\u306e\u53d6\u308a\u3053\u307c\u3057\u3092\u6e1b\u3089\u3057\u3001\u539f\u6587\u3068\u306e\u5bfe\u5fdc\u3092\u4fdd\u3061\u307e\u3059\u3002',
     'translation.glossaryPlaceholder': '専門用語の翻訳の一貫性を確保するために用語集を提供してください...',
@@ -1790,12 +1708,8 @@ const zhCnTranslations: Record<string, string> = {
   'translation.promptTemplateTranslateGemmaOfficial': 'TranslateGemma 官方范本',
   'translation.translateGemmaPromptDisabledPlaceholder': 'TranslateGemma 主翻译不套用自订提示词。',
   'translation.translateGemmaGlossaryDisabledPlaceholder': 'TranslateGemma 官方范本不套用 ArcSub Glossary。',
-  'translation.promptTemplateGeneral': '字幕翻译 - 一般模式',
-  'translation.promptTemplateConciseSpoken': '字幕翻译 - 口语精简',
-  'translation.promptTemplateFormalPrecise': '字幕翻译 - 正式精确',
-  'translation.promptTemplateStrictAlignment': '字幕翻译 - 严格对齐',
-  'translation.promptTemplateAsrRecovery': '字幕翻译 - ASR 校正优先',
-  'translation.promptTemplateTechnicalTerms': '字幕翻译 - 技术术语优先',
+  'translation.promptTemplateStructureReplacement': '字幕结构锁定 - 精简替换',
+  'translation.promptTemplateSrtDubbingAdapter': '配音字幕改写 - 上下文修复',
   'translation.strictJsonRepairToggle': '\u81ea\u52a8\u4fee\u6b63\u5b57\u5e55\u5bf9\u9f50',
   'translation.strictJsonRepairHint': '\u81ea\u52a8\u8865\u4e0a\u884c\u6570\u5bf9\u9f50\uff0c\u51cf\u5c11\u5b57\u5e55\u5bf9\u4e0d\u4e0a\u6216\u884c\u6570\u8dd1\u6389\u3002',
   'translation.glossaryPlaceholder': '提供术语表 (Glossary) 来确保专有名词翻译一致性...',
@@ -2235,12 +2149,8 @@ const deTranslations: Record<string, string> = {
   'translation.promptTemplateTranslateGemmaOfficial': 'Offizielle TranslateGemma-Vorlage',
   'translation.translateGemmaPromptDisabledPlaceholder': 'TranslateGemma verwendet bei der Hauptübersetzung keine benutzerdefinierten Prompts.',
   'translation.translateGemmaGlossaryDisabledPlaceholder': 'Die offizielle TranslateGemma-Vorlage verwendet kein ArcSub Glossary.',
-  'translation.promptTemplateGeneral': 'Untertitel – Allgemein',
-  'translation.promptTemplateConciseSpoken': 'Untertitel – Knapp und gesprochen',
-  'translation.promptTemplateFormalPrecise': 'Untertitel – Formal und praezise',
-  'translation.promptTemplateStrictAlignment': 'Untertitel – Strikte Ausrichtung',
-  'translation.promptTemplateAsrRecovery': 'Untertitel – ASR-Korrektur',
-  'translation.promptTemplateTechnicalTerms': 'Untertitel – Technische Begriffe',
+  'translation.promptTemplateStructureReplacement': 'Untertitelstruktur - knappe Ersetzung',
+  'translation.promptTemplateSrtDubbingAdapter': 'Synchron-Untertitel - Kontextkorrektur',
   'translation.strictJsonRepairToggle': 'Untertitelausrichtung automatisch korrigieren',
   'translation.strictJsonRepairHint': 'Haelt Untertitelzeilen besser ausgerichtet, wenn das Modell Zeilen zusammenfasst oder auslaesst.',
   'translation.glossaryPlaceholder': 'Stellen Sie ein Glossar bereit, um eine konsistente Übersetzung bestimmter Begriffe sicherzustellen ...',
@@ -2956,7 +2866,7 @@ const translationHelpOverrides: Record<Language, Record<string, string>> = {
     'translation.help.alignmentRepairAria': '顯示自動修正字幕對齊說明',
     'translation.help.alignmentRepairBody': '這不是提示詞的子功能，而是翻譯執行模式。啟用時會進入更嚴格的 line-map / JSON 修復路徑，嘗試維持一行來源對一行譯文，並在模型合併、漏行或順序錯亂時修復。雲端模型通常會使用嚴格結構提示與修復重試；多數本機聊天模型會切到 json_strict profile、縮小批次並增加修復成本。關閉後若沒有範本或自訂提示詞，流程會更接近 plain probe，速度較快但對齊保障較少。',
     'translation.help.promptTemplateAria': '顯示提示詞範本說明',
-    'translation.help.promptTemplateBody': '範本會預先填入一組字幕翻譯策略，例如一般字幕、口語精簡、正式精確、ASR 校正或技術術語優先。只要選了範本，即使關閉字幕對齊修正，也會進入 template validated 類型的品質流程；雲端會把範本送入 provider prompt，本機會依模型 profile 調整 prompt style、批次與 retry。選「不使用範本」且沒有自訂提示詞時，執行較接近原始翻譯觀察模式。',
+    'translation.help.promptTemplateBody': '範本目前收斂成兩種：字幕結構鎖定精簡替換，以及配音字幕改寫與上下文修復。只要選了範本，即使關閉字幕對齊修正，也會進入 template validated 類型的品質流程；雲端會把範本送入 provider prompt，本機會依模型 profile 調整 prompt style、批次與 retry。選「不使用範本」且沒有自訂提示詞時，執行較接近原始翻譯觀察模式。',
     'translation.help.promptAria': '顯示自訂提示詞說明',
     'translation.help.promptBody': '自訂提示詞用來補充本次翻譯的語氣、地區用字、保留原文規則或特殊上下文。它會和範本、目標語言一起送進雲端或本機模型；內容越長，越可能增加本機模型 token 壓力與批次拆分。TranslateGemma 官方範本不套用這個欄位。',
     'translation.help.glossaryAria': '顯示術語表說明',
@@ -2979,7 +2889,7 @@ const translationHelpOverrides: Record<Language, Record<string, string>> = {
     'translation.help.alignmentRepairAria': '显示自动修正字幕对齐说明',
     'translation.help.alignmentRepairBody': '这不是提示词的子功能，而是翻译执行模式。启用时会进入更严格的 line-map / JSON 修复路径，尝试维持一行来源对应一行译文，并在模型合并、漏行或顺序错乱时修复。云端模型通常会使用严格结构提示与修复重试；多数本地聊天模型会切到 json_strict profile、缩小批次并增加修复成本。关闭后若没有范本或自定义提示词，流程会更接近 plain probe，速度较快但对齐保障较少。',
     'translation.help.promptTemplateAria': '显示提示词范本说明',
-    'translation.help.promptTemplateBody': '范本会预先填入一组字幕翻译策略，例如一般字幕、口语精简、正式精确、ASR 校正或技术术语优先。只要选了范本，即使关闭字幕对齐修正，也会进入 template validated 类型的质量流程；云端会把范本送入 provider prompt，本地会依模型 profile 调整 prompt style、批次与 retry。选“不使用范本”且没有自定义提示词时，执行较接近原始翻译观察模式。',
+    'translation.help.promptTemplateBody': '范本目前收敛成两种：字幕结构锁定精简替换，以及配音字幕改写与上下文修复。只要选了范本，即使关闭字幕对齐修正，也会进入 template validated 类型的质量流程；云端会把范本送入 provider prompt，本地会依模型 profile 调整 prompt style、批次与 retry。选“不使用范本”且没有自定义提示词时，执行较接近原始翻译观察模式。',
     'translation.help.promptAria': '显示自定义提示词说明',
     'translation.help.promptBody': '自定义提示词用来补充本次翻译的语气、地区用字、保留原文规则或特殊上下文。它会和范本、目标语言一起送进云端或本地模型；内容越长，越可能增加本地模型 token 压力与批次拆分。TranslateGemma 官方范本不套用这个字段。',
     'translation.help.glossaryAria': '显示术语表说明',
@@ -3002,7 +2912,7 @@ const translationHelpOverrides: Record<Language, Record<string, string>> = {
     'translation.help.alignmentRepairAria': 'Show subtitle alignment repair help',
     'translation.help.alignmentRepairBody': 'This is not a sub-option of prompting; it changes the execution mode. When enabled, translation uses a stricter line-map / JSON repair path to keep one source row aligned with one translated row and repair merged, missing, or reordered output. Cloud models usually receive stricter structured prompts and repair retries. Most local chat models switch to a json_strict profile with smaller batches and higher repair cost. When disabled with no template or custom prompt, the run is closer to plain probe: faster, but with less alignment protection.',
     'translation.help.promptTemplateAria': 'Show prompt template help',
-    'translation.help.promptTemplateBody': 'Templates prefill a subtitle translation strategy such as general subtitles, concise spoken style, formal precision, ASR recovery, or technical terminology. Selecting a template moves the run into template validated quality behavior even if alignment repair is off. Cloud models receive the template as provider prompt content; local models use it to adjust prompt style, batching, and retry behavior. No Template with no custom prompt is closest to raw translation observation.',
+    'translation.help.promptTemplateBody': 'Templates are now reduced to two clear modes: structure-locked concise subtitle replacement and dubbing subtitle rewrite with context repair. Selecting a template moves the run into template validated quality behavior even if alignment repair is off. Cloud models receive the template as provider prompt content; local models use it to adjust prompt style, batching, and retry behavior. No Template with no custom prompt is closest to raw translation observation.',
     'translation.help.promptAria': 'Show custom prompt help',
     'translation.help.promptBody': 'Use the custom prompt for extra tone, regional wording, source-preservation rules, or context for this run. It is sent with the template and target language to cloud or local models. Longer prompts can increase token pressure and batch splitting on local models. TranslateGemma official templates do not apply this field.',
     'translation.help.glossaryAria': 'Show glossary help',
@@ -3025,7 +2935,7 @@ const translationHelpOverrides: Record<Language, Record<string, string>> = {
     'translation.help.alignmentRepairAria': '字幕整列修復の説明を表示',
     'translation.help.alignmentRepairBody': 'これはプロンプトの下位機能ではなく、翻訳の実行モードです。有効にすると、line-map / JSON 修復を使う厳格な経路になり、1つの入力行に1つの翻訳行を対応させ、結合、欠落、順序ずれを修復します。クラウドモデルではより厳格な構造化プロンプトと修復リトライを使います。多くのローカルチャットモデルでは json_strict profile に切り替わり、バッチが小さくなり修復コストが増えます。無効かつテンプレート/カスタムプロンプトなしの場合は plain probe に近く、速い一方で整列保証は弱くなります。',
     'translation.help.promptTemplateAria': 'プロンプトテンプレートの説明を表示',
-    'translation.help.promptTemplateBody': 'テンプレートは、一般字幕、口語で簡潔、正式で正確、ASR 補正、技術用語優先などの翻訳方針を事前に入れます。テンプレートを選ぶと、整列修復をオフにしていても template validated 系の品質処理になります。クラウドモデルには provider prompt として渡され、ローカルモデルでは prompt style、バッチ、retry の調整に使われます。テンプレートなし、かつカスタムプロンプトなしの場合は、素の翻訳観察に最も近くなります。',
+    'translation.help.promptTemplateBody': 'テンプレートは、字幕構造固定の簡潔置換と、文脈修復を重視した吹き替え字幕リライトの2種類に整理されています。テンプレートを選ぶと、整列修復をオフにしていても template validated 系の品質処理になります。クラウドモデルには provider prompt として渡され、ローカルモデルでは prompt style、バッチ、retry の調整に使われます。テンプレートなし、かつカスタムプロンプトなしの場合は、素の翻訳観察に最も近くなります。',
     'translation.help.promptAria': 'カスタムプロンプトの説明を表示',
     'translation.help.promptBody': 'カスタムプロンプトは、今回の翻訳にだけ必要な文体、地域表現、原文保持ルール、特殊な文脈を補足するために使います。テンプレートと目標言語と一緒にクラウドまたはローカルモデルへ渡されます。長すぎる指示はローカルモデルの token 圧力やバッチ分割を増やすことがあります。TranslateGemma 公式テンプレートではこの欄は使われません。',
     'translation.help.glossaryAria': '用語集の説明を表示',
@@ -3048,7 +2958,7 @@ const translationHelpOverrides: Record<Language, Record<string, string>> = {
     'translation.help.alignmentRepairAria': 'Hilfe zur Untertitel-Ausrichtungsreparatur anzeigen',
     'translation.help.alignmentRepairBody': 'Dies ist keine Unteroption des Prompts, sondern ein Ausfuehrungsmodus. Wenn aktiviert, nutzt die Uebersetzung einen strengeren line-map / JSON-Reparaturpfad, um eine Quellzeile einer Zielzeile zuzuordnen und zusammengelegte, fehlende oder vertauschte Ausgabe zu reparieren. Cloud-Modelle erhalten meist strengere strukturierte Prompts und Reparatur-Retries. Die meisten lokalen Chatmodelle wechseln in ein json_strict-Profil mit kleineren Batches und hoeherem Reparaturaufwand. Ausgeschaltet und ohne Vorlage oder eigenen Prompt ist der Lauf naeher an plain probe: schneller, aber mit weniger Ausrichtungsschutz.',
     'translation.help.promptTemplateAria': 'Hilfe zur Prompt-Vorlage anzeigen',
-    'translation.help.promptTemplateBody': 'Vorlagen fuellen eine Untertitelstrategie vor, etwa allgemein, knapp gesprochen, formal praezise, ASR-Korrektur oder technische Begriffe. Sobald eine Vorlage gewaehlt ist, nutzt der Lauf template validated Qualitaetsverhalten, auch wenn die Ausrichtungsreparatur aus ist. Cloud-Modelle erhalten die Vorlage als Provider-Prompt; lokale Modelle nutzen sie fuer Promptstil, Batching und Retry-Verhalten. Keine Vorlage ohne eigenen Prompt ist am naechsten an roher Uebersetzungsbeobachtung.',
+    'translation.help.promptTemplateBody': 'Vorlagen sind jetzt auf zwei klare Modi reduziert: strukturtreue knappe Untertitel-Ersetzung und Synchron-Untertitel mit Kontextkorrektur. Sobald eine Vorlage gewaehlt ist, nutzt der Lauf template validated Qualitaetsverhalten, auch wenn die Ausrichtungsreparatur aus ist. Cloud-Modelle erhalten die Vorlage als Provider-Prompt; lokale Modelle nutzen sie fuer Promptstil, Batching und Retry-Verhalten. Keine Vorlage ohne eigenen Prompt ist am naechsten an roher Uebersetzungsbeobachtung.',
     'translation.help.promptAria': 'Hilfe zum benutzerdefinierten Prompt anzeigen',
     'translation.help.promptBody': 'Der benutzerdefinierte Prompt ergaenzt Ton, regionale Wortwahl, Regeln zum Beibehalten des Originals oder Kontext fuer diesen Lauf. Er wird mit Vorlage und Zielsprache an Cloud- oder lokale Modelle gesendet. Laengere Prompts koennen bei lokalen Modellen Token-Druck und Batch-Splitting erhoehen. Offizielle TranslateGemma-Vorlagen verwenden dieses Feld nicht.',
     'translation.help.glossaryAria': 'Hilfe zum Glossar anzeigen',
@@ -3078,7 +2988,7 @@ const translationPlainHelpOverrides: Record<Language, Record<string, string>> = 
     'translation.help.alignmentRepairAria': '顯示自動修正字幕對齊說明',
     'translation.help.alignmentRepairBody': '這是獨立的翻譯模式，不是提示詞的附屬選項。啟用後，系統會盡量讓每一行原文對應到每一行譯文，並在模型把兩行合成一行、漏掉某一行或順序跑掉時嘗試修正。雲端模型通常會用更明確的格式要求和重試來完成；本機模型可能會分成更小批次處理，所以會比較慢，但比較能保護字幕時間軸。關閉後速度通常較快，但字幕行數與位置比較需要人工檢查。',
     'translation.help.promptTemplateAria': '顯示提示詞範本說明',
-    'translation.help.promptTemplateBody': '範本是一組預先準備好的翻譯要求，例如一般字幕、口語精簡、正式精確、修正語音辨識錯字或技術詞優先。選擇範本後，系統會依照範本調整翻譯方式；雲端模型通常會直接照範本執行，本機模型可能會因為範本內容而分批處理或多做檢查。若不使用範本，也不輸入提示詞，翻譯會比較接近單純直譯。',
+    'translation.help.promptTemplateBody': '範本目前只有兩種：一種嚴格保留原結構並做精簡替換，另一種專門做配音字幕改寫與上下文修復。選擇範本後，系統會依照範本調整翻譯方式；雲端模型通常會直接照範本執行，本機模型可能會因為範本內容而分批處理或多做檢查。若不使用範本，也不輸入提示詞，翻譯會比較接近單純直譯。',
     'translation.help.promptAria': '顯示自訂提示詞說明',
     'translation.help.promptBody': '自訂提示詞用來補充本次翻譯需要注意的細節，例如語氣、地區用字、哪些詞不要翻譯、角色或情境背景。它會和目標語言、範本一起交給雲端或本機模型。內容越長，本機模型可能需要更多時間。特殊翻譯專屬模型可能不會使用這個欄位。',
     'translation.help.glossaryAria': '顯示術語表說明',
@@ -3101,7 +3011,7 @@ const translationPlainHelpOverrides: Record<Language, Record<string, string>> = 
     'translation.help.alignmentRepairAria': '显示自动修正字幕对齐说明',
     'translation.help.alignmentRepairBody': '这是独立的翻译模式，不是提示词的附属选项。启用后，系统会尽量让每一行原文对应到每一行译文，并在模型把两行合成一行、漏掉某一行或顺序跑掉时尝试修正。云端模型通常会用更明确的格式要求和重试来完成；本地模型可能会分成更小批次处理，所以会比较慢，但比较能保护字幕时间轴。关闭后速度通常较快，但字幕行数与位置比较需要人工检查。',
     'translation.help.promptTemplateAria': '显示提示词范本说明',
-    'translation.help.promptTemplateBody': '范本是一组预先准备好的翻译要求，例如一般字幕、口语精简、正式精确、修正语音识别错字或技术词优先。选择范本后，系统会依照范本调整翻译方式；云端模型通常会直接照范本执行，本地模型可能会因为范本内容而分批处理或多做检查。若不使用范本，也不输入提示词，翻译会比较接近单纯直译。',
+    'translation.help.promptTemplateBody': '范本目前只有两种：一种严格保留原结构并做精简替换，另一种专门做配音字幕改写与上下文修复。选择范本后，系统会依照范本调整翻译方式；云端模型通常会直接照范本执行，本地模型可能会因为范本内容而分批处理或多做检查。若不使用范本，也不输入提示词，翻译会比较接近单纯直译。',
     'translation.help.promptAria': '显示自定义提示词说明',
     'translation.help.promptBody': '自定义提示词用来补充本次翻译需要注意的细节，例如语气、地区用词、哪些词不要翻译、角色或情境背景。它会和目标语言、范本一起交给云端或本地模型。内容越长，本地模型可能需要更多时间。特殊翻译专用模型可能不会使用这个栏位。',
     'translation.help.glossaryAria': '显示术语表说明',
@@ -3124,7 +3034,7 @@ const translationPlainHelpOverrides: Record<Language, Record<string, string>> = 
     'translation.help.alignmentRepairAria': 'Show subtitle alignment repair help',
     'translation.help.alignmentRepairBody': 'This is a separate translation mode, not part of the prompt. When enabled, the system tries to keep each source row matched to each translated row, and fixes cases where the model joins two rows, skips a row, or changes the order. Cloud models usually use clearer format instructions and retries. Local models may split the work into smaller parts, so it can be slower, but it better protects subtitle timing. When disabled, translation is usually faster, but row count and timing may need more manual checking.',
     'translation.help.promptTemplateAria': 'Show prompt template help',
-    'translation.help.promptTemplateBody': 'A template is a prepared set of translation instructions, such as general subtitles, concise spoken style, formal accuracy, speech-recognition cleanup, or technical terms first. After you choose a template, the system adjusts the translation behavior to follow it. Cloud models usually follow the template directly; local models may split work into batches or run more checks because of the template. With no template and no prompt, translation is closer to a simple direct translation.',
+    'translation.help.promptTemplateBody': 'There are two templates: one strictly preserves the original structure while replacing text concisely, and one specializes in dubbing subtitle rewrite with context repair. After you choose a template, the system adjusts the translation behavior to follow it. Cloud models usually follow the template directly; local models may split work into batches or run more checks because of the template. With no template and no prompt, translation is closer to a simple direct translation.',
     'translation.help.promptAria': 'Show custom prompt help',
     'translation.help.promptBody': 'Use the custom prompt for details that matter only in this run, such as tone, regional wording, words that should not be translated, character context, or scene context. It is sent together with the target language and template to the cloud or local model. Longer text can make local models take more time. Dedicated translation models may not use this field.',
     'translation.help.glossaryAria': 'Show glossary help',
@@ -3147,7 +3057,7 @@ const translationPlainHelpOverrides: Record<Language, Record<string, string>> = 
     'translation.help.alignmentRepairAria': '字幕整列修正の説明を表示',
     'translation.help.alignmentRepairBody': 'これはプロンプトの一部ではなく、別の翻訳モードです。有効にすると、原文の各行と翻訳後の各行ができるだけ同じ位置に残るように確認し、2行が1行にまとまった、1行抜けた、順番が変わった場合に修正を試みます。クラウドモデルではより明確な形式指定と再試行を使います。ローカルモデルでは作業を小さく分けることがあり、少し遅くなる代わりに字幕の時間位置を守りやすくなります。無効にすると通常は速くなりますが、行数や位置は確認が必要です。',
     'translation.help.promptTemplateAria': 'プロンプトテンプレートの説明を表示',
-    'translation.help.promptTemplateBody': 'テンプレートは、一般字幕、短く自然な口語、丁寧で正確な表現、音声認識ミスの補正、技術用語優先など、あらかじめ用意された翻訳指示です。選ぶと、システムはその内容に合わせて翻訳方法を調整します。クラウドモデルはテンプレートに沿って処理し、ローカルモデルは内容によって小分け処理や追加確認を行うことがあります。テンプレートもプロンプトも使わない場合は、より単純な翻訳に近くなります。',
+    'translation.help.promptTemplateBody': 'テンプレートは2種類です。1つは元の構造を厳密に保ったまま簡潔に置換し、もう1つは文脈修復を重視した吹き替え字幕リライトに特化します。選ぶと、システムはその内容に合わせて翻訳方法を調整します。クラウドモデルはテンプレートに沿って処理し、ローカルモデルは内容によって小分け処理や追加確認を行うことがあります。テンプレートもプロンプトも使わない場合は、より単純な翻訳に近くなります。',
     'translation.help.promptAria': 'カスタムプロンプトの説明を表示',
     'translation.help.promptBody': 'カスタムプロンプトは、今回だけ必要な注意点を補足する欄です。文体、地域表現、翻訳しない単語、人物や場面の背景などを書けます。目標言語とテンプレートと一緒に、クラウドまたはローカルモデルへ渡されます。長い内容はローカルモデルの処理時間を増やすことがあります。翻訳専用モデルではこの欄が使われない場合があります。',
     'translation.help.glossaryAria': '用語集の説明を表示',
@@ -3170,7 +3080,7 @@ const translationPlainHelpOverrides: Record<Language, Record<string, string>> = 
     'translation.help.alignmentRepairAria': 'Hilfe zur Untertitel-Ausrichtungsreparatur anzeigen',
     'translation.help.alignmentRepairBody': 'Dies ist ein eigener Uebersetzungsmodus und kein Teil des Prompts. Wenn er aktiv ist, versucht das System, jede Originalzeile einer uebersetzten Zeile zuzuordnen, und korrigiert Faelle, in denen das Modell zwei Zeilen verbindet, eine Zeile auslaesst oder die Reihenfolge aendert. Cloud-Modelle nutzen dafuer meist klarere Formatvorgaben und Wiederholungen. Lokale Modelle teilen die Arbeit eventuell in kleinere Teile auf; das kann langsamer sein, schuetzt aber die Untertitelzeiten besser. Wenn die Option aus ist, ist die Uebersetzung meist schneller, aber Zeilenzahl und Timing sollten eher geprueft werden.',
     'translation.help.promptTemplateAria': 'Hilfe zur Prompt-Vorlage anzeigen',
-    'translation.help.promptTemplateBody': 'Eine Vorlage ist ein vorbereiteter Satz von Uebersetzungshinweisen, etwa allgemeine Untertitel, knapper gesprochener Stil, formale Genauigkeit, Korrektur von Spracherkennungsfehlern oder Vorrang fuer technische Begriffe. Nach Auswahl einer Vorlage passt das System die Uebersetzung daran an. Cloud-Modelle folgen der Vorlage meist direkt; lokale Modelle teilen die Arbeit wegen der Vorlage eventuell auf oder pruefen mehr. Ohne Vorlage und ohne Prompt ist die Uebersetzung naeher an einer einfachen Direktuebersetzung.',
+    'translation.help.promptTemplateBody': 'Es gibt zwei Vorlagen: eine erhaelt die Originalstruktur streng und ersetzt Text knapp, die andere ist fuer Synchron-Untertitel mit Kontextkorrektur gedacht. Nach Auswahl einer Vorlage passt das System die Uebersetzung daran an. Cloud-Modelle folgen der Vorlage meist direkt; lokale Modelle teilen die Arbeit wegen der Vorlage eventuell auf oder pruefen mehr. Ohne Vorlage und ohne Prompt ist die Uebersetzung naeher an einer einfachen Direktuebersetzung.',
     'translation.help.promptAria': 'Hilfe zum benutzerdefinierten Prompt anzeigen',
     'translation.help.promptBody': 'Der benutzerdefinierte Prompt ist fuer Details gedacht, die nur fuer diesen Lauf wichtig sind, etwa Ton, regionale Wortwahl, Woerter, die nicht uebersetzt werden sollen, Figuren oder Szenenkontext. Er wird zusammen mit Zielsprache und Vorlage an das Cloud- oder lokale Modell gegeben. Laengerer Text kann lokale Modelle verlangsamen. Spezielle Uebersetzungsmodelle verwenden dieses Feld moeglicherweise nicht.',
     'translation.help.glossaryAria': 'Hilfe zum Glossar anzeigen',
@@ -4843,1171 +4753,94 @@ const cloudTranslationProgressOverrides: Record<Language, Record<string, string>
   Object.assign(translations[language], cloudTranslationProgressOverrides[language]);
 });
 
-type PromptTargetLanguage =
-  | 'zh-tw'
-  | 'zh-cn'
-  | 'en'
-  | 'jp'
-  | 'ko'
-  | 'fi'
-  | 'es'
-  | 'de'
-  | 'pt'
-  | 'it'
-  | 'fr';
-
-const translationPromptTemplatesByTargetLanguage: Record<
-  Exclude<TranslationPromptTemplateId, ''>,
-  Record<PromptTargetLanguage, string>
-> = {
-  subtitle_general: {
-    'zh-tw': [
-      '請將字幕翻譯成繁體中文（台灣用語）。',
-      '以自然、流暢、適合字幕閱讀的語氣翻譯。',
-      '保留時間碼、結構化前綴與行順序不變。',
-      '若有 [[L00001]] 這類行標記，必須原樣保留，且輸出行數與輸入行數一致。',
-      '不要加入註解、替代版本、分析或 <think> 標籤。',
-      '專有名詞與品牌名稱在適當情況下可保留原文。',
-      '只回傳最終純文字結果。',
-    ].join('\n'),
-    'zh-cn': [
-      '请将字幕翻译成简体中文。',
-      '以自然、流畅、适合字幕阅读的语气翻译。',
-      '保留时间码、结构化前缀与行顺序不变。',
-      '若有 [[L00001]] 这类行标记，必须原样保留，且输出行数与输入行数一致。',
-      '不要加入注释、替代版本、分析或 <think> 标签。',
-      '专有名词与品牌名称在适当情况下可保留原文。',
-      '只返回最终纯文本结果。',
-    ].join('\n'),
-    en: [
-      'Translate the subtitles into English.',
-      'Prefer natural, fluent phrasing suitable for subtitle reading.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'If markers like [[L00001]] are present, keep them unchanged and preserve one output line per input line.',
-      'Do not output commentary, alternatives, analysis, or <think> tags.',
-      'Keep proper nouns and brand names untranslated when appropriate.',
-      'Return final plain text only.',
-    ].join('\n'),
-    jp: [
-      '字幕を日本語に翻訳してください。',
-      '字幕として自然で読みやすい表現を優先してください。',
-      'タイムスタンプ、構造化プレフィックス、行順序は変更しないでください。',
-      '[[L00001]] のような行マーカーがある場合はそのまま保持し、入力1行に対して出力1行を維持してください。',
-      '注釈、代替案、分析、<think> タグは出力しないでください。',
-      '固有名詞やブランド名は必要に応じて原文のまま維持してください。',
-      '最終的なプレーンテキストのみを返してください。',
-    ].join('\n'),
-    ko: [
-      '자막을 한국어로 번역하세요.',
-      '자막으로 읽기 자연스럽고 매끄러운 표현을 우선하세요.',
-      '타임코드, 구조화된 접두사, 줄 순서는 변경하지 마세요.',
-      '[[L00001]] 같은 줄 마커가 있으면 그대로 유지하고, 입력 한 줄당 출력 한 줄을 지키세요.',
-      '주석, 대안, 분석, <think> 태그를 출력하지 마세요.',
-      '고유명사와 브랜드명은 필요한 경우 원문으로 유지하세요.',
-      '최종 일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä tekstitykset suomeksi.',
-      'Suosi luonnollista ja sujuvaa, tekstityksiin sopivaa ilmaisua.',
-      'Säilytä aikakoodit, rakenteelliset etuliitteet ja rivijärjestys muuttumattomina.',
-      'Jos mukana on merkkejä kuten [[L00001]], säilytä ne sellaisinaan ja pidä yksi tulosrivi jokaista syöteriviä kohden.',
-      'Älä lisää kommentteja, vaihtoehtoja, analyysia tai <think>-tageja.',
-      'Säilytä erisnimet ja brändinimet tarvittaessa alkuperäisessä muodossa.',
-      'Palauta vain lopullinen raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce los subtítulos al español.',
-      'Prioriza una redacción natural, fluida y adecuada para lectura en subtítulos.',
-      'Mantén intactos los códigos de tiempo, prefijos estructurados y el orden de las líneas.',
-      'Si hay marcadores como [[L00001]], consérvalos sin cambios y mantén una línea de salida por cada línea de entrada.',
-      'No añadas comentarios, alternativas, análisis ni etiquetas <think>.',
-      'Mantén nombres propios y marcas en el original cuando corresponda.',
-      'Devuelve solo el texto final plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze die Untertitel ins Deutsche.',
-      'Formuliere natürlich, flüssig und gut lesbar für Untertitel.',
-      'Zeitstempel, strukturierte Präfixe und Zeilenreihenfolge dürfen nicht verändert werden.',
-      'Wenn Zeilenmarker wie [[L00001]] vorhanden sind, müssen sie unverändert bleiben; genau eine Ausgabezeile pro Eingabezeile.',
-      'Keine Kommentare, Alternativen, Analysen oder <think>-Tags ausgeben.',
-      'Eigennamen und Marken bei Bedarf unverändert lassen.',
-      'Nur den finalen Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza as legendas para português.',
-      'Prefira uma redação natural, fluida e adequada para leitura em legendas.',
-      'Mantenha intactos os códigos de tempo, prefixos estruturados e a ordem das linhas.',
-      'Se houver marcadores como [[L00001]], mantenha-os exatamente e preserve uma linha de saída para cada linha de entrada.',
-      'Não inclua comentários, alternativas, análises nem tags <think>.',
-      'Mantenha nomes próprios e marcas no original quando apropriado.',
-      'Retorne apenas o texto final simples.',
-    ].join('\n'),
-    it: [
-      'Traduci i sottotitoli in italiano.',
-      'Preferisci una formulazione naturale, scorrevole e adatta alla lettura dei sottotitoli.',
-      'Mantieni invariati timestamp, prefissi strutturati e ordine delle righe.',
-      'Se sono presenti marcatori come [[L00001]], conservali esattamente e mantieni una riga di output per ogni riga di input.',
-      'Non aggiungere commenti, alternative, analisi o tag <think>.',
-      'Mantieni nomi propri e marchi in lingua originale quando opportuno.',
-      'Restituisci solo il testo finale semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez les sous-titres en français.',
-      'Privilégiez une formulation naturelle, fluide et adaptée à la lecture de sous-titres.',
-      'Conservez les horodatages, les préfixes structurés et l’ordre des lignes inchangés.',
-      'Si des marqueurs comme [[L00001]] sont présents, gardez-les tels quels et conservez une ligne de sortie pour chaque ligne d’entrée.',
-      'N’ajoutez ni commentaires, ni alternatives, ni analyses, ni balises <think>.',
-      'Conservez les noms propres et les marques dans la langue d’origine si nécessaire.',
-      'Retournez uniquement le texte final brut.',
-    ].join('\n'),
+const promptTemplateEditorOverrides: Record<Language, Record<string, string>> = {
+  'zh-tw': {
+    'translation.promptTemplateContentLabel': '範本內容',
+    'translation.promptTemplateContentBuiltIn': '目前使用：內建範本',
+    'translation.promptTemplateContentLocal': '目前使用：本機覆寫',
+    'translation.promptTemplateLoading': '正在載入範本...',
+    'translation.promptTemplateEmpty': '此範本目前沒有內容。',
+    'translation.promptTemplateSave': '儲存為本機覆寫',
+    'translation.promptTemplateSaving': '儲存中...',
+    'translation.promptTemplateReset': '還原內建範本',
+    'translation.promptTemplateSaved': '範本已儲存。',
+    'translation.promptTemplateResetDone': '已重設為內建範本。',
+    'translation.promptTemplateUnsaved': '尚未儲存',
+    'translation.promptTemplateLoadError': '無法載入提示詞範本。',
+    'translation.promptTemplateSaveError': '無法儲存提示詞範本。',
+    'translation.help.promptTemplateContentAria': '顯示範本內容說明',
+    'translation.help.promptTemplateContentBody': '這裡顯示實際送入翻譯流程的範本內容。儲存後會寫入本機覆寫檔，更新 ArcSub 時不會覆蓋；重設會移除本機覆寫並回到內建範本。',
   },
-  subtitle_strict_alignment: {
-    'zh-tw': [
-      '請翻譯成繁體中文（台灣用語），並嚴格維持字幕對齊。',
-      '所有時間碼、標籤、行標記都必須完整保留。',
-      '輸出行數與順序必須與輸入完全一致。',
-      '不得加入註解、替代版本或任何說明文字。',
-      '若不確定，直接輸出最可能的翻譯。',
-      '只回傳純文字。',
-    ].join('\n'),
-    'zh-cn': [
-      '请翻译成简体中文，并严格保持字幕对齐。',
-      '所有时间码、标签、行标记都必须完整保留。',
-      '输出行数与顺序必须与输入完全一致。',
-      '不得加入注释、替代版本或任何说明文字。',
-      '若不确定，直接输出最可能的翻译。',
-      '只返回纯文本。',
-    ].join('\n'),
-    en: [
-      'Translate into English with strict subtitle alignment.',
-      'Preserve all timestamps, tags, and line markers exactly.',
-      'Keep one output line per input line in the exact same order.',
-      'Do not add commentary, alternatives, or explanations.',
-      'If uncertain, output the most likely translation directly.',
-      'Return plain text only.',
-    ].join('\n'),
-    jp: [
-      '日本語に翻訳し、字幕の整列を厳密に維持してください。',
-      'すべてのタイムスタンプ、タグ、行マーカーを完全に保持してください。',
-      '出力行数と順序は入力と完全一致させてください。',
-      '注釈、代替案、説明文を追加しないでください。',
-      '不確かな場合でも最も妥当な翻訳を直接出力してください。',
-      'プレーンテキストのみを返してください。',
-    ].join('\n'),
-    ko: [
-      '한국어로 번역하고 자막 정렬을 엄격하게 유지하세요.',
-      '모든 타임코드, 태그, 줄 마커를 정확히 유지하세요.',
-      '출력 줄 수와 순서는 입력과 완전히 같아야 합니다.',
-      '주석, 대안, 설명을 추가하지 마세요.',
-      '확신이 없더라도 가장 가능성이 높은 번역을 바로 출력하세요.',
-      '일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä suomeksi ja säilytä tekstitysten kohdistus tarkasti.',
-      'Säilytä kaikki aikakoodit, tagit ja rivimerkit täsmälleen ennallaan.',
-      'Tulosteessa on oltava täsmälleen sama rivimäärä ja järjestys kuin syötteessä.',
-      'Älä lisää kommentteja, vaihtoehtoja tai selityksiä.',
-      'Jos olet epävarma, anna suoraan todennäköisin käännös.',
-      'Palauta vain raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce al español con alineación estricta de subtítulos.',
-      'Conserva exactamente todos los códigos de tiempo, etiquetas y marcadores de línea.',
-      'Mantén una línea de salida por cada línea de entrada, en el mismo orden.',
-      'No añadas comentarios, alternativas ni explicaciones.',
-      'Si hay dudas, devuelve directamente la traducción más probable.',
-      'Devuelve solo texto plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze ins Deutsche und halte die Untertitel-Ausrichtung strikt ein.',
-      'Alle Zeitstempel, Tags und Zeilenmarker exakt beibehalten.',
-      'Zeilenanzahl und Reihenfolge müssen exakt der Eingabe entsprechen.',
-      'Keine Kommentare, Alternativen oder Erklärungen hinzufügen.',
-      'Wenn unsicher, direkt die wahrscheinlichste Übersetzung ausgeben.',
-      'Nur Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza para português com alinhamento estrito de legendas.',
-      'Preserve exatamente todos os códigos de tempo, tags e marcadores de linha.',
-      'Mantenha uma linha de saída para cada linha de entrada, na mesma ordem.',
-      'Não adicione comentários, alternativas ou explicações.',
-      'Se houver dúvida, devolva diretamente a tradução mais provável.',
-      'Retorne apenas texto simples.',
-    ].join('\n'),
-    it: [
-      'Traduci in italiano mantenendo un allineamento rigoroso dei sottotitoli.',
-      'Preserva esattamente tutti i timestamp, i tag e i marcatori di riga.',
-      'Mantieni una riga di output per ogni riga di input nello stesso ordine.',
-      'Non aggiungere commenti, alternative o spiegazioni.',
-      'Se hai dubbi, restituisci direttamente la traduzione più probabile.',
-      'Restituisci solo testo semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez en français avec un alignement strict des sous-titres.',
-      'Préservez exactement tous les horodatages, balises et marqueurs de ligne.',
-      'Conservez une ligne de sortie pour chaque ligne d’entrée dans le même ordre.',
-      'N’ajoutez ni commentaires, ni alternatives, ni explications.',
-      'En cas d’incertitude, fournissez directement la traduction la plus probable.',
-      'Retournez uniquement du texte brut.',
-    ].join('\n'),
+  'zh-cn': {
+    'translation.promptTemplateContentLabel': '范本内容',
+    'translation.promptTemplateContentBuiltIn': '当前使用：内建范本',
+    'translation.promptTemplateContentLocal': '当前使用：本地覆盖',
+    'translation.promptTemplateLoading': '正在加载范本...',
+    'translation.promptTemplateEmpty': '此范本目前没有内容。',
+    'translation.promptTemplateSave': '保存为本地覆盖',
+    'translation.promptTemplateSaving': '保存中...',
+    'translation.promptTemplateReset': '还原内建范本',
+    'translation.promptTemplateSaved': '范本已保存。',
+    'translation.promptTemplateResetDone': '已重置为内建范本。',
+    'translation.promptTemplateUnsaved': '尚未保存',
+    'translation.promptTemplateLoadError': '无法加载提示词范本。',
+    'translation.promptTemplateSaveError': '无法保存提示词范本。',
+    'translation.help.promptTemplateContentAria': '显示范本内容说明',
+    'translation.help.promptTemplateContentBody': '这里显示实际送入翻译流程的范本内容。保存后会写入本地覆盖文件，更新 ArcSub 时不会覆盖；重置会移除本地覆盖并回到内建范本。',
   },
-  subtitle_concise_spoken: {
-    'zh-tw': [
-      '請將字幕翻譯成繁體中文。',
-      '優先使用精簡、口語、適合字幕閱讀的說法。',
-      '在不失去原意的前提下，盡量縮短字數。',
-      '避免生硬、直譯或過度書面化。',
-      '請保留時間戳記、結構化前綴與行序。',
-      '只回傳最終純文字。',
-    ].join('\n'),
-    'zh-cn': [
-      '请将字幕翻译成简体中文。',
-      '优先使用精简、口语、适合字幕阅读的表达。',
-      '在不丢失原意的前提下，尽量缩短字数。',
-      '避免生硬、直译或过度书面化。',
-      '请保留时间戳、结构化前缀和行序。',
-      '只返回最终纯文本。',
-    ].join('\n'),
-    en: [
-      'Translate the subtitles into English.',
-      'Prefer concise, spoken, subtitle-friendly phrasing.',
-      'Shorten wording when possible without losing meaning.',
-      'Avoid stiff, overly literal, or overly formal phrasing.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'Return final plain text only.',
-    ].join('\n'),
-    jp: [
-      '字幕を日本語に翻訳してください。',
-      '簡潔で口語的、字幕として読みやすい表現を優先してください。',
-      '意味を損なわない範囲で、できるだけ短くしてください。',
-      '硬すぎる直訳や過度に書き言葉的な表現は避けてください。',
-      'タイムコード、構造化プレフィックス、行順は保持してください。',
-      '最終的なプレーンテキストだけを返してください。',
-    ].join('\n'),
-    ko: [
-      '자막을 한국어로 번역하세요.',
-      '간결하고 구어체이며 자막 읽기에 적합한 표현을 우선하세요.',
-      '의미를 잃지 않는 범위에서 가능한 한 짧게 표현하세요.',
-      '딱딱한 직역이나 지나치게 문어적인 표현은 피하세요.',
-      '타임코드, 구조화된 접두어, 줄 순서는 유지하세요.',
-      '최종 일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä tekstitykset suomeksi.',
-      'Suosi tiivistä, puheenomaista ja tekstityksiin sopivaa ilmaisua.',
-      'Lyhennä ilmaisua aina kun merkitys säilyy.',
-      'Vältä jäykkää, liian kirjaimellista tai liian muodollista tyyliä.',
-      'Säilytä aikakoodit, rakenteelliset etuliitteet ja rivijärjestys.',
-      'Palauta vain lopullinen raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce los subtítulos al español.',
-      'Prefiere un estilo conciso, oral y adecuado para subtítulos.',
-      'Acorta la redacción cuando sea posible sin perder significado.',
-      'Evita frases rígidas, demasiado literales o excesivamente formales.',
-      'Mantén intactos los códigos de tiempo, prefijos estructurados y el orden de las líneas.',
-      'Devuelve solo el texto final plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze die Untertitel ins Deutsche.',
-      'Bevorzuge knappe, gesprochene und gut lesbare Untertitelformulierungen.',
-      'Kürze Formulierungen, wenn die Bedeutung erhalten bleibt.',
-      'Vermeide steife, zu wörtliche oder zu formelle Sprache.',
-      'Zeitstempel, strukturierte Präfixe und Zeilenreihenfolge müssen erhalten bleiben.',
-      'Nur den finalen Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza as legendas para português.',
-      'Prefira uma redação concisa, falada e adequada para leitura em legendas.',
-      'Encurte a frase sempre que possível sem perder significado.',
-      'Evite tom duro, literal demais ou excessivamente formal.',
-      'Mantenha intactos os códigos de tempo, prefixos estruturados e a ordem das linhas.',
-      'Retorne apenas o texto final simples.',
-    ].join('\n'),
-    it: [
-      'Traduci i sottotitoli in italiano.',
-      'Preferisci una formulazione concisa, parlata e adatta alla lettura dei sottotitoli.',
-      'Accorcia il testo quando possibile senza perdere significato.',
-      'Evita formulazioni rigide, troppo letterali o eccessivamente formali.',
-      'Mantieni invariati timestamp, prefissi strutturati e ordine delle righe.',
-      'Restituisci solo il testo finale semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez les sous-titres en français.',
-      'Privilégiez une formulation concise, orale et adaptée à la lecture de sous-titres.',
-      'Raccourcissez la formulation quand le sens reste intact.',
-      'Évitez un ton rigide, trop littéral ou excessivement formel.',
-      'Conservez les horodatages, les préfixes structurés et l’ordre des lignes.',
-      'Retournez uniquement le texte final brut.',
-    ].join('\n'),
+  en: {
+    'translation.promptTemplateContentLabel': 'Template content',
+    'translation.promptTemplateContentBuiltIn': 'Using built-in template',
+    'translation.promptTemplateContentLocal': 'Using local override',
+    'translation.promptTemplateLoading': 'Loading templates...',
+    'translation.promptTemplateEmpty': 'This template has no content yet.',
+    'translation.promptTemplateSave': 'Save local override',
+    'translation.promptTemplateSaving': 'Saving...',
+    'translation.promptTemplateReset': 'Restore built-in',
+    'translation.promptTemplateSaved': 'Template saved.',
+    'translation.promptTemplateResetDone': 'Reset to built-in template.',
+    'translation.promptTemplateUnsaved': 'Unsaved',
+    'translation.promptTemplateLoadError': 'Failed to load prompt templates.',
+    'translation.promptTemplateSaveError': 'Failed to save prompt template.',
+    'translation.help.promptTemplateContentAria': 'Show template content help',
+    'translation.help.promptTemplateContentBody': 'This is the template content used by the translation pipeline. Saving writes a local override that survives ArcSub updates; reset removes the local override and returns to the built-in template.',
   },
-  subtitle_formal_precise: {
-    'zh-tw': [
-      '請將字幕翻譯成繁體中文。',
-      '優先使用清楚、正式、精確的表達。',
-      '即使語氣較中性，也要完整保留語意與細節。',
-      '除非原文明確需要，否則避免過度口語或俚語。',
-      '請保留時間戳記、結構化前綴與行序。',
-      '只回傳最終純文字。',
-    ].join('\n'),
-    'zh-cn': [
-      '请将字幕翻译成简体中文。',
-      '优先使用清楚、正式、精确的表达。',
-      '即使语气更中性，也要完整保留语义与细节。',
-      '除非原文明确需要，否则避免过度口语或俚语。',
-      '请保留时间戳、结构化前缀和行序。',
-      '只返回最终纯文本。',
-    ].join('\n'),
-    en: [
-      'Translate the subtitles into English.',
-      'Prefer clear, formal, and precise wording.',
-      'Preserve nuance and detail even when the phrasing becomes more neutral.',
-      'Avoid slang unless the source clearly requires it.',
-      'Keep timestamps, structured prefixes, and line order unchanged.',
-      'Return final plain text only.',
-    ].join('\n'),
-    jp: [
-      '字幕を日本語に翻訳してください。',
-      '明確で、やや正式かつ正確な表現を優先してください。',
-      '語調がやや中立になっても、意味や細部は保ってください。',
-      '原文で明確に必要な場合を除き、過度な口語や俗語は避けてください。',
-      'タイムコード、構造化プレフィックス、行順は保持してください。',
-      '最終的なプレーンテキストだけを返してください。',
-    ].join('\n'),
-    ko: [
-      '자막을 한국어로 번역하세요.',
-      '명확하고, 다소 공식적이며, 정확한 표현을 우선하세요.',
-      '문체가 다소 중립적이 되더라도 의미와 세부는 유지하세요.',
-      '원문에서 명확히 요구하지 않는 한 과도한 구어체나 속어는 피하세요.',
-      '타임코드, 구조화된 접두어, 줄 순서는 유지하세요.',
-      '최종 일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä tekstitykset suomeksi.',
-      'Suosi selkeää, muodollista ja täsmällistä ilmaisua.',
-      'Säilytä vivahteet ja yksityiskohdat, vaikka tyyli olisi neutraalimpi.',
-      'Vältä slangia, ellei lähdeteksti sitä selvästi vaadi.',
-      'Säilytä aikakoodit, rakenteelliset etuliitteet ja rivijärjestys.',
-      'Palauta vain lopullinen raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce los subtítulos al español.',
-      'Prefiere una redacción clara, formal y precisa.',
-      'Conserva matices y detalles aunque el tono sea más neutro.',
-      'Evita jerga o coloquialismos salvo que el original lo exija claramente.',
-      'Mantén intactos los códigos de tiempo, prefijos estructurados y el orden de las líneas.',
-      'Devuelve solo el texto final plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze die Untertitel ins Deutsche.',
-      'Bevorzuge klare, formelle und präzise Formulierungen.',
-      'Bewahre Nuancen und Details, auch wenn der Ton neutraler wird.',
-      'Vermeide Umgangssprache oder Slang, außer wenn der Ausgangstext dies klar verlangt.',
-      'Zeitstempel, strukturierte Präfixe und Zeilenreihenfolge müssen erhalten bleiben.',
-      'Nur den finalen Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza as legendas para português.',
-      'Prefira uma redação clara, formal e precisa.',
-      'Preserve nuances e detalhes mesmo quando o tom ficar mais neutro.',
-      'Evite gírias ou coloquialismos, salvo quando o original exigir claramente.',
-      'Mantenha intactos os códigos de tempo, prefixos estruturados e a ordem das linhas.',
-      'Retorne apenas o texto final simples.',
-    ].join('\n'),
-    it: [
-      'Traduci i sottotitoli in italiano.',
-      'Preferisci una formulazione chiara, formale e precisa.',
-      'Conserva sfumature e dettagli anche quando il tono diventa più neutro.',
-      'Evita slang o colloquialismi salvo quando il testo sorgente lo richieda chiaramente.',
-      'Mantieni invariati timestamp, prefissi strutturati e ordine delle righe.',
-      'Restituisci solo il testo finale semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez les sous-titres en français.',
-      'Privilégiez une formulation claire, formelle et précise.',
-      'Conservez les nuances et les détails même si le ton devient plus neutre.',
-      'Évitez l’argot ou les tournures trop familières sauf si la source l’exige clairement.',
-      'Conservez les horodatages, les préfixes structurés et l’ordre des lignes.',
-      'Retournez uniquement le texte final brut.',
-    ].join('\n'),
+  jp: {
+    'translation.promptTemplateContentLabel': 'テンプレート内容',
+    'translation.promptTemplateContentBuiltIn': '現在使用中：内蔵テンプレート',
+    'translation.promptTemplateContentLocal': '現在使用中：ローカル上書き',
+    'translation.promptTemplateLoading': 'テンプレートを読み込み中...',
+    'translation.promptTemplateEmpty': 'このテンプレートにはまだ内容がありません。',
+    'translation.promptTemplateSave': 'ローカル上書きとして保存',
+    'translation.promptTemplateSaving': '保存中...',
+    'translation.promptTemplateReset': '内蔵テンプレートに戻す',
+    'translation.promptTemplateSaved': 'テンプレートを保存しました。',
+    'translation.promptTemplateResetDone': '内蔵テンプレートに戻しました。',
+    'translation.promptTemplateUnsaved': '未保存',
+    'translation.promptTemplateLoadError': 'プロンプトテンプレートを読み込めません。',
+    'translation.promptTemplateSaveError': 'プロンプトテンプレートを保存できません。',
+    'translation.help.promptTemplateContentAria': 'テンプレート内容の説明を表示',
+    'translation.help.promptTemplateContentBody': '翻訳処理へ実際に渡されるテンプレート内容です。保存するとローカル上書きファイルに書き込まれ、ArcSub の更新後も保持されます。リセットするとローカル上書きを削除し、内蔵テンプレートに戻します。',
   },
-  subtitle_asr_recovery: {
-    'zh-tw': [
-      '請將字幕翻譯成繁體中文（台灣用語）。',
-      '先依上下文修正可能的 ASR 誤聽、同音字、斷句錯誤，再輸出最終翻譯。',
-      '不要顯示修正過程或任何中間分析。',
-      '時間碼、前綴與 [[Lxxxxx]] 等結構標記必須保持不變。',
-      '若原文有殘句、口語或語意不完整，請以最合理語意修復後再翻譯。',
-      '只回傳純文字。',
-    ].join('\n'),
-    'zh-cn': [
-      '请将字幕翻译成简体中文。',
-      '先依上下文修正可能的 ASR 误听、同音字、断句错误，再输出最终翻译。',
-      '不要显示修正过程或任何中间分析。',
-      '时间码、前缀与 [[Lxxxxx]] 等结构标记必须保持不变。',
-      '若原文有残句、口语或语义不完整，请以最合理语义修复后再翻译。',
-      '只返回纯文本。',
-    ].join('\n'),
-    en: [
-      'Translate the subtitles into English.',
-      'First internally correct likely ASR errors such as misheard words, homophones, and broken sentence boundaries.',
-      'Do not expose your correction process or analysis.',
-      'Keep structure tokens unchanged (timestamps, prefixes, [[Lxxxxx]]).',
-      'If the source is incomplete or colloquial, infer the most likely meaning before translating.',
-      'Return plain text only.',
-    ].join('\n'),
-    jp: [
-      '字幕を日本語に翻訳してください。',
-      'まず文脈に基づいてASRの聞き間違い、同音語、句読点や区切りの誤りを内部で補正してください。',
-      '補正過程や中間分析は表示しないでください。',
-      'タイムスタンプ、プレフィックス、[[Lxxxxx]] などの構造トークンは変更しないでください。',
-      '文が欠けていたり口語で曖昧な場合は、最も自然な意味に補ってから翻訳してください。',
-      'プレーンテキストのみを返してください。',
-    ].join('\n'),
-    ko: [
-      '자막을 한국어로 번역하세요.',
-      '먼저 문맥을 바탕으로 ASR 오인식, 동음이의어, 잘못 끊긴 문장을 내부적으로 보정하세요.',
-      '보정 과정이나 중간 분석을 드러내지 마세요.',
-      '타임코드, 접두사, [[Lxxxxx]] 같은 구조 토큰은 변경하지 마세요.',
-      '원문이 불완전하거나 구어체라면 가장 가능성 높은 의미를 복원한 뒤 번역하세요.',
-      '최종 일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä tekstitykset suomeksi.',
-      'Korjaa ensin sisäisesti todennäköiset ASR-virheet, kuten väärin kuullut sanat, homofonit ja rikkoutuneet lauserajat.',
-      'Älä näytä korjausprosessia tai väli-analyysia.',
-      'Säilytä rakenne-elementit ennallaan (aikakoodit, etuliitteet, [[Lxxxxx]]).',
-      'Jos lähdeteksti on puutteellinen tai puhekielinen, päättele todennäköisin merkitys ennen kääntämistä.',
-      'Palauta vain raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce los subtítulos al español.',
-      'Primero corrige internamente los errores probables de ASR, como palabras mal oídas, homófonos y cortes de frase incorrectos.',
-      'No muestres el proceso de corrección ni análisis intermedio.',
-      'Mantén sin cambios los tokens estructurales (códigos de tiempo, prefijos, [[Lxxxxx]]).',
-      'Si el origen está incompleto o muy coloquial, infiere primero el significado más probable y luego traduce.',
-      'Devuelve solo texto plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze die Untertitel ins Deutsche.',
-      'Korrigiere intern zuerst wahrscheinliche ASR-Fehler wie Verhörer, Homophone und fehlerhafte Satzgrenzen.',
-      'Zeige keine Zwischenschritte oder Analyse an.',
-      'Struktur-Tokens wie Zeitstempel, Präfixe und [[Lxxxxx]] unverändert lassen.',
-      'Wenn der Ausgangstext unvollständig oder umgangssprachlich ist, stelle die wahrscheinlichste Bedeutung her und übersetze dann.',
-      'Nur Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza as legendas para português.',
-      'Primeiro corrija internamente erros prováveis de ASR, como palavras mal ouvidas, homófonos e quebras incorretas de frase.',
-      'Não exponha o processo de correção nem análises intermediárias.',
-      'Mantenha inalterados os tokens estruturais (códigos de tempo, prefixos, [[Lxxxxx]]).',
-      'Se o texto de origem estiver incompleto ou coloquial, reconstrua primeiro o significado mais provável e depois traduza.',
-      'Retorne apenas texto simples.',
-    ].join('\n'),
-    it: [
-      'Traduci i sottotitoli in italiano.',
-      'Correggi prima internamente i probabili errori ASR, come parole fraintese, omofoni e frasi spezzate in modo errato.',
-      'Non mostrare il processo di correzione né analisi intermedie.',
-      'Mantieni invariati i token strutturali (timestamp, prefissi, [[Lxxxxx]]).',
-      'Se il testo sorgente è incompleto o colloquiale, ricostruisci prima il significato più probabile e poi traduci.',
-      'Restituisci solo testo semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez les sous-titres en français.',
-      'Corrigez d’abord en interne les erreurs probables d’ASR, comme les mots mal entendus, les homophones et les coupures de phrase incorrectes.',
-      'N’affichez ni le processus de correction ni l’analyse intermédiaire.',
-      'Conservez les jetons structurels inchangés (horodatages, préfixes, [[Lxxxxx]]).',
-      'Si la source est incomplète ou très orale, reconstituez d’abord le sens le plus probable puis traduisez.',
-      'Retournez uniquement du texte brut.',
-    ].join('\n'),
-  },
-  subtitle_technical_terms: {
-    'zh-tw': [
-      '請將字幕翻譯成繁體中文（台灣用語）。',
-      '這是技術、產品或工程內容。請優先保持術語一致性。',
-      '產品名、模型名、API 名稱、程式語言、框架名與品牌名可視情況保留原文。',
-      '不要為了口語化而改寫掉技術精準性。',
-      '時間碼、前綴與 [[Lxxxxx]] 等結構標記必須保持不變。',
-      '只回傳純文字。',
-    ].join('\n'),
-    'zh-cn': [
-      '请将字幕翻译成简体中文。',
-      '这是技术、产品或工程内容。请优先保持术语一致性。',
-      '产品名、模型名、API 名称、编程语言、框架名与品牌名可视情况保留原文。',
-      '不要为了口语化而改写掉技术精确性。',
-      '时间码、前缀与 [[Lxxxxx]] 等结构标记必须保持不变。',
-      '只返回纯文本。',
-    ].join('\n'),
-    en: [
-      'Translate the subtitles into English.',
-      'This is technical, product, or engineering content. Prioritize terminology consistency.',
-      'Product names, model names, API names, programming languages, framework names, and brands may stay in the original language when appropriate.',
-      'Do not sacrifice technical precision for casual phrasing.',
-      'Keep timestamps, prefixes, and structure markers such as [[Lxxxxx]] unchanged.',
-      'Return plain text only.',
-    ].join('\n'),
-    jp: [
-      '字幕を日本語に翻訳してください。',
-      'これは技術・製品・エンジニアリング内容です。用語の一貫性を最優先してください。',
-      '製品名、モデル名、API 名、プログラミング言語、フレームワーク名、ブランド名は必要に応じて原文のまま保持してください。',
-      '自然さのために技術的な精度を失わないでください。',
-      'タイムスタンプ、プレフィックス、[[Lxxxxx]] などの構造トークンは変更しないでください。',
-      'プレーンテキストのみを返してください。',
-    ].join('\n'),
-    ko: [
-      '자막을 한국어로 번역하세요.',
-      '이 내용은 기술, 제품 또는 엔지니어링 주제입니다. 용어 일관성을 최우선으로 하세요.',
-      '제품명, 모델명, API 이름, 프로그래밍 언어, 프레임워크명, 브랜드명은 필요하면 원문으로 유지하세요.',
-      '자연스러움을 위해 기술적 정확성을 희생하지 마세요.',
-      '타임코드, 접두사, [[Lxxxxx]] 같은 구조 토큰은 변경하지 마세요.',
-      '최종 일반 텍스트만 반환하세요.',
-    ].join('\n'),
-    fi: [
-      'Käännä tekstitykset suomeksi.',
-      'Tämä on teknistä, tuote- tai ohjelmistokehityssisältöä. Aseta terminologian johdonmukaisuus etusijalle.',
-      'Tuotenimet, mallinimet, API-nimet, ohjelmointikielet, kehykset ja brändit voidaan tarvittaessa jättää alkuperäiseen muotoon.',
-      'Älä uhraa teknistä tarkkuutta luonnollisuuden vuoksi.',
-      'Säilytä aikakoodit, etuliitteet ja rakenne-elementit kuten [[Lxxxxx]] ennallaan.',
-      'Palauta vain raakateksti.',
-    ].join('\n'),
-    es: [
-      'Traduce los subtítulos al español.',
-      'Este es contenido técnico, de producto o de ingeniería. Prioriza la consistencia terminológica.',
-      'Los nombres de productos, modelos, API, lenguajes de programación, frameworks y marcas pueden mantenerse en el original cuando convenga.',
-      'No sacrifiques la precisión técnica por sonar más coloquial.',
-      'Mantén intactos los códigos de tiempo, prefijos y marcadores estructurales como [[Lxxxxx]].',
-      'Devuelve solo texto plano.',
-    ].join('\n'),
-    de: [
-      'Übersetze die Untertitel ins Deutsche.',
-      'Dies ist technischer, produktbezogener oder Engineering-Inhalt. Priorisiere Terminologiekonsistenz.',
-      'Produktnamen, Modellnamen, API-Bezeichnungen, Programmiersprachen, Frameworks und Marken bei Bedarf im Original belassen.',
-      'Verliere keine technische Präzision zugunsten von Lockerheit.',
-      'Zeitstempel, Präfixe und [[Lxxxxx]]-Markierungen unverändert lassen.',
-      'Nur Klartext zurückgeben.',
-    ].join('\n'),
-    pt: [
-      'Traduza as legendas para português.',
-      'Este é conteúdo técnico, de produto ou de engenharia. Priorize a consistência terminológica.',
-      'Nomes de produtos, modelos, APIs, linguagens de programação, frameworks e marcas podem permanecer no original quando apropriado.',
-      'Não perca precisão técnica em nome de um tom mais coloquial.',
-      'Mantenha inalterados os códigos de tempo, prefixos e marcadores estruturais como [[Lxxxxx]].',
-      'Retorne apenas texto simples.',
-    ].join('\n'),
-    it: [
-      'Traduci i sottotitoli in italiano.',
-      'Questo è contenuto tecnico, di prodotto o di ingegneria. Dai priorità alla coerenza terminologica.',
-      'Nomi di prodotti, modelli, API, linguaggi di programmazione, framework e marchi possono restare in originale quando opportuno.',
-      'Non sacrificare la precisione tecnica per rendere il testo più colloquiale.',
-      'Mantieni invariati timestamp, prefissi e marcatori strutturali come [[Lxxxxx]].',
-      'Restituisci solo testo semplice.',
-    ].join('\n'),
-    fr: [
-      'Traduisez les sous-titres en français.',
-      'Il s’agit d’un contenu technique, produit ou d’ingénierie. Donnez la priorité à la cohérence terminologique.',
-      'Les noms de produits, de modèles, d’API, de langages, de frameworks et de marques peuvent rester dans la langue d’origine si nécessaire.',
-      'Ne sacrifiez pas la précision technique au profit d’un ton plus relâché.',
-      'Conservez les horodatages, préfixes et marqueurs structurels comme [[Lxxxxx]] inchangés.',
-      'Retournez uniquement du texte brut.',
-    ].join('\n'),
+  de: {
+    'translation.promptTemplateContentLabel': 'Vorlageninhalt',
+    'translation.promptTemplateContentBuiltIn': 'Aktuell verwendet: eingebaute Vorlage',
+    'translation.promptTemplateContentLocal': 'Aktuell verwendet: lokale Ueberschreibung',
+    'translation.promptTemplateLoading': 'Vorlagen werden geladen...',
+    'translation.promptTemplateEmpty': 'Diese Vorlage hat noch keinen Inhalt.',
+    'translation.promptTemplateSave': 'Als lokale Ueberschreibung speichern',
+    'translation.promptTemplateSaving': 'Speichern...',
+    'translation.promptTemplateReset': 'Eingebaute Vorlage wiederherstellen',
+    'translation.promptTemplateSaved': 'Vorlage gespeichert.',
+    'translation.promptTemplateResetDone': 'Auf eingebaute Vorlage zurueckgesetzt.',
+    'translation.promptTemplateUnsaved': 'Nicht gespeichert',
+    'translation.promptTemplateLoadError': 'Prompt-Vorlagen konnten nicht geladen werden.',
+    'translation.promptTemplateSaveError': 'Prompt-Vorlage konnte nicht gespeichert werden.',
+    'translation.help.promptTemplateContentAria': 'Hilfe zum Vorlageninhalt anzeigen',
+    'translation.help.promptTemplateContentBody': 'Dies ist der Vorlageninhalt, der tatsaechlich an die Uebersetzungspipeline gesendet wird. Speichern schreibt eine lokale Ueberschreibung, die ArcSub-Updates uebersteht. Zuruecksetzen entfernt die lokale Ueberschreibung und stellt die eingebaute Vorlage wieder her.',
   },
 };
 
-const zhTwPromptTemplateOverrides: Partial<Record<Exclude<TranslationPromptTemplateId, ''>, string>> = {
-  subtitle_general: [
-    '請將字幕翻譯成繁體中文（台灣常用字幕語氣）。',
-    '以自然、中性、流暢、好讀為優先。',
-    '不要額外增添情緒、敬語、稱呼或說明。',
-    '保留原意，不要自行擴寫，也不要過度濃縮。',
-    '保留時間碼、結構化前綴、行順序與 [[Lxxxxx]] 標記。',
-    '每行輸入對應一行輸出。',
-    '只回傳最終純文字。',
-  ].join('\n'),
-  subtitle_concise_spoken: [
-    '請將字幕翻譯成繁體中文（台灣字幕口語）。',
-    '優先使用短句、口語、俐落、適合螢幕閱讀的說法。',
-    '在不失真前提下，刪掉冗詞與重複語氣。',
-    '不要使用過度正式、過度書面或多餘敬語。',
-    '不要自行補出原文沒有的稱呼、語助詞或說明。',
-    '保留時間碼、結構化前綴、行順序與 [[Lxxxxx]] 標記。',
-    '每行輸入對應一行輸出。',
-    '只回傳最終純文字。',
-  ].join('\n'),
-  subtitle_formal_precise: [
-    '請將字幕翻譯成繁體中文（台灣用語）。',
-    '風格偏正式、準確、克制，適合教學、紀錄片或說明型內容。',
-    '保持語意完整與術語精確，但不要自行增加禮貌稱呼或親暱語氣。',
-    '避免口語俚語、浮誇語氣與主觀潤飾。',
-    '不要自行補充原文沒有的資訊。',
-    '保留時間碼、結構化前綴、行順序與 [[Lxxxxx]] 標記。',
-    '每行輸入對應一行輸出。',
-    '只回傳最終純文字。',
-  ].join('\n'),
-  subtitle_asr_recovery: [
-    '請將字幕翻譯成繁體中文（台灣用語）。',
-    '先依上下文修正可能的 ASR 錯字、同音誤聽、英文術語誤判與斷句錯誤，再輸出最終翻譯。',
-    '若不確定，保守修正，不要憑空杜撰新資訊。',
-    '不要顯示修正過程、分析或註解。',
-    '若原文殘缺，請以最合理且最少改動的方式補足語意後再翻譯。',
-    '保留時間碼、結構化前綴、行順序與 [[Lxxxxx]] 標記。',
-    '每行輸入對應一行輸出。',
-    '只回傳最終純文字。',
-  ].join('\n'),
-  subtitle_technical_terms: [
-    '請將字幕翻譯成繁體中文（台灣用語）。',
-    '這是技術、產品或工程內容。請優先保持術語一致、名稱正確、語意精準。',
-    '產品名、模型名、API 名稱、程式語言、框架名、CLI 旗標與品牌名可視情況保留原文。',
-    '不要為了口語化而犧牲技術準確性，也不要自行把專有名詞翻得過頭。',
-    '保留時間碼、結構化前綴、行順序與 [[Lxxxxx]] 標記。',
-    '每行輸入對應一行輸出。',
-    '只回傳最終純文字。',
-  ].join('\n'),
-};
-
-for (const [templateId, overrideText] of Object.entries(zhTwPromptTemplateOverrides)) {
-  if (!overrideText) continue;
-  translationPromptTemplatesByTargetLanguage[templateId as Exclude<TranslationPromptTemplateId, ''>]['zh-tw'] = overrideText;
-}
-
-type ExtendedPromptTargetLanguage = 'zh-hk' | 'yue' | 'ru' | 'pl' | 'ar' | 'nl' | 'el' | 'fa' | 'hu';
-
-function normalizeExtendedPromptTemplateTargetLanguage(targetLang: string): ExtendedPromptTargetLanguage | null {
-  const normalized = String(targetLang || '').trim().toLowerCase().replace(/_/g, '-');
-  if (!normalized) return null;
-  if (normalized === 'zh-hk' || normalized.startsWith('zh-hk')) return 'zh-hk';
-  if (normalized === 'yue' || normalized.startsWith('yue')) return 'yue';
-  if (normalized === 'ru' || normalized.startsWith('ru-')) return 'ru';
-  if (normalized === 'pl' || normalized.startsWith('pl-')) return 'pl';
-  if (normalized === 'ar' || normalized.startsWith('ar-')) return 'ar';
-  if (normalized === 'nl' || normalized.startsWith('nl-')) return 'nl';
-  if (normalized === 'el' || normalized.startsWith('el-')) return 'el';
-  if (normalized === 'fa' || normalized.startsWith('fa-')) return 'fa';
-  if (normalized === 'hu' || normalized.startsWith('hu-')) return 'hu';
-  return null;
-}
-
-function getExtendedPromptTemplateText(templateId: TranslationPromptTemplateId, targetLang: string): string {
-  if (!templateId) return '';
-  const target = normalizeExtendedPromptTemplateTargetLanguage(targetLang);
-  if (!target) return '';
-
-  const templates: Record<ExtendedPromptTargetLanguage, Record<Exclude<TranslationPromptTemplateId, ''>, string[]>> = {
-    'zh-hk': {
-      subtitle_general: [
-        '請將字幕翻譯成香港繁體中文。',
-        '請使用自然、流暢、適合字幕閱讀的寫法。',
-        '請保持時間碼、結構前綴和行序不變。',
-        '如果有 [[L00001]] 這類標記，請完整保留，並維持每一行輸入對應一行輸出。',
-        '不要加入評論、替代版本、分析或 <think> 標籤。',
-        '專有名詞和品牌名稱可視情況保留原文。',
-        '只輸出最後的純文字結果。',
-      ],
-      subtitle_strict_alignment: [
-        '請將字幕翻譯成香港繁體中文，並嚴格保持字幕對齊。',
-        '請完整保留所有時間碼、標籤和行標記。',
-        '輸出行數和順序必須與輸入完全一致。',
-        '不要加入評論、替代版本或說明。',
-        '若不確定，請直接輸出最可能的翻譯。',
-        '只輸出純文字。',
-      ],
-      subtitle_concise_spoken: [
-        '請將字幕翻譯成香港繁體中文。',
-        '請使用精簡、自然、適合口語字幕的寫法。',
-        '在不影響意思的前提下，盡量縮短句子。',
-        '避免過度直譯或太書面。',
-        '請保持時間碼、結構前綴和行序不變。',
-        '只輸出最後的純文字結果。',
-      ],
-      subtitle_formal_precise: [
-        '請將字幕翻譯成香港繁體中文。',
-        '請使用清楚、正式、準確的寫法。',
-        '請保留原意和細節，即使語氣需要變得較中性。',
-        '除非原文需要，否則避免俚語。',
-        '請保持時間碼、結構前綴和行序不變。',
-        '只輸出最後的純文字結果。',
-      ],
-      subtitle_asr_recovery: [
-        '請將字幕翻譯成香港繁體中文。',
-        '請先在內部修正可能的語音辨識錯誤，例如聽錯字、同音字或斷句錯誤。',
-        '不要顯示修正過程或分析。',
-        '請保持時間碼、前綴和 [[Lxxxxx]] 等結構標記不變。',
-        '若來源不完整或偏口語，請先判斷最可能的意思再翻譯。',
-        '只輸出純文字。',
-      ],
-      subtitle_technical_terms: [
-        '請將字幕翻譯成香港繁體中文。',
-        '這是技術、產品或工程內容，請優先保持術語一致。',
-        '產品名、模型名、API 名稱、程式語言、框架和品牌可視情況保留原文。',
-        '不要為了口語化而犧牲技術準確度。',
-        '請保持時間碼、前綴和 [[Lxxxxx]] 等結構標記不變。',
-        '只輸出純文字。',
-      ],
-    },
-    yue: {
-      subtitle_general: [
-        '請將字幕翻譯成廣東話。',
-        '請用自然、流暢、適合字幕閱讀嘅講法。',
-        '請保持時間碼、結構前綴同每一行嘅順序不變。',
-        '如果有 [[L00001]] 呢類標記，請完整保留，並維持每一行輸入對應一行輸出。',
-        '唔好加入評論、替代版本、分析或 <think> 標籤。',
-        '專有名詞同品牌名可以視情況保留原文。',
-        '只輸出最後嘅純文字結果。',
-      ],
-      subtitle_strict_alignment: [
-        '請將字幕翻譯成廣東話，並嚴格保持字幕對齊。',
-        '請完整保留所有時間碼、標籤同行標記。',
-        '輸出行數同順序必須同輸入完全一致。',
-        '唔好加入評論、替代版本或說明。',
-        '如果唔確定，請直接輸出最可能嘅翻譯。',
-        '只輸出純文字。',
-      ],
-      subtitle_concise_spoken: [
-        '請將字幕翻譯成廣東話。',
-        '請用精簡、自然、適合口語字幕嘅講法。',
-        '喺唔影響意思嘅前提下，盡量縮短句子。',
-        '避免太生硬、太直譯或太書面。',
-        '請保持時間碼、結構前綴同行序不變。',
-        '只輸出最後嘅純文字結果。',
-      ],
-      subtitle_formal_precise: [
-        '請將字幕翻譯成廣東話。',
-        '請用清楚、正式、準確嘅講法。',
-        '請保留原意同細節，即使語氣需要變得較中性。',
-        '除非原文需要，否則避免俚語。',
-        '請保持時間碼、結構前綴同行序不變。',
-        '只輸出最後嘅純文字結果。',
-      ],
-      subtitle_asr_recovery: [
-        '請將字幕翻譯成廣東話。',
-        '請先喺內部修正可能嘅語音辨識錯誤，例如聽錯字、同音字或斷句錯誤。',
-        '唔好顯示修正過程或分析。',
-        '請保持時間碼、前綴同 [[Lxxxxx]] 等結構標記不變。',
-        '如果來源唔完整或偏口語，請先判斷最可能嘅意思再翻譯。',
-        '只輸出純文字。',
-      ],
-      subtitle_technical_terms: [
-        '請將字幕翻譯成廣東話。',
-        '呢段係技術、產品或工程內容，請優先保持術語一致。',
-        '產品名、模型名、API 名稱、程式語言、框架同品牌可以視情況保留原文。',
-        '唔好為咗口語化而犧牲技術準確度。',
-        '請保持時間碼、前綴同 [[Lxxxxx]] 等結構標記不變。',
-        '只輸出純文字。',
-      ],
-    },
-    ru: {
-      subtitle_general: [
-        'Переведи субтитры на русский язык.',
-        'Используй естественные и плавные формулировки, удобные для чтения в субтитрах.',
-        'Сохраняй таймкоды, структурные префиксы и порядок строк без изменений.',
-        'Если есть метки вроде [[L00001]], оставь их без изменений и сохрани одну строку вывода на каждую строку ввода.',
-        'Не добавляй комментарии, варианты, анализ или теги <think>.',
-        'Имена собственные и названия брендов при необходимости оставляй без перевода.',
-        'Верни только итоговый простой текст.',
-      ],
-      subtitle_strict_alignment: [
-        'Переведи на русский язык со строгим сохранением выравнивания субтитров.',
-        'Точно сохрани все таймкоды, теги и метки строк.',
-        'Количество строк и их порядок должны полностью совпадать с исходным текстом.',
-        'Не добавляй комментарии, варианты или пояснения.',
-        'Если есть сомнение, сразу выбери наиболее вероятный перевод.',
-        'Верни только простой текст.',
-      ],
-      subtitle_concise_spoken: [
-        'Переведи субтитры на русский язык.',
-        'Используй краткий, разговорный стиль, подходящий для субтитров.',
-        'Сокращай формулировки, если смысл не теряется.',
-        'Избегай сухого, слишком буквального или чрезмерно официального стиля.',
-        'Сохраняй таймкоды, структурные префиксы и порядок строк.',
-        'Верни только итоговый простой текст.',
-      ],
-      subtitle_formal_precise: [
-        'Переведи субтитры на русский язык.',
-        'Используй ясный, официальный и точный стиль.',
-        'Сохраняй смысл и нюансы, даже если формулировка станет более нейтральной.',
-        'Не используй сленг, если он явно не нужен по исходному тексту.',
-        'Сохраняй таймкоды, структурные префиксы и порядок строк.',
-        'Верни только итоговый простой текст.',
-      ],
-      subtitle_asr_recovery: [
-        'Переведи субтитры на русский язык.',
-        'Сначала мысленно исправь вероятные ошибки распознавания речи: неверно услышанные слова, омонимы и неправильные границы фраз.',
-        'Не показывай процесс исправления или анализ.',
-        'Сохраняй структурные элементы без изменений: таймкоды, префиксы, [[Lxxxxx]].',
-        'Если исходный текст неполный или разговорный, сначала восстанови наиболее вероятный смысл, затем переводи.',
-        'Верни только простой текст.',
-      ],
-      subtitle_technical_terms: [
-        'Переведи субтитры на русский язык.',
-        'Это технический, продуктовый или инженерный материал. Сохраняй единообразие терминов.',
-        'Названия продуктов, моделей, API, языков программирования, фреймворков и брендов можно оставлять в оригинале, если это уместно.',
-        'Не жертвуй технической точностью ради более разговорного стиля.',
-        'Сохраняй таймкоды, префиксы и структурные метки вроде [[Lxxxxx]].',
-        'Верни только простой текст.',
-      ],
-    },
-    pl: {
-      subtitle_general: [
-        'Przetlumacz napisy na jezyk polski.',
-        'Uzywaj naturalnych i plynnych sformulowan odpowiednich do czytania w napisach.',
-        'Zachowaj bez zmian znaczniki czasu, prefiksy strukturalne i kolejnosc wierszy.',
-        'Jesli wystepuja znaczniki takie jak [[L00001]], zostaw je bez zmian i zachowaj jeden wiersz wyjscia na jeden wiersz wejscia.',
-        'Nie dodawaj komentarzy, wariantow, analizy ani tagow <think>.',
-        'Nazwy wlasne i marki pozostaw w oryginale, gdy jest to odpowiednie.',
-        'Zwroc tylko koncowy zwykly tekst.',
-      ],
-      subtitle_strict_alignment: [
-        'Przetlumacz na jezyk polski z dokladnym zachowaniem ulozenia napisow.',
-        'Zachowaj dokladnie wszystkie znaczniki czasu, tagi i znaczniki wierszy.',
-        'Liczba i kolejnosc wierszy musi byc taka sama jak w tekscie wejsciowym.',
-        'Nie dodawaj komentarzy, wariantow ani wyjasnien.',
-        'W razie watpliwosci podaj bezposrednio najbardziej prawdopodobne tlumaczenie.',
-        'Zwroc tylko zwykly tekst.',
-      ],
-      subtitle_concise_spoken: [
-        'Przetlumacz napisy na jezyk polski.',
-        'Uzywaj zwiezlego, mowionego stylu odpowiedniego dla napisow.',
-        'Skracaj zdania, gdy nie traci sie znaczenia.',
-        'Unikaj sztywnego, zbyt doslownego lub przesadnie formalnego tonu.',
-        'Zachowaj znaczniki czasu, prefiksy strukturalne i kolejnosc wierszy.',
-        'Zwroc tylko koncowy zwykly tekst.',
-      ],
-      subtitle_formal_precise: [
-        'Przetlumacz napisy na jezyk polski.',
-        'Uzywaj jasnego, formalnego i precyzyjnego stylu.',
-        'Zachowaj sens i niuanse, nawet jesli brzmienie stanie sie bardziej neutralne.',
-        'Unikaj slangu, chyba ze wyraznie wymaga go tekst zrodlowy.',
-        'Zachowaj znaczniki czasu, prefiksy strukturalne i kolejnosc wierszy.',
-        'Zwroc tylko koncowy zwykly tekst.',
-      ],
-      subtitle_asr_recovery: [
-        'Przetlumacz napisy na jezyk polski.',
-        'Najpierw wewnetrznie popraw prawdopodobne bledy rozpoznawania mowy, takie jak zle uslyszane slowa, homofony i urwane granice zdan.',
-        'Nie pokazuj procesu poprawiania ani analizy.',
-        'Zachowaj bez zmian elementy strukturalne: znaczniki czasu, prefiksy, [[Lxxxxx]].',
-        'Jesli tekst zrodlowy jest niepelny lub potoczny, najpierw odtworz najbardziej prawdopodobny sens, potem tlumacz.',
-        'Zwroc tylko zwykly tekst.',
-      ],
-      subtitle_technical_terms: [
-        'Przetlumacz napisy na jezyk polski.',
-        'To material techniczny, produktowy lub inzynierski. Priorytetem jest spojnosc terminologii.',
-        'Nazwy produktow, modeli, API, jezykow programowania, frameworkow i marek mozna zostawic w oryginale, gdy jest to odpowiednie.',
-        'Nie poswiecaj precyzji technicznej dla bardziej potocznego brzmienia.',
-        'Zachowaj znaczniki czasu, prefiksy i znaczniki strukturalne takie jak [[Lxxxxx]].',
-        'Zwroc tylko zwykly tekst.',
-      ],
-    },
-    ar: {
-      subtitle_general: [
-        'ترجم الترجمة المرئية إلى العربية.',
-        'استخدم صياغة طبيعية وسلسة ومناسبة للقراءة في الترجمة المرئية.',
-        'حافظ على الطوابع الزمنية والبادئات المنظمة وترتيب الأسطر كما هي.',
-        'إذا وُجدت علامات مثل [[L00001]] فأبقها كما هي، واجعل لكل سطر إدخال سطر إخراج واحد.',
-        'لا تضف تعليقات أو بدائل أو تحليلا أو وسوم <think>.',
-        'أبق أسماء الأشخاص والعلامات التجارية بلغتها الأصلية عند الحاجة.',
-        'أعد النص النهائي فقط.',
-      ],
-      subtitle_strict_alignment: [
-        'ترجم إلى العربية مع الحفاظ الصارم على تطابق أسطر الترجمة المرئية.',
-        'حافظ تماما على كل الطوابع الزمنية والوسوم وعلامات الأسطر.',
-        'يجب أن يطابق عدد الأسطر وترتيبها النص الأصلي تماما.',
-        'لا تضف تعليقات أو بدائل أو شروحات.',
-        'عند الشك، اكتب الترجمة الأرجح مباشرة.',
-        'أعد نصا عاديا فقط.',
-      ],
-      subtitle_concise_spoken: [
-        'ترجم الترجمة المرئية إلى العربية.',
-        'استخدم أسلوبا مختصرا وطبيعيا ومناسبا للحوار في الترجمة المرئية.',
-        'اختصر العبارة عندما يمكن ذلك من دون فقدان المعنى.',
-        'تجنب الأسلوب الجامد أو الحرفي جدا أو الرسمي أكثر من اللازم.',
-        'حافظ على الطوابع الزمنية والبادئات المنظمة وترتيب الأسطر كما هي.',
-        'أعد النص النهائي فقط.',
-      ],
-      subtitle_formal_precise: [
-        'ترجم الترجمة المرئية إلى العربية.',
-        'استخدم صياغة واضحة ورسمية ودقيقة.',
-        'حافظ على المعنى والتفاصيل حتى لو أصبحت الصياغة أكثر حيادا.',
-        'تجنب العامية إلا إذا كان النص الأصلي يتطلبها بوضوح.',
-        'حافظ على الطوابع الزمنية والبادئات المنظمة وترتيب الأسطر كما هي.',
-        'أعد النص النهائي فقط.',
-      ],
-      subtitle_asr_recovery: [
-        'ترجم الترجمة المرئية إلى العربية.',
-        'صحح داخليا أولا أخطاء التعرف على الكلام المحتملة، مثل الكلمات المسموعة خطأ أو الكلمات المتشابهة أو حدود الجمل المكسورة.',
-        'لا تعرض عملية التصحيح أو التحليل.',
-        'حافظ على العناصر المنظمة كما هي: الطوابع الزمنية والبادئات و [[Lxxxxx]].',
-        'إذا كان النص الأصلي ناقصا أو عاميا، فاستنتج المعنى الأرجح أولا ثم ترجم.',
-        'أعد نصا عاديا فقط.',
-      ],
-      subtitle_technical_terms: [
-        'ترجم الترجمة المرئية إلى العربية.',
-        'هذا محتوى تقني أو متعلق بمنتج أو هندسة. أعط الأولوية لاتساق المصطلحات.',
-        'يمكن إبقاء أسماء المنتجات والنماذج وواجهات API ولغات البرمجة والأطر والعلامات التجارية بلغتها الأصلية عند الحاجة.',
-        'لا تضح بالدقة التقنية من أجل صياغة أكثر عفوية.',
-        'حافظ على الطوابع الزمنية والبادئات والعلامات المنظمة مثل [[Lxxxxx]] كما هي.',
-        'أعد نصا عاديا فقط.',
-      ],
-    },
-    nl: {
-      subtitle_general: [
-        'Vertaal de ondertitels naar het Nederlands.',
-        'Gebruik natuurlijke en vloeiende formuleringen die goed leesbaar zijn als ondertitels.',
-        'Laat tijdcodes, gestructureerde voorvoegsels en regelvolgorde ongewijzigd.',
-        'Als er markeringen zoals [[L00001]] staan, behoud die precies en geef voor elke invoerregel een uitvoerregel.',
-        'Voeg geen commentaar, alternatieven, analyse of <think>-tags toe.',
-        'Laat eigennamen en merknamen waar passend onvertaald.',
-        'Geef alleen de uiteindelijke platte tekst terug.',
-      ],
-      subtitle_strict_alignment: [
-        'Vertaal naar het Nederlands met strikte ondertiteluitlijning.',
-        'Behoud alle tijdcodes, tags en regelmarkeringen exact.',
-        'Het aantal regels en de volgorde moeten exact gelijk blijven aan de invoer.',
-        'Voeg geen commentaar, alternatieven of uitleg toe.',
-        'Geef bij twijfel direct de meest waarschijnlijke vertaling.',
-        'Geef alleen platte tekst terug.',
-      ],
-      subtitle_concise_spoken: [
-        'Vertaal de ondertitels naar het Nederlands.',
-        'Gebruik een beknopte, gesproken stijl die geschikt is voor ondertitels.',
-        'Kort formuleringen in wanneer dat kan zonder betekenis te verliezen.',
-        'Vermijd stijve, te letterlijke of overdreven formele taal.',
-        'Laat tijdcodes, gestructureerde voorvoegsels en regelvolgorde ongewijzigd.',
-        'Geef alleen de uiteindelijke platte tekst terug.',
-      ],
-      subtitle_formal_precise: [
-        'Vertaal de ondertitels naar het Nederlands.',
-        'Gebruik duidelijke, formele en precieze formuleringen.',
-        'Behoud nuance en betekenis, ook als de formulering neutraler wordt.',
-        'Vermijd slang tenzij de bron dat duidelijk vereist.',
-        'Laat tijdcodes, gestructureerde voorvoegsels en regelvolgorde ongewijzigd.',
-        'Geef alleen de uiteindelijke platte tekst terug.',
-      ],
-      subtitle_asr_recovery: [
-        'Vertaal de ondertitels naar het Nederlands.',
-        'Corrigeer eerst intern waarschijnlijke spraakherkenningsfouten, zoals verkeerd verstane woorden, homofonen en gebroken zinsgrenzen.',
-        'Toon het correctieproces of de analyse niet.',
-        'Laat structuurelementen ongewijzigd: tijdcodes, voorvoegsels, [[Lxxxxx]].',
-        'Als de bron onvolledig of spreektaal is, leid dan eerst de meest waarschijnlijke betekenis af en vertaal daarna.',
-        'Geef alleen platte tekst terug.',
-      ],
-      subtitle_technical_terms: [
-        'Vertaal de ondertitels naar het Nederlands.',
-        'Dit is technische, product- of engineeringinhoud. Geef prioriteit aan consistente terminologie.',
-        'Productnamen, modelnamen, API-namen, programmeertalen, frameworks en merken mogen waar passend in de oorspronkelijke taal blijven.',
-        'Offer technische precisie niet op voor een lossere toon.',
-        'Laat tijdcodes, voorvoegsels en structuuraanduidingen zoals [[Lxxxxx]] ongewijzigd.',
-        'Geef alleen platte tekst terug.',
-      ],
-    },
-    el: {
-      subtitle_general: [
-        'Μετάφρασε τους υπότιτλους στα ελληνικά.',
-        'Χρησιμοποίησε φυσική και ρέουσα διατύπωση, κατάλληλη για ανάγνωση σε υπότιτλους.',
-        'Διατήρησε αμετάβλητα τα χρονικά σημεία, τα δομημένα προθέματα και τη σειρά των γραμμών.',
-        'Αν υπάρχουν δείκτες όπως [[L00001]], κράτησέ τους αμετάβλητους και διατήρησε μία γραμμή εξόδου για κάθε γραμμή εισόδου.',
-        'Μην προσθέτεις σχόλια, εναλλακτικές, ανάλυση ή ετικέτες <think>.',
-        'Διατήρησε κύρια ονόματα και εμπορικές ονομασίες στην αρχική μορφή όταν χρειάζεται.',
-        'Επίστρεψε μόνο το τελικό απλό κείμενο.',
-      ],
-      subtitle_strict_alignment: [
-        'Μετάφρασε στα ελληνικά με αυστηρή αντιστοίχιση των γραμμών των υποτίτλων.',
-        'Διατήρησε ακριβώς όλα τα χρονικά σημεία, τις ετικέτες και τους δείκτες γραμμών.',
-        'Ο αριθμός και η σειρά των γραμμών πρέπει να ταιριάζουν ακριβώς με την είσοδο.',
-        'Μην προσθέτεις σχόλια, εναλλακτικές ή εξηγήσεις.',
-        'Αν δεν είσαι βέβαιος, δώσε απευθείας την πιο πιθανή μετάφραση.',
-        'Επίστρεψε μόνο απλό κείμενο.',
-      ],
-      subtitle_concise_spoken: [
-        'Μετάφρασε τους υπότιτλους στα ελληνικά.',
-        'Προτίμησε σύντομη, προφορική διατύπωση κατάλληλη για υπότιτλους.',
-        'Συντόμευσε τη διατύπωση όπου γίνεται χωρίς απώλεια νοήματος.',
-        'Απόφυγε άκαμπτη, υπερβολικά κυριολεκτική ή πολύ επίσημη γλώσσα.',
-        'Διατήρησε χρονικά σημεία, δομημένα προθέματα και σειρά γραμμών.',
-        'Επίστρεψε μόνο το τελικό απλό κείμενο.',
-      ],
-      subtitle_formal_precise: [
-        'Μετάφρασε τους υπότιτλους στα ελληνικά.',
-        'Χρησιμοποίησε καθαρή, επίσημη και ακριβή διατύπωση.',
-        'Διατήρησε το νόημα και τις αποχρώσεις, ακόμη κι αν η διατύπωση γίνει πιο ουδέτερη.',
-        'Απόφυγε αργκό εκτός αν το απαιτεί καθαρά το πρωτότυπο.',
-        'Διατήρησε χρονικά σημεία, δομημένα προθέματα και σειρά γραμμών.',
-        'Επίστρεψε μόνο το τελικό απλό κείμενο.',
-      ],
-      subtitle_asr_recovery: [
-        'Μετάφρασε τους υπότιτλους στα ελληνικά.',
-        'Πρώτα διόρθωσε εσωτερικά πιθανά λάθη αναγνώρισης ομιλίας, όπως λάθος ακουσμένες λέξεις, ομόηχα και σπασμένα όρια προτάσεων.',
-        'Μην εμφανίζεις τη διαδικασία διόρθωσης ή ανάλυσης.',
-        'Διατήρησε αμετάβλητα τα δομικά στοιχεία: χρονικά σημεία, προθέματα, [[Lxxxxx]].',
-        'Αν το πρωτότυπο είναι ελλιπές ή πολύ προφορικό, βγάλε πρώτα το πιο πιθανό νόημα και μετά μετάφρασε.',
-        'Επίστρεψε μόνο απλό κείμενο.',
-      ],
-      subtitle_technical_terms: [
-        'Μετάφρασε τους υπότιτλους στα ελληνικά.',
-        'Πρόκειται για τεχνικό περιεχόμενο, προϊόν ή μηχανική. Δώσε προτεραιότητα στη συνέπεια των όρων.',
-        'Ονόματα προϊόντων, μοντέλων, API, γλωσσών προγραμματισμού, frameworks και εμπορικών σημάτων μπορούν να μείνουν στην αρχική γλώσσα όταν ταιριάζει.',
-        'Μη θυσιάζεις την τεχνική ακρίβεια για πιο χαλαρή διατύπωση.',
-        'Διατήρησε χρονικά σημεία, προθέματα και δομικούς δείκτες όπως [[Lxxxxx]].',
-        'Επίστρεψε μόνο απλό κείμενο.',
-      ],
-    },
-    fa: {
-      subtitle_general: [
-        'زیرنویس‌ها را به فارسی ترجمه کن.',
-        'از بیان طبیعی، روان و مناسب برای خواندن زیرنویس استفاده کن.',
-        'زمان‌ها، پیشوندهای ساختاری و ترتیب خط‌ها را بدون تغییر نگه دار.',
-        'اگر نشانه‌هایی مثل [[L00001]] وجود دارد، آن‌ها را همان‌طور نگه دار و برای هر خط ورودی یک خط خروجی بده.',
-        'نظر، گزینه جایگزین، تحلیل یا برچسب <think> اضافه نکن.',
-        'نام‌های خاص و برندها را در صورت نیاز به زبان اصلی نگه دار.',
-        'فقط متن نهایی ساده را برگردان.',
-      ],
-      subtitle_strict_alignment: [
-        'با حفظ دقیق هم‌ترازی زیرنویس‌ها، متن را به فارسی ترجمه کن.',
-        'همه زمان‌ها، برچسب‌ها و نشانه‌های خط را دقیقا بدون تغییر نگه دار.',
-        'تعداد خط‌ها و ترتیب آن‌ها باید دقیقا مثل ورودی باشد.',
-        'نظر، گزینه جایگزین یا توضیح اضافه نکن.',
-        'اگر مطمئن نیستی، محتمل‌ترین ترجمه را مستقیم بنویس.',
-        'فقط متن ساده برگردان.',
-      ],
-      subtitle_concise_spoken: [
-        'زیرنویس‌ها را به فارسی ترجمه کن.',
-        'از بیان کوتاه، گفتاری و مناسب برای زیرنویس استفاده کن.',
-        'هرجا معنی از بین نمی‌رود، جمله‌ها را کوتاه‌تر کن.',
-        'از بیان خشک، بیش از حد تحت‌اللفظی یا خیلی رسمی دوری کن.',
-        'زمان‌ها، پیشوندهای ساختاری و ترتیب خط‌ها را بدون تغییر نگه دار.',
-        'فقط متن نهایی ساده را برگردان.',
-      ],
-      subtitle_formal_precise: [
-        'زیرنویس‌ها را به فارسی ترجمه کن.',
-        'از بیان روشن، رسمی و دقیق استفاده کن.',
-        'معنا و جزئیات را حفظ کن، حتی اگر لحن کمی خنثی‌تر شود.',
-        'از عامیانه‌نویسی دوری کن مگر اینکه متن اصلی آن را لازم کند.',
-        'زمان‌ها، پیشوندهای ساختاری و ترتیب خط‌ها را بدون تغییر نگه دار.',
-        'فقط متن نهایی ساده را برگردان.',
-      ],
-      subtitle_asr_recovery: [
-        'زیرنویس‌ها را به فارسی ترجمه کن.',
-        'ابتدا درون خودت خطاهای احتمالی تشخیص گفتار را اصلاح کن، مثل واژه‌های بد شنیده‌شده، هم‌آواها و شکستگی جمله‌ها.',
-        'فرایند اصلاح یا تحلیل را نشان نده.',
-        'عناصر ساختاری را بدون تغییر نگه دار: زمان‌ها، پیشوندها، [[Lxxxxx]].',
-        'اگر متن اصلی ناقص یا محاوره‌ای است، ابتدا محتمل‌ترین معنی را برداشت کن و بعد ترجمه کن.',
-        'فقط متن ساده برگردان.',
-      ],
-      subtitle_technical_terms: [
-        'زیرنویس‌ها را به فارسی ترجمه کن.',
-        'این متن فنی، محصولی یا مهندسی است. یکسان بودن اصطلاحات را در اولویت بگذار.',
-        'نام محصولات، مدل‌ها، APIها، زبان‌های برنامه‌نویسی، فریم‌ورک‌ها و برندها در صورت نیاز می‌توانند به زبان اصلی بمانند.',
-        'دقت فنی را فدای لحن محاوره‌ای نکن.',
-        'زمان‌ها، پیشوندها و نشانه‌های ساختاری مثل [[Lxxxxx]] را بدون تغییر نگه دار.',
-        'فقط متن ساده برگردان.',
-      ],
-    },
-    hu: {
-      subtitle_general: [
-        'Forditsd le a feliratokat magyarra.',
-        'Hasznalj termeszetes, gordulekeny, feliratban jol olvashato megfogalmazast.',
-        'Hagyd valtozatlanul az idokodokat, a szerkezeti elotagokat es a sorok sorrendjet.',
-        'Ha vannak [[L00001]] jelolesek, hagyd oket valtozatlanul, es minden bemeneti sorhoz egy kimeneti sort adj.',
-        'Ne adj hozza kommentart, valtozatokat, elemzest vagy <think> cimkeket.',
-        'A tulajdonneveket es markaneveket szukseg eseten hagyd eredeti nyelven.',
-        'Csak a vegso egyszeru szoveget add vissza.',
-      ],
-      subtitle_strict_alignment: [
-        'Forditsd magyarra szigoru felirat-igazitassal.',
-        'Pontosan orizz meg minden idokodot, taget es sorjelolest.',
-        'A sorok szama es sorrendje pontosan egyezzen meg a bemenettel.',
-        'Ne adj hozza kommentart, valtozatokat vagy magyarazatot.',
-        'Bizonytalansag eseten kozvetlenul a legvaloszinubb forditast add meg.',
-        'Csak egyszeru szoveget adj vissza.',
-      ],
-      subtitle_concise_spoken: [
-        'Forditsd le a feliratokat magyarra.',
-        'Hasznalj tomor, beszedkozeli, felirathoz illo megfogalmazast.',
-        'Rovidits, ahol lehet, a jelentes elvesztese nelkul.',
-        'Keruld a merev, tul szo szerinti vagy tul hivatalos stilust.',
-        'Hagyd valtozatlanul az idokodokat, a szerkezeti elotagokat es a sorok sorrendjet.',
-        'Csak a vegso egyszeru szoveget add vissza.',
-      ],
-      subtitle_formal_precise: [
-        'Forditsd le a feliratokat magyarra.',
-        'Hasznalj vilagos, hivatalos es pontos megfogalmazast.',
-        'Orizd meg a jelentest es az arnyalatokat, akkor is, ha a szoveg semlegesebb lesz.',
-        'Keruld a szlenget, hacsak a forras nem igenyli egyertelmuen.',
-        'Hagyd valtozatlanul az idokodokat, a szerkezeti elotagokat es a sorok sorrendjet.',
-        'Csak a vegso egyszeru szoveget add vissza.',
-      ],
-      subtitle_asr_recovery: [
-        'Forditsd le a feliratokat magyarra.',
-        'Eloszor belsoleg javitsd a valoszinu beszedfelismeresi hibakat, peldaul felrehallott szavakat, azonos hangzasu szavakat es hibas mondathatarokat.',
-        'Ne mutasd meg a javitasi folyamatot vagy elemzest.',
-        'Hagyd valtozatlanul a szerkezeti elemeket: idokodok, elotagok, [[Lxxxxx]].',
-        'Ha a forras hianyos vagy beszednyelvi, eloszor kovetkeztesd ki a legvaloszinubb jelentest, majd fordits.',
-        'Csak egyszeru szoveget adj vissza.',
-      ],
-      subtitle_technical_terms: [
-        'Forditsd le a feliratokat magyarra.',
-        'Ez technikai, termekhez kapcsolodo vagy mernoki tartalom. A terminologia kovetkezetessege legyen az elso.',
-        'Termeknevek, modellnevek, API-nevek, programozasi nyelvek, keretrendszerek es markak szukseg eseten maradhatnak eredeti nyelven.',
-        'Ne aldozd fel a technikai pontossagot a lazabb stilus kedveert.',
-        'Hagyd valtozatlanul az idokodokat, elotagokat es szerkezeti jeloleseket, peldaul [[Lxxxxx]].',
-        'Csak egyszeru szoveget adj vissza.',
-      ],
-    },
-  };
-
-  return templates[target][templateId]?.join('\n') || '';
-}
-
-function normalizePromptTemplateTargetLanguage(targetLang: string): PromptTargetLanguage {
-  const normalized = String(targetLang || '').trim().toLowerCase();
-  if (!normalized) return 'en';
-  if (normalized === 'zh-tw' || normalized === 'zh-hant') return 'zh-tw';
-  if (normalized === 'zh-cn' || normalized === 'zh-hans') return 'zh-cn';
-  if (normalized.startsWith('zh-tw')) return 'zh-tw';
-  if (normalized.startsWith('zh-cn')) return 'zh-cn';
-  if (normalized === 'ja' || normalized === 'jp' || normalized.startsWith('ja-')) return 'jp';
-  if (normalized === 'ko' || normalized === 'kr' || normalized.startsWith('ko-')) return 'ko';
-  if (normalized.startsWith('fi')) return 'fi';
-  if (normalized.startsWith('es')) return 'es';
-  if (normalized.startsWith('de')) return 'de';
-  if (normalized.startsWith('pt')) return 'pt';
-  if (normalized.startsWith('it')) return 'it';
-  if (normalized.startsWith('fr')) return 'fr';
-  if (normalized.startsWith('en')) return 'en';
-  return 'en';
-}
-
-function resolveExtendedPromptTemplateTargetEnglishName(targetLang: string) {
-  const normalized = String(targetLang || '').trim().toLowerCase().replace(/_/g, '-');
-  if (!normalized) return null;
-  if (normalized === 'ru' || normalized.startsWith('ru-')) return 'Russian';
-  if (normalized === 'pl' || normalized.startsWith('pl-')) return 'Polish';
-  if (normalized === 'ar' || normalized.startsWith('ar-')) return 'Arabic';
-  if (normalized === 'nl' || normalized.startsWith('nl-')) return 'Dutch';
-  if (normalized === 'el' || normalized.startsWith('el-')) return 'Greek';
-  if (normalized === 'fa' || normalized.startsWith('fa-')) return 'Persian';
-  if (normalized === 'hu' || normalized.startsWith('hu-')) return 'Hungarian';
-  return null;
-}
-
-function retargetEnglishPromptTemplate(template: string, targetEnglishName: string) {
-  if (!template) return template;
-  const lines = template.split('\n');
-  if (lines.length === 0) return template;
-  lines[0] = lines[0].replace(/\bEnglish\b/g, targetEnglishName);
-  return lines.join('\n');
-}
-
-export function getTranslationPromptTemplateText(
-  templateId: TranslationPromptTemplateId,
-  targetLang: string
-): string {
-  if (!templateId) return '';
-  const extendedTemplate = getExtendedPromptTemplateText(templateId, targetLang);
-  if (extendedTemplate) return extendedTemplate;
-  const extendedTarget = resolveExtendedPromptTemplateTargetEnglishName(targetLang);
-  if (extendedTarget) {
-    const englishTemplate = translationPromptTemplatesByTargetLanguage[templateId]?.en || '';
-    return retargetEnglishPromptTemplate(englishTemplate, extendedTarget);
-  }
-  const normalizedTarget = normalizePromptTemplateTargetLanguage(targetLang);
-  return translationPromptTemplatesByTargetLanguage[templateId]?.[normalizedTarget] || '';
-}
+(Object.keys(promptTemplateEditorOverrides) as Language[]).forEach((language) => {
+  Object.assign(translations[language], promptTemplateEditorOverrides[language]);
+});
