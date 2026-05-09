@@ -1,0 +1,7 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Current prompt template overlay: subtitle_srt_dubbing_adapter
+# Merged from reviewed glossary categories: concise spoken style, ASR recovery vocabulary, and formal subtitle wording
+I am sorry=抱歉啊
+please wait=请稍等
+as soon as possible=尽快

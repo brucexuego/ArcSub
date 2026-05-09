@@ -22,6 +22,8 @@ export interface AcceleratorSnapshot {
   engineTypes?: string[];
   physIndex?: number;
   taskManagerIndex?: number;
+  openvinoDevice?: string;
+  openvinoIndex?: number;
 }
 
 interface CpuTicksSnapshot {
@@ -40,8 +42,17 @@ interface WindowsIntelDevices {
     model: string;
     dedicatedGB?: number;
     taskManagerOrder?: number;
+    openvinoDevice?: string;
+    openvinoIndex?: number;
   }>;
   npuModels: string[];
+}
+
+interface WindowsOpenvinoGpuDevice {
+  device: string;
+  index: number;
+  model: string;
+  modelKey: string;
 }
 
 interface WindowsGpuMetric {
@@ -72,11 +83,14 @@ export interface SystemResourceSnapshot {
 
 const WINDOWS_DXDIAG_CACHE_MS = 10 * 60 * 1000;
 const WINDOWS_DEVICE_CACHE_MS = 60 * 1000;
+const OPENVINO_DEVICE_CACHE_MS = 10 * 60 * 1000;
 let windowsDxdiagCachedAt = 0;
 let windowsDxdiagCached: WindowsIntelDxdiagEntry[] = [];
 let windowsDeviceCachedAt = 0;
 let windowsDeviceCached: WindowsIntelDevices = { gpus: [], npuModels: [] };
 let windowsGpuLuidByModel = new Map<string, string>();
+let openvinoGpuDeviceCachedAt = 0;
+let openvinoGpuDeviceCached: WindowsOpenvinoGpuDevice[] = [];
 
 function clampPercent(value: number) {
   if (!Number.isFinite(value)) return 0;
@@ -122,6 +136,15 @@ function normalizeModelKey(value: string) {
     .trim();
 }
 
+function normalizeGpuModelMatchKey(value: string) {
+  return normalizeModelKey(value)
+    .replace(/\((?:r|tm|igpu|dgpu)\)/g, '')
+    .replace(/\b(?:igpu|dgpu)\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function inferWindowsGpuMemoryProfile(model: string, dedicatedGB?: number) {
   const normalized = normalizeModelKey(model);
   if (/arc\b/.test(normalized)) return 'discrete';
@@ -146,6 +169,38 @@ function compareWindowsGpuTaskManagerOrder(
   if (dedicatedA !== dedicatedB) return dedicatedB - dedicatedA;
 
   return a.model.localeCompare(b.model);
+}
+
+function compareWindowsGpuOpenvinoOrder(
+  a: { model: string; dedicatedGB?: number; taskManagerOrder?: number; openvinoIndex?: number },
+  b: { model: string; dedicatedGB?: number; taskManagerOrder?: number; openvinoIndex?: number }
+) {
+  const openvinoA = a.openvinoIndex ?? Number.POSITIVE_INFINITY;
+  const openvinoB = b.openvinoIndex ?? Number.POSITIVE_INFINITY;
+  if (openvinoA !== openvinoB) return openvinoA - openvinoB;
+  return compareWindowsGpuTaskManagerOrder(a, b);
+}
+
+function matchOpenvinoGpuDevice(
+  model: string,
+  openvinoDevices: WindowsOpenvinoGpuDevice[],
+  usedDevices: Set<string>
+) {
+  const modelKey = normalizeGpuModelMatchKey(model);
+  if (!modelKey) return null;
+
+  let matched = openvinoDevices.find((device) => !usedDevices.has(device.device) && device.modelKey === modelKey);
+  if (!matched) {
+    matched = openvinoDevices.find(
+      (device) =>
+        !usedDevices.has(device.device) &&
+        (device.modelKey.includes(modelKey) || modelKey.includes(device.modelKey))
+    );
+  }
+  if (!matched) return null;
+
+  usedDevices.add(matched.device);
+  return matched;
 }
 
 function pickBestWindowsMetric(
@@ -272,6 +327,50 @@ async function readWindowsIntelDxdiagEntries() {
   }
 }
 
+async function readOpenvinoGpuDevices() {
+  const now = Date.now();
+  if (now - openvinoGpuDeviceCachedAt < OPENVINO_DEVICE_CACHE_MS) {
+    return openvinoGpuDeviceCached;
+  }
+
+  try {
+    const { OpenvinoBackend } = await import('../openvino_backend.js');
+    const core = await OpenvinoBackend.getCore();
+    const availableDevices =
+      typeof core?.getAvailableDevices === 'function'
+        ? toArray<string>(core.getAvailableDevices()).map((device) => String(device || '').trim())
+        : [];
+    openvinoGpuDeviceCached = availableDevices
+      .filter((device) => /^GPU(?:\.\d+)?$/i.test(device))
+      .map((device, fallbackIndex) => {
+        const canonicalDevice = device.toUpperCase();
+        const matchedIndex = canonicalDevice.match(/^GPU(?:\.(\d+))?$/);
+        const index = matchedIndex?.[1] != null ? Number(matchedIndex[1]) : fallbackIndex;
+        let model = '';
+        try {
+          model =
+            typeof core?.getProperty === 'function'
+              ? String(core.getProperty(device, 'FULL_DEVICE_NAME') || '').trim()
+              : '';
+        } catch {
+          model = '';
+        }
+        return {
+          device: canonicalDevice,
+          index: Number.isFinite(index) ? index : fallbackIndex,
+          model,
+          modelKey: normalizeGpuModelMatchKey(model),
+        };
+      })
+      .sort((a, b) => a.index - b.index);
+  } catch {
+    openvinoGpuDeviceCached = [];
+  }
+
+  openvinoGpuDeviceCachedAt = now;
+  return openvinoGpuDeviceCached;
+}
+
 async function readWindowsIntelDevices() {
   const now = Date.now();
   if (now - windowsDeviceCachedAt < WINDOWS_DEVICE_CACHE_MS) {
@@ -331,6 +430,18 @@ async function readWindowsIntelDevices() {
       });
     }
 
+    const openvinoGpuDevices = await readOpenvinoGpuDevices();
+    const usedOpenvinoDevices = new Set<string>();
+    const withOpenvinoDevice = (model: string) => {
+      const matched = matchOpenvinoGpuDevice(model, openvinoGpuDevices, usedOpenvinoDevices);
+      return matched
+        ? {
+            openvinoDevice: matched.device,
+            openvinoIndex: matched.index,
+          }
+        : {};
+    };
+
     const gpuModels = uniqueStrings(
       toArray<{ Name?: string }>(payload?.gpu)
         .map((item) => String(item?.Name || '').trim())
@@ -340,6 +451,7 @@ async function readWindowsIntelDevices() {
       model,
       dedicatedGB: regByModel.get(normalizeModelKey(model))?.dedicatedGB,
       taskManagerOrder: regByModel.get(normalizeModelKey(model))?.taskManagerOrder,
+      ...withOpenvinoDevice(model),
     }));
 
     // Include Intel adapters that only appear in registry enumeration.
@@ -349,9 +461,10 @@ async function readWindowsIntelDevices() {
         model: info.model,
         dedicatedGB: info.dedicatedGB,
         taskManagerOrder: info.taskManagerOrder,
+        ...withOpenvinoDevice(info.model),
       });
     }
-    gpus.sort(compareWindowsGpuTaskManagerOrder);
+    gpus.sort(compareWindowsGpuOpenvinoOrder);
 
     const npuModels = uniqueStrings(
       toArray<{ Name?: string }>(payload?.npu)
@@ -544,7 +657,7 @@ async function detectWindowsAccelerators() {
         windowsGpuLuidByModel.set(modelKey, metric.luid);
       }
       accelerators.push({
-        id: `windows-gpu-${i}`,
+        id: `windows-gpu-${device?.openvinoDevice || i}`,
         kind: 'gpu',
         vendor: 'intel',
         model,
@@ -556,6 +669,8 @@ async function detectWindowsAccelerators() {
         engineTypes: metric?.engineTypes || [],
         physIndex: metric?.physIndex,
         taskManagerIndex: i,
+        openvinoDevice: device?.openvinoDevice,
+        openvinoIndex: device?.openvinoIndex,
       });
     }
 

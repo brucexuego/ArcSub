@@ -1,0 +1,44 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Current prompt template overlay: subtitle_structure_replacement
+# Merged from reviewed glossary categories: concise spoken style and ASR recovery vocabulary
+thank you=thank you
+thank you very much=thank you very much
+I do not know=I do not know
+I understand=I understand
+all right=all right
+wait a second=wait a second
+are you okay?=are you okay?
+what happened?=what happened?
+let us go=let us go
+it is okay=it is okay
+please do not worry=please do not worry
+come on=come on
+no problem=no problem
+let me think=let me think
+utterance=utterance
+speaker label=speaker label
+speaker turn=speaker turn
+timecode=timecode
+word timestamp=word timestamp
+filler word=filler word
+background noise=background noise
+overlap speech=overlap speech
+speaker overlap=speaker overlap
+inaudible=inaudible
+pause=pause
+misrecognition=misrecognition
+homophone=homophone
+misheard word=misheard word
+dropped word=dropped word
+repeated word=repeated word
+truncated word=truncated word
+unclear speech=unclear speech
+cross-talk=cross-talk
+false start=false start
+self-correction=self-correction
+disfluency=disfluency
+hesitation=hesitation
+partial word=partial word
+cut-off=cut-off
+speaker change=speaker change

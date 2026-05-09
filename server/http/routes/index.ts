@@ -3,6 +3,7 @@ import { registerDownloadProgressRoute } from './download_routes.js';
 import { registerExportRoutes } from './export_routes.js';
 import { registerSystemAndLocalModelRoutes } from './local_model_routes.js';
 import { registerProjectRoutes } from './project_routes.js';
+import { registerPromptTemplateRoutes } from './prompt_template_routes.js';
 import { registerSettingsCrudRoutes } from './settings_routes.js';
 import { registerSettingsTestConnectionRoute } from './settings_test_connection_route.js';
 import { registerTranscribeRoute } from './transcribe_route.js';
@@ -37,6 +38,7 @@ export function registerHttpRoutes(app: express.Express, deps: RegisterHttpRoute
     isRedirectStatus: deps.isRedirectStatus,
   });
   registerDownloadProgressRoute(app, { parseHttpUrl: deps.parseHttpUrl, toClientPath: deps.toClientPath });
+  registerPromptTemplateRoutes(app);
   registerTranscribeRoute(app, { writeAsrLog: deps.writeAsrLog, isAbortLikeError: deps.isAbortLikeError });
   registerTranslationRoutes(app, { writeAsrLog: deps.writeAsrLog, isAbortLikeError: deps.isAbortLikeError });
   registerExportRoutes(app);

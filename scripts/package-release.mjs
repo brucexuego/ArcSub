@@ -43,6 +43,7 @@ const releaseCopies = [
   { source: 'dist', destination: 'dist' },
   { source: 'public', destination: 'public' },
   { source: 'server/glossaries', destination: 'server/glossaries' },
+  { source: 'server/prompts', destination: 'server/prompts' },
   { source: 'tools_src/openvino_asr_env.py', destination: 'tools_src/openvino_asr_env.py' },
   { source: 'tools_src/python_runtime_bootstrap.py', destination: 'tools_src/python_runtime_bootstrap.py' },
   { source: 'tools_src/openvino_genai_translate_helper.mjs', destination: 'tools_src/openvino_genai_translate_helper.mjs' },

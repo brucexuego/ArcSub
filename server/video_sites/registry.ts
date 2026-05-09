@@ -176,6 +176,10 @@ function validateManifest(raw: unknown): VideoSiteManifest {
     }
     const parse = candidate.parse as Record<string, unknown>;
     manifest.parse = {};
+    if (parse.alwaysUseHandler !== undefined) {
+      if (typeof parse.alwaysUseHandler !== 'boolean') throw new Error('parse.alwaysUseHandler must be a boolean');
+      manifest.parse.alwaysUseHandler = parse.alwaysUseHandler;
+    }
     if (parse.fallbackOn !== undefined) {
       if (!isStringArray(parse.fallbackOn)) throw new Error('parse.fallbackOn must be a string array');
       const invalid = parse.fallbackOn.filter((item) => !VALID_PARSE_TRIGGERS.has(item as ParseFailureTrigger));
@@ -431,8 +435,13 @@ export function detectParseFailureTriggers(logText: string): ParseFailureTrigger
   return Array.from(new Set(triggers));
 }
 
+export function shouldAlwaysUseParseHandler(rule: LoadedVideoSiteManifest | null) {
+  return Boolean(rule?.manifest.handlers?.parse && rule.manifest.parse?.alwaysUseHandler);
+}
+
 export function shouldUseParseHandler(rule: LoadedVideoSiteManifest | null, triggers: ParseFailureTrigger[]) {
   if (!rule?.manifest.handlers?.parse) return false;
+  if (rule.manifest.parse?.alwaysUseHandler) return true;
   const requiredTriggers = rule.manifest.parse?.fallbackOn || [];
   if (requiredTriggers.length === 0) return false;
   return requiredTriggers.some((trigger) => triggers.includes(trigger));

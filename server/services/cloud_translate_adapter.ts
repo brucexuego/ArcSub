@@ -218,6 +218,19 @@ function buildGeminiDefaultSystemInstruction() {
   };
 }
 
+function buildSubtitleLineIntegrityRules(lineSafeMode?: boolean) {
+  return [
+    'Line-count integrity: the output must contain exactly the same number of translatable lines or subtitle blocks as the input.',
+    'Never merge two input lines into one output line, even if they form one grammatical sentence.',
+    'Never create, delete, duplicate, leave empty, or reorder lines.',
+    'If one sentence is fragmented across multiple input lines, split the translation across the same line boundaries.',
+    lineSafeMode
+      ? 'Keep every [[Lxxxxx]] marker exactly unchanged at the start of its matching output line.'
+      : 'Keep timestamps, indexes, tags, structured prefixes, metadata, and line breaks unchanged when they appear in the input.',
+    'Output only the translation, with no commentary, notes, markdown, or analysis.',
+  ];
+}
+
 function buildGeminiConciseTranslationPrompt(options: CloudTranslateAdapterRequestOptions) {
   const targetLang = String(options.targetLang || '').trim() || 'the requested target language';
   const sourceLang = String(options.sourceLang || '').trim();
@@ -232,6 +245,7 @@ function buildGeminiConciseTranslationPrompt(options: CloudTranslateAdapterReque
     options.lineSafeMode
       ? 'If a line starts with a marker such as [[L00001]], keep every marker exactly unchanged and keep one output line per input line.'
       : 'Keep timestamps and line breaks.',
+    ...buildSubtitleLineIntegrityRules(options.lineSafeMode),
     glossary ? `Glossary / terminology: ${glossary}` : '',
     additional ? `Additional requirements: ${additional}` : '',
     String(options.text || ''),

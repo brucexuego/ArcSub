@@ -1,0 +1,10 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Current prompt template overlay: subtitle_structure_replacement
+# Merged from reviewed glossary categories: concise spoken style and ASR recovery vocabulary
+OpenAI=OpenAI
+Codex=Codex
+OpenVINO=OpenVINO
+Whisper=Whisper
+Qwen=Qwen
+Gemma=Gemma

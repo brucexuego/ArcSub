@@ -238,7 +238,7 @@ async function main() {
     {
       text: sample,
       targetLang: 'English',
-      promptTemplateId: 'subtitle_general',
+      promptTemplateId: 'subtitle_structure_replacement',
       enableJsonLineRepair: false,
       qualityMode: 'template_validated',
       supportsContextMode: false,
@@ -257,7 +257,7 @@ async function main() {
     {
       text: sample,
       targetLang: 'English',
-      promptTemplateId: 'subtitle_general',
+      promptTemplateId: 'subtitle_structure_replacement',
       enableJsonLineRepair: true,
       qualityMode: 'json_strict',
       supportsContextMode: false,
@@ -276,7 +276,7 @@ async function main() {
     {
       text: sample,
       targetLang: 'English',
-      promptTemplateId: 'subtitle_general',
+      promptTemplateId: 'subtitle_structure_replacement',
       enableJsonLineRepair: false,
       qualityMode: 'template_validated',
       supportsContextMode: false,

@@ -8,6 +8,7 @@ import {
   buildYtDlpArgsForUrl,
   detectParseFailureTriggers,
   loadSiteHandlerModule,
+  shouldAlwaysUseParseHandler,
   shouldUseDownloadHandler,
   shouldUseParseHandler,
 } from '../video_sites/registry.js';
@@ -82,6 +83,25 @@ export class VideoService {
   static async parseMetadata(url: string) {
     await this.ensureVideoToolsReady();
     const { args, rule } = buildYtDlpArgsForUrl(url, 'metadata', ['--dump-single-json', url]);
+    if (shouldAlwaysUseParseHandler(rule)) {
+      const handler = await loadSiteHandlerModule(rule!, 'parse');
+      if (!handler?.parseMetadataFallback) {
+        throw new Error(`Parse handler missing for site rule ${rule!.manifest.id}`);
+      }
+      const metadata = await handler.parseMetadataFallback({
+        url,
+        rule: rule!,
+        ytDlpResult: { code: 0, stdout: '', stderr: '' },
+        failureTriggers: [],
+      });
+      return attachMetadataDebug(
+        metadata,
+        rule!.manifest.id,
+        `handler:${rule!.manifest.id}`,
+        { forcedParseHandler: true }
+      );
+    }
+
     const result = await runYtDlp(args);
     if (result.code === 0) {
       return attachMetadataDebug(

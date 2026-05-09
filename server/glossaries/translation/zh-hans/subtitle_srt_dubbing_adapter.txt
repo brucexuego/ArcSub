@@ -1,0 +1,54 @@
+# ArcSub maintained glossary asset
+# Source references: server/glossaries/translation/SOURCES.md
+# Current prompt template overlay: subtitle_srt_dubbing_adapter
+# Merged from reviewed glossary categories: concise spoken style, ASR recovery vocabulary, and formal subtitle wording
+thank you=谢谢您
+thank you very much=真的很谢谢你
+I do not know=我不知道
+I understand=我明白了
+all right=好啊
+wait a second=等一下
+are you okay?=你还好吗？
+what happened?=怎么了？
+let us go=走吧
+it is okay=没有问题
+please do not worry=请不必担心
+come on=拜托
+no problem=没问题
+let me think=我想一下
+utterance=话语
+speaker label=说话人标签
+speaker turn=说话人切换
+timecode=时间码
+word timestamp=字词时间戳
+filler word=赘词
+background noise=背景噪声
+overlap speech=重叠语音
+speaker overlap=说话人重叠
+inaudible=听不清楚
+pause=停顿
+misrecognition=误识别
+homophone=同音词
+misheard word=听错字词
+dropped word=漏字词
+repeated word=重复字词
+truncated word=截断字词
+unclear speech=语音不清
+cross-talk=交叉说话
+false start=起头修正
+self-correction=自我修正
+disfluency=言语不流畅
+hesitation=犹豫停顿
+partial word=残缺字词
+cut-off=中途截断
+speaker change=说话者切换
+I am sorry=很抱歉
+please confirm=请确认
+we need to=我们需要
+for example=例如
+according to=根据
+please note=请注意
+however=然而
+therefore=因此
+in addition=此外
+as a result=因此

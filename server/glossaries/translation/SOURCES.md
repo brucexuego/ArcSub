@@ -57,7 +57,7 @@ Examples:
 - `speech recognition` keeps `語音辨識` instead of mechanically forcing a less common official variant
 - `token` is normalized to `詞元` / `词元` in the technical subtitle layer because ArcSub is AI-heavy and the auth-token sense is not the dominant target here
 - `deployment`, `latency`, `context window`, and `speaker diarization` remain reviewed product terms until a better directly licensable upstream glossary is added
-- `subtitle_asr_recovery`, `subtitle_concise_spoken`, and `subtitle_formal_precise` include reviewed template vocabulary even when there is no single upstream source because those terms need to stay aligned with ArcSub's diagnostics, editor wording, and subtitle tone targets
+- the two current prompt templates use same-name glossary overlays: `subtitle_structure_replacement.txt` and `subtitle_srt_dubbing_adapter.txt`. These files are merged from reviewed concise spoken, ASR recovery, and formal subtitle vocabulary so the runtime no longer depends on legacy prompt-template names.
 - prompt-safety vocabulary such as `prompt injection`, `jailbreak`, `guardrail`, and ASR diagnostic labels such as `misrecognition`, `hesitation`, and `speaker change` are also reviewed locally because ArcSub needs stable wording across runtime logs, prompt templates, and subtitle repair flows
 
 When adding more sources later, keep source-managed shared layers conservative and place product-specific deviations in locale override files where possible.

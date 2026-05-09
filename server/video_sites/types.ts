@@ -62,6 +62,7 @@ export interface VideoSitePlaybackConfig {
 }
 
 export interface VideoSiteParseConfig {
+  alwaysUseHandler?: boolean;
   fallbackOn?: ParseFailureTrigger[];
 }
 
