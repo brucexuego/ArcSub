@@ -104,8 +104,10 @@ async function readTemplateContent(input: {
   root: string;
   id: string;
   targetLang: string;
+  fallback?: boolean;
 }): Promise<{ content: string; language: string; filePath: string } | null> {
-  for (const language of languageCandidates(input.targetLang)) {
+  const candidates = input.fallback ? languageCandidates(input.targetLang) : [normalizeWritableLanguage(input.targetLang)];
+  for (const language of candidates) {
     const filePath = path.resolve(input.root, input.id, `${language}.txt`);
     if (!isInside(input.root, filePath)) continue;
     if (!(await fs.pathExists(filePath))) continue;
@@ -159,8 +161,10 @@ export class PromptTemplateService {
 
     const localRoot = this.getLocalRoot();
     const builtInRoot = this.getBuiltInRoot();
-    const local = await readTemplateContent({ root: localRoot, id, targetLang: input.targetLang });
-    const builtIn = local ? null : await readTemplateContent({ root: builtInRoot, id, targetLang: input.targetLang });
+    const local = await readTemplateContent({ root: localRoot, id, targetLang: input.targetLang, fallback: false });
+    const builtIn = local
+      ? null
+      : await readTemplateContent({ root: builtInRoot, id, targetLang: input.targetLang, fallback: true });
     const resolved = local || builtIn;
     if (!resolved) return null;
 
