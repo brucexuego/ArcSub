@@ -180,6 +180,17 @@ function isGemma3Model(model: string | undefined | null) {
   return /^gemma-3[-_]/i.test(stripModelPrefix(String(model || '')));
 }
 
+function getDefaultGeminiThinkingConfig(model: string | undefined | null) {
+  const normalized = stripModelPrefix(String(model || '')).toLowerCase();
+  if (/^gemini-2\.5-flash(?:[-_]|$)/.test(normalized)) {
+    return { thinkingBudget: 0 };
+  }
+  if (/^gemini-3(?:\.\d+)?-flash(?:[-_]|$)/.test(normalized)) {
+    return { thinkingLevel: 'minimal' };
+  }
+  return null;
+}
+
 function shouldUseGeminiSingleUserPrompt(
   request: ReturnType<typeof buildCanonicalTranslationRequest>['request'],
   geminiOptions: Record<string, any>
@@ -365,6 +376,9 @@ function parseOpenAiChatEventStream(rawText: string): ParsedOpenAiChatEventStrea
         messageContent += delta.content
           .map((part: any) => (typeof part?.text === 'string' ? part.text : typeof part === 'string' ? part : ''))
           .join('');
+      }
+      if (typeof delta?.reasoning === 'string') {
+        reasoningContent += delta.reasoning;
       }
       if (typeof delta?.reasoning_content === 'string') {
         reasoningContent += delta.reasoning_content;
@@ -628,8 +642,13 @@ async function requestGeminiNativeSdk(
       config.systemInstruction = systemInstruction;
     }
   }
-  if (isPlainObject(bodyOptions.thinkingConfig) && !config.thinkingConfig) {
+  if (isPlainObject(bodyOptions.thinkingConfig)) {
     config.thinkingConfig = bodyOptions.thinkingConfig;
+  } else {
+    const defaultThinkingConfig = getDefaultGeminiThinkingConfig(requestModel);
+    if (defaultThinkingConfig && !config.thinkingConfig) {
+      config.thinkingConfig = defaultThinkingConfig;
+    }
   }
   if (isPlainObject(geminiOptions.thinkingConfig)) {
     config.thinkingConfig = geminiOptions.thinkingConfig;

@@ -11,6 +11,11 @@ function parseCohereText(data: any) {
     .join('');
 }
 
+function isCohereReasoningModel(model: string | undefined) {
+  const normalized = String(model || '').toLowerCase();
+  return normalized.includes('reasoning');
+}
+
 export const cohereChatAdapter: LlmAdapter = {
   key: 'cohere-chat',
   capabilities: getCanonicalProviderCapabilities('cohere-chat'),
@@ -62,6 +67,8 @@ export const cohereChatAdapter: LlmAdapter = {
         type: 'enabled',
         ...(input.reasoning.budgetTokens != null ? { budget_tokens: input.reasoning.budgetTokens } : {}),
       };
+    } else if (isCohereReasoningModel(context.modelOverride || input.model)) {
+      body.thinking = { type: 'disabled' };
     }
 
     return {

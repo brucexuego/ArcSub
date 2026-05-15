@@ -358,6 +358,11 @@ function startProviderProgressPulse(input: {
   }, 15_000);
 }
 
+function isRecoverableAlignmentError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /empty content|empty response|no content/i.test(message);
+}
+
 export async function runCloudTranslationOrchestrator(
   input: CloudTranslationOrchestratorInput,
   deps: CloudTranslationOrchestratorDeps,
@@ -508,7 +513,8 @@ export async function runCloudTranslationOrchestrator(
         progressMessage: `Retrying cloud translation as single line (${unit.index})...`,
       });
     } catch (error) {
-      if (!deps.isProviderContentFilterError(error)) {
+      const recoverableAlignmentError = deps.isProviderContentFilterError(error) || isRecoverableAlignmentError(error);
+      if (!recoverableAlignmentError) {
         throw error;
       }
       addWarning('line_json_map_policy_source_fallback');
@@ -612,10 +618,22 @@ export async function runCloudTranslationOrchestrator(
       addWarning('line_json_map_repair_disabled');
     }
 
-    const rebound = deps.rebindByLineIndex(units, chunkOutput);
-    if (rebound !== null) {
-      addWarning('line_index_rebind_applied');
-      return deps.normalizeTargetLanguageOutput(rebound, input.targetLang);
+    if (input.enableJsonLineRepair) {
+      if (units.length > 1) {
+        addWarning('cloud_context_chunk_split');
+        const midpoint = Math.ceil(units.length / 2);
+        const left = await processCloudLineSafeChunk(units.slice(0, midpoint));
+        const right = await processCloudLineSafeChunk(units.slice(midpoint));
+        return [left, right].filter(Boolean).join('\n');
+      }
+
+      return translateSingleCloudUnit(units[0]);
+    } else {
+      const rebound = deps.rebindByLineIndex(units, chunkOutput);
+      if (rebound !== null) {
+        addWarning('line_index_rebind_applied');
+        return deps.normalizeTargetLanguageOutput(rebound, input.targetLang);
+      }
     }
 
     addWarning('line_alignment_repair_failed');
@@ -773,7 +791,7 @@ export async function runCloudTranslationOrchestrator(
           retrySameRequest: false,
         });
       } catch (error) {
-        if (deps.isRetryableError(error)) {
+        if (deps.isRetryableError(error) || isRecoverableAlignmentError(error)) {
           const splitOutput = await splitAndRetry();
           if (splitOutput !== null) return splitOutput;
         }
@@ -791,14 +809,16 @@ export async function runCloudTranslationOrchestrator(
         return deps.normalizeTargetLanguageOutput(restored, input.targetLang);
       }
 
-      const rebound = deps.rebindByLineIndex(units, normalized);
-      if (rebound !== null) {
-        addWarning('line_index_rebind_applied');
-        durationsMs.push(Date.now() - startedAt);
-        lineCounts.push(units.length);
-        charCounts.push(charCount);
-        estimatedOutputTokens.push(outputTokenLimit);
-        return deps.normalizeTargetLanguageOutput(rebound, input.targetLang);
+      if (!(providerBatchMode === 'line_safe' && input.enableJsonLineRepair)) {
+        const rebound = deps.rebindByLineIndex(units, normalized);
+        if (rebound !== null) {
+          addWarning('line_index_rebind_applied');
+          durationsMs.push(Date.now() - startedAt);
+          lineCounts.push(units.length);
+          charCounts.push(charCount);
+          estimatedOutputTokens.push(outputTokenLimit);
+          return deps.normalizeTargetLanguageOutput(rebound, input.targetLang);
+        }
       }
 
       const splitOutput = await splitAndRetry();

@@ -7,6 +7,10 @@ import {
 import { getCloudTranslateAdapter } from '../server/services/cloud_translate_adapter.js';
 import { resolveCloudTranslateProvider } from '../server/services/cloud_translate_provider.js';
 import { resolveCloudTranslateBatchingProfile } from '../server/services/cloud_translate/profiles/batching.js';
+import { openAiCompatibleChatAdapter } from '../server/services/llm/adapters/openai_chat_adapter.js';
+import { TranslationService } from '../server/services/translation_service.js';
+import { runLocalTranslationOrchestrator } from '../server/services/local_llm/orchestrators/local_translation_orchestrator.js';
+import { OpenvinoRuntimeManager } from '../server/openvino_runtime_manager.js';
 
 class SmokeProviderHttpError extends Error {
   status: number;
@@ -57,7 +61,7 @@ function parseLineSafeOutput(output: string, units: CloudTranslationLineSafeUnit
   return units.map((unit) => `${unit.prefix}${map.get(unit.index) || ''}`.trim()).join('\n');
 }
 
-function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestratorDeps {
+function buildDeps(mode: 'normal' | 'strict-repair' | 'strict-repair-null-same-lines'): CloudTranslationOrchestratorDeps {
   return {
     getCloudContextConfig: () => ({
       enabled: false,
@@ -98,6 +102,16 @@ function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestrat
           },
         };
       }
+      if (mode === 'strict-repair-null-same-lines' && options.lineSafeMode) {
+        const translated = text
+          .split(/\r?\n/)
+          .map((line) => line.replace(/^\[\[L\d{5}\]\]\s*/, 'markerless '))
+          .join('\n');
+        return {
+          text: translated,
+          meta: { endpointUrl, fallbackUsed: false, fallbackType: null },
+        };
+      }
       if (options.lineSafeMode) {
         const translated = text
           .split(/\r?\n/)
@@ -121,11 +135,14 @@ function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestrat
     buildLineSafeInput,
     parseLineSafeOutput,
     normalizeTargetLanguageOutput: (output) => String(output || '').trim(),
-    repairLineAlignmentWithJsonMap: async (_provider, _endpointUrl, units) => ({
-      text: units.map((unit) => `${unit.prefix}strict repaired ${unit.content}`.trim()).join('\n'),
-      missingCount: 0,
-      warnings: ['line_json_map_repair_applied'],
-    }),
+    repairLineAlignmentWithJsonMap: async (_provider, _endpointUrl, units) =>
+      mode === 'strict-repair-null-same-lines'
+        ? null
+        : {
+            text: units.map((unit) => `${unit.prefix}strict repaired ${unit.content}`.trim()).join('\n'),
+            missingCount: 0,
+            warnings: ['line_json_map_repair_applied'],
+          },
     rebindByLineIndex: (units, translatedText) => {
       const lines = String(translatedText || '').split(/\r?\n/);
       if (lines.length < units.length) return null;
@@ -214,6 +231,159 @@ function assertExplicitProviderBatchingFalseDisablesDefaultProfile() {
   assert(profile === null, 'Explicit translation.batching.enabled=false did not disable provider default batching.');
 }
 
+function assertOpenAiCompatibleIpv6LoopbackDisablesThinking() {
+  const request = openAiCompatibleChatAdapter.buildRequest(
+    {
+      model: 'Qwen3-4B',
+      messages: [{ role: 'user', parts: [{ type: 'text', text: 'Translate this subtitle.' }] }],
+      metadata: {},
+    } as any,
+    {
+      endpointUrl: 'http://[::1]:8000/v1/chat/completions',
+      apiKey: 'test-key',
+      modelOverride: 'Qwen3-4B',
+    }
+  );
+  const body = JSON.parse(String(request.body || '{}'));
+  assert(
+    body?.chat_template_kwargs?.enable_thinking === false,
+    'IPv6 loopback OpenAI-compatible Qwen3 request did not disable thinking.'
+  );
+}
+
+function assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible() {
+  const resolvedProvider = resolveCloudTranslateProvider({
+    url: 'http://localhost:11434/v1/chat/completions',
+    modelName: 'Ollama OpenAI-compatible',
+    model: 'qwen3:4b',
+  });
+  assert(
+    resolvedProvider.provider === 'openai-compatible',
+    'Ollama OpenAI-compatible chat endpoint was routed to native Ollama provider.'
+  );
+  assert(
+    resolvedProvider.endpointUrl === 'http://localhost:11434/v1/chat/completions',
+    'Ollama OpenAI-compatible chat endpoint URL was rewritten.'
+  );
+}
+
+function assertPrefixOnlyTranslatedLinesAreCountedAsLoss() {
+  const issues = (TranslationService as any).getTranslationQualityIssues(
+    '[00:00:00] hello\n[00:00:01] world',
+    '[00:00:00]\n[00:00:01] [[L00002]]',
+    'Traditional Chinese',
+    { expectedLineCount: 2 }
+  );
+  assert(
+    Array.isArray(issues) && issues.includes('line_count_loss'),
+    'Prefix-only translated rows were counted as valid translated content.'
+  );
+}
+
+async function assertTranslateGemmaCoverageLossFallsBackWhenChunkCannotSplit() {
+  const previousTranslateWithLocalModel = (OpenvinoRuntimeManager as any).translateWithLocalModel;
+  const generations = ['hello\nworld', 'translated one', 'translated two'];
+  (OpenvinoRuntimeManager as any).translateWithLocalModel = async () => generations.shift() || '完成';
+
+  try {
+    const result = await runLocalTranslationOrchestrator(
+      {
+        input: {
+          text: '[00:00:00] hello\n[00:00:01] world',
+          targetLang: 'Traditional Chinese',
+          enableJsonLineRepair: true,
+        },
+        localModel: {
+          id: 'smoke-translategemma',
+          type: 'translate',
+          displayName: 'Smoke TranslateGemma',
+          repoId: 'google/translategemma-smoke',
+          localSubdir: 'smoke-translategemma',
+          requiredFiles: [],
+          runtime: 'openvino-llm-node',
+          runtimeLayout: 'translate-llm',
+          installMode: 'hf-direct',
+          sourceFormat: 'openvino-ir',
+          conversionMethod: 'direct-download',
+          device: 'AUTO',
+          source: 'builtin',
+        } as any,
+        modelStrategy: {
+          family: 'translategemma',
+          promptStyle: 'chat',
+          generationStyle: 'chat',
+        } as any,
+        localProfile: {
+          profileId: 'smoke-translategemma',
+          profileFamily: 'translategemma',
+          baseline: { baselineConfidence: 'high', taskFamily: 'translation' },
+          usedFallbackBaseline: false,
+        } as any,
+        localTranslationProfile: {
+          effectivePromptStyle: 'chat',
+          modelProfile: { id: 'smoke-translategemma' },
+        } as any,
+        translationQualityMode: 'json_strict' as any,
+        residualRetryLimit: 0,
+        jsonRepairMaxLinesBeforeSplit: 0,
+      },
+      {
+        throwIfAborted: () => {},
+        buildLineSafeUnits,
+        buildSourceChunkText: (units) =>
+          units.map((unit) => `${unit.prefix}${String(unit.content || '').replace(/^(\[[^\]]+\]\s*)+/, '')}`).join('\n'),
+        buildLineSafeInput,
+        splitLineSafeUnits: (units) => [units],
+        splitLineSafeUnitsForLocalTranslation: async (units) => [units],
+        splitLineSafeUnitsForTranslateGemma: async (units, options) => {
+          options.onBatchPlan?.({
+            mode: 'fixed_lines',
+            batchCount: 1,
+            lineCounts: [units.length],
+            promptTokens: [0],
+            durationsMs: [],
+            totalDurationMs: null,
+            maxDurationMs: null,
+          } as any);
+          return [units];
+        },
+        stripStructuredPrefix: (line) => String(line || '').replace(/^(\[[^\]]+\]\s*)+/, '').trim(),
+        stripInjectedSpeakerContext: (line) => String(line || '').replace(/<<SPEAKER:[^>]+>>\s*/gi, '').trim(),
+        parseLocalTranslatedText: (raw) => String(raw || ''),
+        parseLineSafeOutput: () => null,
+        rebindByLineIndex: () => null,
+        normalizeTargetLanguageOutput: (text) => String(text || '').trim(),
+        getTranslationQualityIssues: (_source, translated) => {
+          const text = String(translated || '').trim().toLowerCase();
+          if (!text) return ['empty_output'];
+          if (/\bhello\b|\bworld\b/.test(text)) return ['pass_through'];
+          return [];
+        },
+        addQualityIssueWarnings: (issues, addWarning) => {
+          for (const issue of issues) addWarning(`quality_issue_${issue}`);
+        },
+        buildStrictRetryInstruction: () => 'Retry with a valid translation.',
+        buildTargetLanguageDescriptor: (targetLang) => targetLang,
+        estimateLocalMaxNewTokens: () => 64,
+        buildLocalTranslationPrompt: (input) => input.text,
+        buildLocalTranslationMessages: () => null,
+        buildLocalGenerationOptions: () => ({}),
+        repairLineAlignmentWithLocalJsonMap: async () => null,
+        isLikelyPassThroughTranslation: () => false,
+        isPlainTranslationProbeMode: () => false,
+        getTranslateRuntimeDebug: () => null,
+      } as any
+    );
+
+    assert(
+      result.translatedText.includes('translated one') && result.translatedText.includes('translated two'),
+      'TranslateGemma coverage-loss fallback did not recover with individual lines.'
+    );
+  } finally {
+    (OpenvinoRuntimeManager as any).translateWithLocalModel = previousTranslateWithLocalModel;
+  }
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -272,6 +442,31 @@ async function main() {
   assert(strict.warnings.includes('line_json_map_repair_applied'), 'cloud_strict did not use JSON repair fallback.');
   assert(strict.cloudQuota?.estimatedTotalTokens === 20, 'quota estimate was not preserved in debug output.');
 
+  const strictMarkerless = await runCloudTranslationOrchestrator(
+    {
+      text: sample,
+      targetLang: 'English',
+      promptTemplateId: 'subtitle_structure_replacement',
+      enableJsonLineRepair: true,
+      qualityMode: 'json_strict',
+      supportsContextMode: false,
+      providerRequest: {
+        provider: 'openai-compatible',
+        endpointUrl: 'https://example.test/v1/chat/completions',
+      },
+    },
+    buildDeps('strict-repair-null-same-lines')
+  );
+  assert(
+    !strictMarkerless.warnings.includes('line_index_rebind_applied'),
+    'cloud_strict accepted positional rebind after marker loss.'
+  );
+  assert(
+    strictMarkerless.warnings.includes('cloud_context_chunk_split') ||
+      strictMarkerless.warnings.includes('cloud_context_single_line_fallback'),
+    'cloud_strict did not split or fall back after failed JSON repair.'
+  );
+
   const batched = await runCloudTranslationOrchestrator(
     {
       text: sample,
@@ -304,6 +499,10 @@ async function main() {
 
   await assertOpenAiSseErrorFrameFails();
   assertExplicitProviderBatchingFalseDisablesDefaultProfile();
+  assertOpenAiCompatibleIpv6LoopbackDisablesThinking();
+  assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible();
+  assertPrefixOnlyTranslatedLinesAreCountedAsLoss();
+  await assertTranslateGemmaCoverageLossFallsBackWhenChunkCannotSplit();
 
   console.log('cloud translation orchestrator smoke passed');
 }

@@ -1,6 +1,7 @@
 import { getCanonicalProviderCapabilities } from '../canonical/llm_capabilities.js';
 import type { CanonicalLlmRequest, CanonicalLlmResponse } from '../canonical/llm_types.js';
-import { buildOpenAiChatMessages, wantsJsonObject, wantsJsonSchema } from '../mapping/provider_payloads.js';
+import { buildOpenAiChatMessages, getCanonicalUserText, wantsJsonObject, wantsJsonSchema } from '../mapping/provider_payloads.js';
+import { buildTranslateGemmaMessages } from '../../local_llm/translategemma.js';
 import type { LlmAdapter, LlmAdapterContext, ProviderHttpResponse } from './base.js';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -30,6 +31,96 @@ function isGitHubModelsEndpoint(endpointUrl: string) {
   }
 }
 
+function getEndpointHostname(endpointUrl: string) {
+  try {
+    return new URL(endpointUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return '';
+  }
+}
+
+function isNvidiaEndpoint(endpointUrl: string) {
+  return getEndpointHostname(endpointUrl) === 'integrate.api.nvidia.com';
+}
+
+function isXAiEndpoint(endpointUrl: string) {
+  const hostname = getEndpointHostname(endpointUrl);
+  return hostname === 'api.x.ai' || hostname.endsWith('.x.ai');
+}
+
+function isPrivateOrLocalEndpoint(endpointUrl: string) {
+  const hostname = getEndpointHostname(endpointUrl);
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname.endsWith('.local') ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
+}
+
+function isQwenThinkingFamily(model: string) {
+  const normalized = String(model || '').toLowerCase();
+  return (
+    /\bqwen[-_/. ]?3(?:\.\d+)?\b/.test(normalized) ||
+    normalized.includes('qwen3') ||
+    normalized.includes('qwen-3')
+  );
+}
+
+function isGemmaThinkingFamily(model: string) {
+  const normalized = String(model || '').toLowerCase();
+  return (
+    /\bgemma[-_/. ]?4\b/.test(normalized) ||
+    normalized.includes('gemma4') ||
+    normalized.includes('gemma-4')
+  );
+}
+
+function isTranslateGemmaVllmModel(model: string) {
+  const normalized = String(model || '').toLowerCase();
+  return normalized.includes('translategemma') && normalized.includes('vllm');
+}
+
+function shouldDisableThinkingByDefault(input: CanonicalLlmRequest, context: LlmAdapterContext) {
+  const model = String(context.modelOverride || input.model || '');
+  if (!isQwenThinkingFamily(model) && !isGemmaThinkingFamily(model)) return false;
+  const hints = `${model} ${context.endpointUrl} ${input.metadata?.providerTranslationProfileId || ''}`.toLowerCase();
+  return isPrivateOrLocalEndpoint(context.endpointUrl) || hints.includes('vllm');
+}
+
+function shouldDisableReasoningEffortByDefault(input: CanonicalLlmRequest, context: LlmAdapterContext) {
+  if (input.reasoning && input.reasoning.mode !== 'off') return false;
+  const model = String(context.modelOverride || input.model || '').toLowerCase();
+  if (isNvidiaEndpoint(context.endpointUrl) && model.includes('deepseek-v4-pro')) return true;
+  if (isXAiEndpoint(context.endpointUrl) && (model.includes('grok-4') || model.includes('reasoning'))) return true;
+  return model.includes('grok-4-fast-reasoning');
+}
+
+function buildDefaultBody(input: CanonicalLlmRequest, context: LlmAdapterContext) {
+  let defaults: Record<string, unknown> = {};
+  if (shouldDisableThinkingByDefault(input, context)) {
+    defaults = deepMerge(defaults, { chat_template_kwargs: { enable_thinking: false } });
+  }
+  if (shouldDisableReasoningEffortByDefault(input, context)) {
+    defaults = deepMerge(defaults, { reasoning_effort: 'none' });
+  }
+  return Object.keys(defaults).length > 0 ? defaults : null;
+}
+
+function stripReasoningBlocks(raw: string) {
+  let text = String(raw || '');
+  const lower = text.toLowerCase();
+  const firstOpen = lower.indexOf('<think>');
+  const lastClose = lower.lastIndexOf('</think>');
+  if (firstOpen >= 0 && lastClose >= firstOpen) {
+    text = `${text.slice(0, firstOpen)}${text.slice(lastClose + '</think>'.length)}`;
+  }
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
 function hasHeader(headers: Record<string, string>, target: string) {
   const targetLower = target.toLowerCase();
   return Object.keys(headers).some((key) => key.toLowerCase() === targetLower);
@@ -49,20 +140,28 @@ function parseOpenAiLikeContent(content: any) {
 
 function parseOpenAiChatResponse(response: ProviderHttpResponse, providerFamily: string): CanonicalLlmResponse {
   const data: any = response.body;
+  const message = data?.choices?.[0]?.message;
+  const reasoningText = parseOpenAiLikeContent(message?.reasoning ?? message?.reasoning_content);
+  const outputText = stripReasoningBlocks(parseOpenAiLikeContent(message?.content)).trim();
   return {
     providerFamily,
     model: String(data?.model || ''),
-    outputText: parseOpenAiLikeContent(data?.choices?.[0]?.message?.content).trim() || undefined,
+    outputText: outputText || undefined,
     finishReason: typeof data?.choices?.[0]?.finish_reason === 'string' ? data.choices[0].finish_reason : undefined,
     usage: data?.usage
       ? {
           inputTokens: Number.isFinite(Number(data.usage?.prompt_tokens)) ? Number(data.usage.prompt_tokens) : undefined,
           outputTokens: Number.isFinite(Number(data.usage?.completion_tokens)) ? Number(data.usage.completion_tokens) : undefined,
+          reasoningTokens: Number.isFinite(Number(data.usage?.completion_tokens_details?.reasoning_tokens))
+            ? Number(data.usage.completion_tokens_details.reasoning_tokens)
+            : undefined,
         }
       : undefined,
+    reasoningSummary: reasoningText.trim() || undefined,
     responseRef: typeof data?.id === 'string' ? data.id : undefined,
     rawProviderMeta: {
       object: data?.object,
+      hasReasoning: Boolean(reasoningText.trim()),
     },
   };
 }
@@ -70,10 +169,19 @@ function parseOpenAiChatResponse(response: ProviderHttpResponse, providerFamily:
 function buildOpenAiChatRequest(input: CanonicalLlmRequest, context: LlmAdapterContext) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (context.apiKey) headers.Authorization = `Bearer ${context.apiKey}`;
+  const model = context.modelOverride || input.model;
+  const translateGemmaMessages = isTranslateGemmaVllmModel(model)
+    ? buildTranslateGemmaMessages({
+        text: getCanonicalUserText(input),
+        sourceLang: input.metadata?.sourceLang,
+        targetLang: input.metadata?.targetLang || 'en',
+        promptStyle: 'translategemma_vllm',
+      })
+    : null;
 
   const body: Record<string, any> = {
-    model: context.modelOverride || input.model,
-    messages: buildOpenAiChatMessages(input),
+    model,
+    messages: translateGemmaMessages || buildOpenAiChatMessages(input),
     temperature: input.sampling?.temperature ?? 0.2,
   };
 
@@ -124,7 +232,9 @@ function buildOpenAiChatRequest(input: CanonicalLlmRequest, context: LlmAdapterC
   const requestBody = isPlainObject(input.providerHints?.requestBody)
     ? (input.providerHints?.requestBody as Record<string, unknown>)
     : null;
-  const finalBody = requestBody ? deepMerge(body, requestBody) : body;
+  const defaultBody = buildDefaultBody(input, context);
+  const bodyWithDefaults = defaultBody ? deepMerge(body, defaultBody) : body;
+  const finalBody = requestBody ? deepMerge(bodyWithDefaults, requestBody) : bodyWithDefaults;
   if (isGitHubModelsEndpoint(context.endpointUrl)) {
     if (!hasHeader(headers, 'X-GitHub-Api-Version')) {
       headers['X-GitHub-Api-Version'] = '2026-03-10';

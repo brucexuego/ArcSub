@@ -185,6 +185,8 @@ interface CloudTranslationQuotaDebugInfo {
 
 interface TranslationPipelineDebug {
   requested?: {
+    lineCount?: number;
+    charCount?: number;
     targetLanguageDescriptor?: string;
     promptTemplateId?: string | null;
     effectiveGlossary?: string | null;
@@ -229,6 +231,10 @@ interface TranslationPipelineDebug {
     repetitionRisk?: 'low' | 'medium' | 'high';
     markerPreservation?: 'ok' | 'partial' | 'lost';
     strictRetryTriggered?: boolean;
+  } | null;
+  stats?: {
+    outputLineCount?: number;
+    outputCharCount?: number;
   } | null;
   runtime?: {
     modelId?: string;
@@ -554,7 +560,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
   const [customTargetLanguage, setCustomTargetLanguage] = React.useState('');
   const [promptText, setPromptText] = React.useState('');
   const [glossaryText, setGlossaryText] = React.useState('');
-  const [strictJsonLineRepairEnabled, setStrictJsonLineRepairEnabled] = React.useState(false);
+  const [strictJsonLineRepairEnabled, setStrictJsonLineRepairEnabled] = React.useState(true);
   const [selectedPromptTemplateId, setSelectedPromptTemplateId] = React.useState<PromptTemplateId>('');
   const [promptTemplates, setPromptTemplates] = React.useState<PromptTemplateItem[]>([]);
   const [promptTemplateDraft, setPromptTemplateDraft] = React.useState('');
@@ -1314,6 +1320,30 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
     }
   }, [t]);
 
+  const getPipelineWarningCodes = React.useCallback((debug: TranslationPipelineDebug | null) => {
+    const issueCodes = Array.isArray(debug?.warningIssues)
+      ? debug.warningIssues.map((issue) => String(issue?.code || '').trim()).filter(Boolean)
+      : [];
+    const rawWarnings = Array.isArray((debug as any)?.warnings)
+      ? (debug as any).warnings.map((code: unknown) => String(code || '').trim()).filter(Boolean)
+      : [];
+    return Array.from(new Set([...issueCodes, ...rawWarnings]));
+  }, []);
+
+  const getHighRiskAlignmentCodes = React.useCallback((debug: TranslationPipelineDebug | null) => {
+    const highRiskCodes = new Set([
+      'line_index_rebind_applied',
+      'line_alignment_repair_failed',
+      'line_json_map_partial_fallback',
+      'line_json_map_repair_disabled',
+      'quality_issue_line_count_loss',
+      'quality_issue_marker_loss',
+      'cloud_context_parse_failed',
+      'cloud_context_split_depth_exhausted',
+    ]);
+    return getPipelineWarningCodes(debug).filter((code) => highRiskCodes.has(code));
+  }, [getPipelineWarningCodes]);
+
   const localizeMarkerPreservation = React.useCallback((value: string | null | undefined) => {
     switch (String(value || '')) {
       case 'ok':
@@ -1960,10 +1990,22 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           .filter(Boolean)
           .join(' / ')
       : '';
+    const sourceLineCount =
+      typeof translationDebug.requested?.lineCount === 'number' ? translationDebug.requested.lineCount : null;
+    const outputLineCount =
+      typeof translationDebug.stats?.outputLineCount === 'number' ? translationDebug.stats.outputLineCount : null;
+    const highRiskAlignmentCodes = getHighRiskAlignmentCodes(translationDebug);
     return {
       targetLanguage: String(translationDebug.requested.targetLanguageDescriptor || langLabel || '').trim() || '-',
       promptTemplate: promptTemplateLabel(translationDebug.requested.promptTemplateId),
       effectiveGlossary: String(translationDebug.requested.effectiveGlossary || '').trim(),
+      lineCount:
+        sourceLineCount != null && outputLineCount != null
+          ? `${sourceLineCount.toLocaleString()} / ${outputLineCount.toLocaleString()}`
+          : '-',
+      alignmentRisk:
+        highRiskAlignmentCodes.length > 0 ? t('translation.alignmentRiskHigh') : t('translation.alignmentRiskLow'),
+      alignmentRiskCodes: highRiskAlignmentCodes.length > 0 ? highRiskAlignmentCodes.join(', ') : '-',
       strategy: localizeCloudStrategy(translationDebug.applied?.cloudStrategy),
       strategyReason: formatTechnicalValue(translationDebug.applied?.cloudStrategyReason),
       qualityMode: localizeTranslationQualityMode(translationDebug.applied?.translationQualityMode),
@@ -2031,7 +2073,7 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           ? String(translationDebug.applied.cloudContextFallbackCount)
           : '-',
     };
-  }, [formatDurationList, formatElapsedTime, formatNumberList, formatTechnicalValue, langLabel, localizeCloudStrategy, localizeLocalBatchMode, localizeLocalGenerationStyle, localizeLocalModelFamily, localizeLocalPromptStyle, localizeTranslationQualityMode, promptTemplateLabel, t, translationDebug]);
+  }, [formatDurationList, formatElapsedTime, formatNumberList, formatTechnicalValue, getHighRiskAlignmentCodes, langLabel, localizeCloudStrategy, localizeLocalBatchMode, localizeLocalGenerationStyle, localizeLocalModelFamily, localizeLocalPromptStyle, localizeTranslationQualityMode, promptTemplateLabel, t, translationDebug]);
   const translationRuntimeSummary = React.useMemo(() => {
     const runtime = translationDebug?.runtime;
     if (!runtime) return null;
@@ -2186,13 +2228,17 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
         tone: translationDebug.quality.passThroughRisk === 'high' ? 'warning' : 'default',
       });
     }
+    const highRiskAlignmentCodes = getHighRiskAlignmentCodes(translationDebug || null);
+    if (highRiskAlignmentCodes.length > 0) {
+      badges.push({ label: t('translation.alignmentRiskHigh'), tone: 'warning' });
+    }
     if (pipelineErrors.length > 0) {
       badges.push({ label: `${t('translation.pipelineErrors')}: ${pipelineErrors.length}`, tone: 'error' });
     } else if (pipelineWarnings.length > 0) {
       badges.push({ label: `${t('translation.pipelineWarnings')}: ${pipelineWarnings.length}`, tone: 'warning' });
     }
     return badges;
-  }, [localizeQualityRisk, pipelineErrors.length, pipelineMode, pipelineWarnings.length, t, translationDebug?.quality?.passThroughRisk]);
+  }, [getHighRiskAlignmentCodes, localizeQualityRisk, pipelineErrors.length, pipelineMode, pipelineWarnings.length, t, translationDebug]);
   const translationMonitorSections = React.useMemo<RunMonitorSection[]>(() => {
     const sections: RunMonitorSection[] = [];
 
@@ -2206,6 +2252,9 @@ export default function TextTranslation({ project, onUpdateProject, onNext, onTa
           { label: t('translation.monitorStrategy'), value: translationSummary.strategy },
           { label: t('translation.monitorStrategyReason'), value: translationSummary.strategyReason },
           { label: t('translation.monitorQualityMode'), value: translationSummary.qualityMode },
+          { label: t('translation.monitorLineCount'), value: translationSummary.lineCount },
+          { label: t('translation.monitorAlignmentRisk'), value: translationSummary.alignmentRisk },
+          { label: t('translation.monitorAlignmentRiskCodes'), value: translationSummary.alignmentRiskCodes },
           { label: t('translation.monitorQualityRetry'), value: translationSummary.qualityRetryCount },
           { label: t('translation.monitorStrictRetrySucceeded'), value: translationSummary.strictRetrySucceeded },
           { label: t('translation.monitorProfileId'), value: translationSummary.profileId },

@@ -6,30 +6,72 @@ import type {
   CloudTranslateAdapterRequestOptions,
 } from './cloud_translate_adapter.js';
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function deepMerge(base: Record<string, any>, override: Record<string, any>): Record<string, any> {
+  const merged: Record<string, any> = { ...base };
+  for (const [key, overrideValue] of Object.entries(override)) {
+    const baseValue = merged[key];
+    if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
+      merged[key] = deepMerge(baseValue, overrideValue);
+      continue;
+    }
+    merged[key] = overrideValue;
+  }
+  return merged;
+}
+
+function getOllamaBodyOptions(options: CloudTranslateAdapterRequestOptions) {
+  return isPlainObject(options.modelOptions?.body)
+    ? (options.modelOptions?.body as Record<string, any>)
+    : {};
+}
+
+function buildOllamaGenerateOptions(request: ReturnType<typeof buildCanonicalTranslationRequest>['request']) {
+  const generationOptions: Record<string, number> = {
+    temperature: request.sampling?.temperature ?? 0.2,
+  };
+  if (request.sampling?.topP != null) generationOptions.top_p = request.sampling.topP;
+  if (request.sampling?.topK != null) generationOptions.top_k = request.sampling.topK;
+  if (request.sampling?.maxOutputTokens != null) generationOptions.num_predict = request.sampling.maxOutputTokens;
+  return generationOptions;
+}
+
 async function requestOllamaChat(
   endpointUrl: string,
   options: CloudTranslateAdapterRequestOptions,
   deps: CloudTranslateAdapterDeps
 ) {
+  const bodyOptions = getOllamaBodyOptions(options);
   const canonical = buildCanonicalTranslationRequest({
     adapterKey: 'openai-compatible-chat',
     model: String(options.model || '').trim() || 'qwen2.5:7b',
     text: options.text,
+    sourceLang: options.sourceLang,
     targetLang: options.targetLang,
     systemPrompt: deps.resolveSystemPrompt(options),
     jsonResponse: options.jsonResponse,
     isConnectionTest: options.isConnectionTest,
     promptTemplateId: options.promptTemplateId,
     glossary: options.glossary,
+    samplingOverrides: {
+      temperature: options.modelOptions?.sampling?.temperature,
+      topP: options.modelOptions?.sampling?.topP,
+      topK: options.modelOptions?.sampling?.topK,
+      maxOutputTokens: options.modelOptions?.sampling?.maxOutputTokens,
+    },
   });
   const request = canonical.request;
 
-  const body = {
+  const body = deepMerge({
     model: request.model,
     stream: false,
-    options: { temperature: request.sampling?.temperature ?? 0.2 },
+    think: false,
+    options: buildOllamaGenerateOptions(request),
     messages: buildOpenAiChatMessages(request),
-  };
+  }, bodyOptions);
 
   const response = await deps.fetchWithTimeout(
     endpointUrl,
@@ -67,24 +109,33 @@ async function requestOllamaGenerate(
   options: CloudTranslateAdapterRequestOptions,
   deps: CloudTranslateAdapterDeps
 ) {
+  const bodyOptions = getOllamaBodyOptions(options);
   const canonical = buildCanonicalTranslationRequest({
     adapterKey: 'openai-compatible-chat',
     model: String(options.model || '').trim() || 'qwen2.5:7b',
     text: options.text,
+    sourceLang: options.sourceLang,
     targetLang: options.targetLang,
     systemPrompt: deps.resolveSystemPrompt(options),
     jsonResponse: options.jsonResponse,
     isConnectionTest: options.isConnectionTest,
     promptTemplateId: options.promptTemplateId,
     glossary: options.glossary,
+    samplingOverrides: {
+      temperature: options.modelOptions?.sampling?.temperature,
+      topP: options.modelOptions?.sampling?.topP,
+      topK: options.modelOptions?.sampling?.topK,
+      maxOutputTokens: options.modelOptions?.sampling?.maxOutputTokens,
+    },
   });
   const request = canonical.request;
-  const body = {
+  const body = deepMerge({
     model: request.model,
     prompt: buildOllamaPrompt(request),
     stream: false,
-    options: { temperature: request.sampling?.temperature ?? 0.2 },
-  };
+    think: false,
+    options: buildOllamaGenerateOptions(request),
+  }, bodyOptions);
 
   const response = await deps.fetchWithTimeout(
     endpointUrl,

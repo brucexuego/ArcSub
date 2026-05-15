@@ -51,6 +51,10 @@ function getMarkerPreservation(sourceHasStructuredPrefixes: boolean, warnings: s
   return warnings.includes('quality_issue_marker_loss') ? ('lost' as const) : ('ok' as const);
 }
 
+function countNonEmptyLines(value: string) {
+  return String(value || '').split(/\r?\n/).filter((line) => line.trim()).length;
+}
+
 function qualityIssueToWarningCode(issue: TranslationQualityIssueCode) {
   switch (issue) {
     case 'empty_output':
@@ -86,7 +90,6 @@ function buildTranslationWarningIssues(warnings: string[]): RunIssue[] {
     'translategemma_single_line_retry_applied',
     'residual_line_retry_applied',
     'line_safe_alignment_applied',
-    'line_index_rebind_applied',
     'line_json_map_repair_applied',
     'line_json_map_pre_split_applied',
     'line_json_map_policy_split',
@@ -95,6 +98,8 @@ function buildTranslationWarningIssues(warnings: string[]): RunIssue[] {
     'quality_retry_triggered',
     'post_repair_quality_retry_triggered',
     'residual_line_retry_triggered',
+    'line_index_rebind_applied',
+    'local_structured_prefix_restored',
     'line_json_map_partial_fallback',
     'line_json_map_policy_single_line_fallback',
     'line_json_map_policy_source_fallback',
@@ -532,6 +537,24 @@ export async function runLocalTranslationOrchestrator(
       })
       .join('\n');
 
+  const restoreOutputStructuredPrefixes = (candidate: string, units: LineSafeUnit[]) => {
+    const lines = String(candidate || '').split(/\r?\n/);
+    if (lines.length !== units.length) return candidate;
+
+    let changed = false;
+    const restored = lines.map((line, index) => {
+      const unit = units[index];
+      if (!unit?.prefix) return line;
+      if (String(line || '').startsWith(unit.prefix.trimEnd())) return line;
+      changed = true;
+      const body = deps.stripStructuredPrefix(deps.stripInjectedSpeakerContext(String(line || '').trim()));
+      return body ? `${unit.prefix}${body}` : unit.prefix.trimEnd();
+    });
+
+    if (changed) addWarning('local_structured_prefix_restored');
+    return restored.join('\n');
+  };
+
   const hasTranslateGemmaCoverageLoss = (units: LineSafeUnit[], translatedLines: string[]) => {
     if (translatedLines.length !== units.length) return true;
 
@@ -539,7 +562,11 @@ export async function runLocalTranslationOrchestrator(
       const sourceLine = deps.stripStructuredPrefix(unit.content).trim();
       const translatedLine = String(translatedLines[index] || '').trim();
       if (!sourceLine) return translatedLine.length > 0;
-      return !translatedLine;
+      if (!translatedLine) return true;
+      if (localPlainProbeMode) return false;
+      const issues = deps.getTranslationQualityIssues(sourceLine, translatedLine, input.targetLang);
+      deps.addQualityIssueWarnings(issues, addWarning);
+      return units.length > 1 && issues.length > 0;
     });
   };
 
@@ -562,7 +589,10 @@ export async function runLocalTranslationOrchestrator(
     }
 
     addWarning('translategemma_recursive_chunk_split_applied');
-    const [leftUnits, rightUnits] = deps.splitLineSafeUnits(units);
+    const [leftUnits = [], rightUnits = []] = deps.splitLineSafeUnits(units);
+    if (rightUnits.length === 0) {
+      return await translateTranslateGemmaUnitsIndividually(leftUnits.length > 0 ? leftUnits : units);
+    }
     const leftText = leftUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(leftUnits) : '';
     const rightText = rightUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(rightUnits) : '';
     return [leftText, rightText].filter(Boolean).join('\n');
@@ -617,8 +647,28 @@ export async function runLocalTranslationOrchestrator(
       expectedLineCount: units.length,
       requireMarkers: true,
     };
+    const restoreStructuredPrefixes = (candidate: string) => {
+      const lines = String(candidate || '').split(/\r?\n/);
+      if (lines.length !== units.length) return candidate;
+
+      let changed = false;
+      const restored = lines.map((line, index) => {
+        const unit = units[index];
+        if (!unit?.prefix) return line;
+        if (String(line || '').startsWith(unit.prefix.trimEnd())) return line;
+        changed = true;
+        const body = deps.stripStructuredPrefix(String(line || '').trim());
+        return body ? `${unit.prefix}${body}` : unit.prefix.trimEnd();
+      });
+
+      if (changed) addWarning('local_structured_prefix_restored');
+      return restored.join('\n');
+    };
+
     const finalizeChunkCandidate = async (candidate: string) => {
-      const normalizedCandidate = deps.normalizeTargetLanguageOutput(candidate, input.targetLang);
+      const normalizedCandidate = restoreStructuredPrefixes(
+        deps.normalizeTargetLanguageOutput(candidate, input.targetLang)
+      );
       const candidateIssues = deps.getTranslationQualityIssues(
         sourceChunkText,
         normalizedCandidate,
@@ -692,12 +742,6 @@ export async function runLocalTranslationOrchestrator(
       return finalizeChunkCandidate(restored);
     }
 
-    const rebound = deps.rebindByLineIndex(units, chunkOutput);
-    if (rebound !== null) {
-      addWarning('line_index_rebind_applied');
-      return finalizeChunkCandidate(rebound);
-    }
-
     if (enableJsonLineRepair) {
       if (jsonRepairMaxLinesBeforeSplit > 0 && units.length > jsonRepairMaxLinesBeforeSplit) {
         addWarning('line_json_map_pre_split_applied');
@@ -725,7 +769,28 @@ export async function runLocalTranslationOrchestrator(
         return finalizeChunkCandidate(repaired.text);
       }
     } else {
+      const rebound = deps.rebindByLineIndex(units, chunkOutput);
+      if (rebound !== null) {
+        addWarning('line_index_rebind_applied');
+        return finalizeChunkCandidate(rebound);
+      }
       addWarning('line_json_map_repair_disabled');
+    }
+
+    if (enableJsonLineRepair && units.length > 1) {
+      addWarning('local_recursive_chunk_split_applied');
+      const [leftUnits, rightUnits] = deps.splitLineSafeUnits(units);
+      const leftText = leftUnits.length > 0 ? await processLineSafeChunk(leftUnits) : '';
+      const rightText = rightUnits.length > 0 ? await processLineSafeChunk(rightUnits) : '';
+      return [leftText, rightText].filter(Boolean).join('\n');
+    }
+
+    if (enableJsonLineRepair && units.length === 1) {
+      const singleLine = await translateSingleLocalUnit(units);
+      if (singleLine !== null) {
+        addWarning('local_single_line_retry_applied');
+        return singleLine;
+      }
     }
 
     addWarning('line_alignment_repair_failed');
@@ -1001,6 +1066,7 @@ export async function runLocalTranslationOrchestrator(
   if (!localPlainProbeMode || forceZhTwNormalization) {
     output = deps.normalizeTargetLanguageOutput(output, input.targetLang);
   }
+  output = restoreOutputStructuredPrefixes(output, lineSafeUnits);
   if (useLineSafeMode && !localPlainProbeMode && modelStrategy.family !== 'translategemma') {
     output = await repairResidualLocalLines(output);
   }
@@ -1076,7 +1142,7 @@ export async function runLocalTranslationOrchestrator(
         localBatchPromptTokens: localBatchingDebugSnapshot?.promptTokens ?? [],
       },
       quality: {
-        lineCountMatch: sourceLineCount <= 1 ? true : output.split('\n').length >= sourceLineCount,
+        lineCountMatch: sourceLineCount <= 1 ? true : countNonEmptyLines(output) >= sourceLineCount,
         targetLanguageMatch: !finalQualityWarnings.includes('quality_issue_target_lang_mismatch'),
         passThroughRisk: getPassThroughRisk(finalQualityWarnings),
         repetitionRisk: getRepetitionRisk(finalQualityWarnings),

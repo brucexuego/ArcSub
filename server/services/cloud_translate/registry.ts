@@ -19,13 +19,13 @@ import { openAiCompatibleTranslateProvider } from './providers/openai_compatible
 
 const PROVIDERS: CloudTranslateProviderDefinition[] = [
   deeplTranslateProvider,
+  ollamaGenerateTranslateProvider,
+  ollamaChatTranslateProvider,
   anthropicTranslateProvider,
   googleGeminiTranslateProvider,
   mistralTranslateProvider,
   cohereTranslateProvider,
   xaiTranslateProvider,
-  ollamaGenerateTranslateProvider,
-  ollamaChatTranslateProvider,
   openAiCompatibleTranslateProvider,
 ];
 

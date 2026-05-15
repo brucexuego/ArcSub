@@ -1,8 +1,9 @@
-import { normalizeLanguageKey } from '../../language/resolver.js';
+import { normalizeLanguageKey, resolveLanguagePolicy } from '../../language/resolver.js';
 import type { LocalTranslatePromptStyle, LocalTranslateStructuredMessage } from './types.js';
 
 function toTranslateGemmaLanguageCode(language?: string): string | null {
-  const normalized = normalizeLanguageKey(language);
+  const policy = resolveLanguagePolicy(language);
+  const normalized = policy.key !== 'unknown' ? policy.key : normalizeLanguageKey(language);
   if (!normalized) return null;
 
   const exactMap: Record<string, string> = {
