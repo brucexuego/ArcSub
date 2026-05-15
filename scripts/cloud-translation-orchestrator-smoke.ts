@@ -248,6 +248,22 @@ function assertOpenAiCompatibleIpv6LoopbackDisablesThinking() {
   );
 }
 
+function assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible() {
+  const resolvedProvider = resolveCloudTranslateProvider({
+    url: 'http://localhost:11434/v1/chat/completions',
+    modelName: 'Ollama OpenAI-compatible',
+    model: 'qwen3:4b',
+  });
+  assert(
+    resolvedProvider.provider === 'openai-compatible',
+    'Ollama OpenAI-compatible chat endpoint was routed to native Ollama provider.'
+  );
+  assert(
+    resolvedProvider.endpointUrl === 'http://localhost:11434/v1/chat/completions',
+    'Ollama OpenAI-compatible chat endpoint URL was rewritten.'
+  );
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -364,6 +380,7 @@ async function main() {
   await assertOpenAiSseErrorFrameFails();
   assertExplicitProviderBatchingFalseDisablesDefaultProfile();
   assertOpenAiCompatibleIpv6LoopbackDisablesThinking();
+  assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible();
 
   console.log('cloud translation orchestrator smoke passed');
 }

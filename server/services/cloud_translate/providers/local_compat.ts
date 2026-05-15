@@ -10,6 +10,7 @@ function isOllamaEndpoint(input: { hostname: string; pathname: string; parsedUrl
   const hostname = input.hostname.toLowerCase();
   const pathname = input.pathname.toLowerCase();
   const modelName = input.modelName.toLowerCase();
+  if (pathname.includes('/chat/completions')) return false;
   return (
     pathname.includes('/api/chat') ||
     pathname.includes('/api/generate') ||
