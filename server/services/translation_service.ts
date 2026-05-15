@@ -390,7 +390,7 @@ export class TranslationService {
       return Math.round(overrideTimeout);
     }
     if (Number.isFinite(providerTimeout) && providerTimeout > 0) {
-      return Math.min(configured, Math.round(providerTimeout));
+      return Math.max(configured, Math.round(providerTimeout));
     }
     return configured;
   }

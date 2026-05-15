@@ -642,12 +642,13 @@ async function requestGeminiNativeSdk(
       config.systemInstruction = systemInstruction;
     }
   }
-  const defaultThinkingConfig = getDefaultGeminiThinkingConfig(requestModel);
-  if (defaultThinkingConfig && !config.thinkingConfig) {
-    config.thinkingConfig = defaultThinkingConfig;
-  }
-  if (isPlainObject(bodyOptions.thinkingConfig) && !config.thinkingConfig) {
+  if (isPlainObject(bodyOptions.thinkingConfig)) {
     config.thinkingConfig = bodyOptions.thinkingConfig;
+  } else {
+    const defaultThinkingConfig = getDefaultGeminiThinkingConfig(requestModel);
+    if (defaultThinkingConfig && !config.thinkingConfig) {
+      config.thinkingConfig = defaultThinkingConfig;
+    }
   }
   if (isPlainObject(geminiOptions.thinkingConfig)) {
     config.thinkingConfig = geminiOptions.thinkingConfig;
