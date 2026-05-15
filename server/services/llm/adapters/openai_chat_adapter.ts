@@ -33,7 +33,7 @@ function isGitHubModelsEndpoint(endpointUrl: string) {
 
 function getEndpointHostname(endpointUrl: string) {
   try {
-    return new URL(endpointUrl).hostname.toLowerCase();
+    return new URL(endpointUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
   } catch {
     return '';
   }
@@ -49,21 +49,16 @@ function isXAiEndpoint(endpointUrl: string) {
 }
 
 function isPrivateOrLocalEndpoint(endpointUrl: string) {
-  try {
-    const parsed = new URL(endpointUrl);
-    const hostname = parsed.hostname.toLowerCase();
-    return (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '::1' ||
-      hostname.endsWith('.local') ||
-      /^10\./.test(hostname) ||
-      /^192\.168\./.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
-    );
-  } catch {
-    return false;
-  }
+  const hostname = getEndpointHostname(endpointUrl);
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname.endsWith('.local') ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
 }
 
 function isQwenThinkingFamily(model: string) {

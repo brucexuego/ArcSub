@@ -7,6 +7,7 @@ import {
 import { getCloudTranslateAdapter } from '../server/services/cloud_translate_adapter.js';
 import { resolveCloudTranslateProvider } from '../server/services/cloud_translate_provider.js';
 import { resolveCloudTranslateBatchingProfile } from '../server/services/cloud_translate/profiles/batching.js';
+import { openAiCompatibleChatAdapter } from '../server/services/llm/adapters/openai_chat_adapter.js';
 
 class SmokeProviderHttpError extends Error {
   status: number;
@@ -227,6 +228,26 @@ function assertExplicitProviderBatchingFalseDisablesDefaultProfile() {
   assert(profile === null, 'Explicit translation.batching.enabled=false did not disable provider default batching.');
 }
 
+function assertOpenAiCompatibleIpv6LoopbackDisablesThinking() {
+  const request = openAiCompatibleChatAdapter.buildRequest(
+    {
+      model: 'Qwen3-4B',
+      messages: [{ role: 'user', parts: [{ type: 'text', text: 'Translate this subtitle.' }] }],
+      metadata: {},
+    } as any,
+    {
+      endpointUrl: 'http://[::1]:8000/v1/chat/completions',
+      apiKey: 'test-key',
+      modelOverride: 'Qwen3-4B',
+    }
+  );
+  const body = JSON.parse(String(request.body || '{}'));
+  assert(
+    body?.chat_template_kwargs?.enable_thinking === false,
+    'IPv6 loopback OpenAI-compatible Qwen3 request did not disable thinking.'
+  );
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -342,6 +363,7 @@ async function main() {
 
   await assertOpenAiSseErrorFrameFails();
   assertExplicitProviderBatchingFalseDisablesDefaultProfile();
+  assertOpenAiCompatibleIpv6LoopbackDisablesThinking();
 
   console.log('cloud translation orchestrator smoke passed');
 }
