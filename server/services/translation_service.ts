@@ -386,11 +386,13 @@ export class TranslationService {
     const configured = this.getCloudTranslationRequestTimeoutMs();
     const providerTimeout = Number(providerTimeoutMs);
     const overrideTimeout = Number(overrideTimeoutMs);
-    return Math.max(
-      configured,
-      Number.isFinite(providerTimeout) && providerTimeout > 0 ? Math.round(providerTimeout) : 0,
-      Number.isFinite(overrideTimeout) && overrideTimeout > 0 ? Math.round(overrideTimeout) : 0
-    );
+    if (Number.isFinite(overrideTimeout) && overrideTimeout > 0) {
+      return Math.round(overrideTimeout);
+    }
+    if (Number.isFinite(providerTimeout) && providerTimeout > 0) {
+      return Math.min(configured, Math.round(providerTimeout));
+    }
+    return configured;
   }
 
   private static sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -2673,7 +2675,7 @@ export class TranslationService {
 
     const expectedLineCount = Math.max(0, Math.round(Number(context.expectedLineCount || 0)));
     if (expectedLineCount > 1) {
-      const outputLineCount = this.normalizeComparisonText(normalizedTranslated).length;
+      const outputLineCount = this.countNonEmptyLines(normalizedTranslated);
       if (outputLineCount < expectedLineCount) {
         issues.push('line_count_loss');
       }
@@ -2698,6 +2700,10 @@ export class TranslationService {
       expectedLineCount: expectedLineCount > 1 ? expectedLineCount : undefined,
       requireMarkers,
     };
+  }
+
+  private static countNonEmptyLines(value: string) {
+    return String(value || '').split(/\r?\n/).filter((line) => line.trim()).length;
   }
 
   private static mergeUniqueWarnings(...warningGroups: Array<string[] | undefined>) {
@@ -2740,7 +2746,7 @@ export class TranslationService {
     warnings: string[];
     qualityRetryCount: number;
   }) {
-    const outputLineCount = this.normalizeComparisonText(input.output).length;
+    const outputLineCount = this.countNonEmptyLines(input.output);
     return {
       lineCountMatch: input.sourceLineCount <= 1 ? true : outputLineCount >= input.sourceLineCount,
       targetLanguageMatch: !input.warnings.includes('quality_issue_target_lang_mismatch'),
@@ -2763,7 +2769,6 @@ export class TranslationService {
       'translategemma_single_line_retry_applied',
       'residual_line_retry_applied',
       'line_safe_alignment_applied',
-      'line_index_rebind_applied',
       'line_json_map_repair_applied',
       'line_json_map_pre_split_applied',
       'line_json_map_policy_split',
@@ -2774,6 +2779,7 @@ export class TranslationService {
       'quality_retry_triggered',
       'post_repair_quality_retry_triggered',
       'residual_line_retry_triggered',
+      'line_index_rebind_applied',
       'line_json_map_partial_fallback',
       'line_json_map_policy_single_line_fallback',
       'line_json_map_policy_source_fallback',
@@ -3394,7 +3400,7 @@ export class TranslationService {
       return this.isRetryableStatus(error.status);
     }
     const message = error instanceof Error ? error.message : String(error || '');
-    return /network|fetch|timeout|abort|econnreset|socket|temporarily/i.test(message);
+    return /network|fetch|timeout|abort|econnreset|socket|temporarily|empty content/i.test(message);
   }
 
   private static isProviderContentFilterError(error: unknown) {

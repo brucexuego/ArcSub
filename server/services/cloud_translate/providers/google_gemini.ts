@@ -23,8 +23,7 @@ export const googleGeminiTranslateProvider: CloudTranslateProviderDefinition = c
   detect(input) {
     return input.hostname === 'generativelanguage.googleapis.com' ||
       input.pathname.includes(':generatecontent') ||
-      input.modelName.includes('gemini') ||
-      input.modelName.includes('gemma');
+      input.modelName.includes('gemini');
   },
   buildEndpointUrl(rawUrl, model, apiKey) {
     const parsed = parseCloudTranslateUrl(rawUrl);

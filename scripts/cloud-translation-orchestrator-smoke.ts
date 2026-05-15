@@ -57,7 +57,7 @@ function parseLineSafeOutput(output: string, units: CloudTranslationLineSafeUnit
   return units.map((unit) => `${unit.prefix}${map.get(unit.index) || ''}`.trim()).join('\n');
 }
 
-function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestratorDeps {
+function buildDeps(mode: 'normal' | 'strict-repair' | 'strict-repair-null-same-lines'): CloudTranslationOrchestratorDeps {
   return {
     getCloudContextConfig: () => ({
       enabled: false,
@@ -98,6 +98,16 @@ function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestrat
           },
         };
       }
+      if (mode === 'strict-repair-null-same-lines' && options.lineSafeMode) {
+        const translated = text
+          .split(/\r?\n/)
+          .map((line) => line.replace(/^\[\[L\d{5}\]\]\s*/, 'markerless '))
+          .join('\n');
+        return {
+          text: translated,
+          meta: { endpointUrl, fallbackUsed: false, fallbackType: null },
+        };
+      }
       if (options.lineSafeMode) {
         const translated = text
           .split(/\r?\n/)
@@ -121,11 +131,14 @@ function buildDeps(mode: 'normal' | 'strict-repair'): CloudTranslationOrchestrat
     buildLineSafeInput,
     parseLineSafeOutput,
     normalizeTargetLanguageOutput: (output) => String(output || '').trim(),
-    repairLineAlignmentWithJsonMap: async (_provider, _endpointUrl, units) => ({
-      text: units.map((unit) => `${unit.prefix}strict repaired ${unit.content}`.trim()).join('\n'),
-      missingCount: 0,
-      warnings: ['line_json_map_repair_applied'],
-    }),
+    repairLineAlignmentWithJsonMap: async (_provider, _endpointUrl, units) =>
+      mode === 'strict-repair-null-same-lines'
+        ? null
+        : {
+            text: units.map((unit) => `${unit.prefix}strict repaired ${unit.content}`.trim()).join('\n'),
+            missingCount: 0,
+            warnings: ['line_json_map_repair_applied'],
+          },
     rebindByLineIndex: (units, translatedText) => {
       const lines = String(translatedText || '').split(/\r?\n/);
       if (lines.length < units.length) return null;
@@ -271,6 +284,31 @@ async function main() {
   assert(strict.cloudStrategy === 'cloud_strict', 'strict request did not use cloud_strict strategy.');
   assert(strict.warnings.includes('line_json_map_repair_applied'), 'cloud_strict did not use JSON repair fallback.');
   assert(strict.cloudQuota?.estimatedTotalTokens === 20, 'quota estimate was not preserved in debug output.');
+
+  const strictMarkerless = await runCloudTranslationOrchestrator(
+    {
+      text: sample,
+      targetLang: 'English',
+      promptTemplateId: 'subtitle_structure_replacement',
+      enableJsonLineRepair: true,
+      qualityMode: 'json_strict',
+      supportsContextMode: false,
+      providerRequest: {
+        provider: 'openai-compatible',
+        endpointUrl: 'https://example.test/v1/chat/completions',
+      },
+    },
+    buildDeps('strict-repair-null-same-lines')
+  );
+  assert(
+    !strictMarkerless.warnings.includes('line_index_rebind_applied'),
+    'cloud_strict accepted positional rebind after marker loss.'
+  );
+  assert(
+    strictMarkerless.warnings.includes('cloud_context_chunk_split') ||
+      strictMarkerless.warnings.includes('cloud_context_single_line_fallback'),
+    'cloud_strict did not split or fall back after failed JSON repair.'
+  );
 
   const batched = await runCloudTranslationOrchestrator(
     {

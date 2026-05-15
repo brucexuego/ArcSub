@@ -42,6 +42,7 @@ export const openAiCompatibleTranslateProvider: CloudTranslateProviderDefinition
     detect(input) {
       const host = input.hostname;
       const pathname = input.pathname;
+      if (pathname.includes('/chat/completions')) return true;
       if (host === 'models.github.ai') return true;
       if (host === 'integrate.api.nvidia.com') return true;
       if (host.includes('generativelanguage.googleapis.com') && pathname.includes('/openai/')) return true;

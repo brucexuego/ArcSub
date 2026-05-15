@@ -6,6 +6,19 @@ import {
   parseCloudTranslateUrl,
 } from './shared.js';
 
+function isOllamaEndpoint(input: { hostname: string; pathname: string; parsedUrl: URL; modelName: string }) {
+  const hostname = input.hostname.toLowerCase();
+  const pathname = input.pathname.toLowerCase();
+  const modelName = input.modelName.toLowerCase();
+  return (
+    pathname.includes('/api/chat') ||
+    pathname.includes('/api/generate') ||
+    hostname.includes('ollama') ||
+    input.parsedUrl.port === '11434' ||
+    modelName.includes('ollama')
+  );
+}
+
 export const deeplTranslateProvider: CloudTranslateProviderDefinition = createCloudTranslateProviderDefinition({
   provider: 'deepl',
   defaultModel: 'deepl-v2',
@@ -41,7 +54,7 @@ export const ollamaChatTranslateProvider: CloudTranslateProviderDefinition = cre
     defaultExecutionMode: 'cloud_strict',
   }),
   detect(input) {
-    return input.pathname.includes('/api/chat') || input.hostname.includes('ollama') || input.modelName.includes('ollama');
+    return isOllamaEndpoint(input) && !input.pathname.includes('/api/generate');
   },
   buildEndpointUrl(rawUrl) {
     const parsed = parseCloudTranslateUrl(rawUrl);

@@ -26,6 +26,17 @@ function isGemma3Model(model: string | undefined) {
   return /^gemma-3[-_]/i.test(stripModelPrefix(model));
 }
 
+function getDefaultGeminiThinkingConfig(model: string | undefined) {
+  const normalized = stripModelPrefix(model).toLowerCase();
+  if (/^gemini-2\.5-flash(?:[-_]|$)/.test(normalized)) {
+    return { thinkingBudget: 0 };
+  }
+  if (/^gemini-3(?:\.\d+)?-flash(?:[-_]|$)/.test(normalized)) {
+    return { thinkingLevel: 'minimal' };
+  }
+  return null;
+}
+
 function buildGeminiSingleUserContents(input: Parameters<LlmAdapter['buildRequest']>[0]) {
   const instructions = getCanonicalInstructions(input);
   const userText = getCanonicalUserText(input);
@@ -54,11 +65,13 @@ export const geminiNativeAdapter: LlmAdapter = {
     }
 
     const omitDeveloperInstruction = isGemma3Model(input.model);
+    const defaultThinkingConfig = getDefaultGeminiThinkingConfig(input.model);
     const body: Record<string, any> = {
       contents: omitDeveloperInstruction ? buildGeminiSingleUserContents(input) : buildGeminiContents(input),
       generationConfig: {
         temperature: input.sampling?.temperature ?? 0.2,
         maxOutputTokens: input.sampling?.maxOutputTokens,
+        ...(defaultThinkingConfig ? { thinkingConfig: defaultThinkingConfig } : {}),
         ...(input.sampling?.topP != null ? { topP: input.sampling.topP } : {}),
         ...(input.sampling?.topK != null ? { topK: input.sampling.topK } : {}),
         ...(input.sampling?.seed != null ? { seed: input.sampling.seed } : {}),

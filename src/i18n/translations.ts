@@ -4844,3 +4844,45 @@ const promptTemplateEditorOverrides: Record<Language, Record<string, string>> = 
 (Object.keys(promptTemplateEditorOverrides) as Language[]).forEach((language) => {
   Object.assign(translations[language], promptTemplateEditorOverrides[language]);
 });
+
+const translationAlignmentOverrides: Record<Language, Record<string, string>> = {
+  'zh-tw': {
+    'translation.monitorLineCount': '字幕行數',
+    'translation.monitorAlignmentRisk': '對齊風險',
+    'translation.monitorAlignmentRiskCodes': '對齊警示代碼',
+    'translation.alignmentRiskLow': '低風險',
+    'translation.alignmentRiskHigh': '高風險：請檢查字幕對齊',
+  },
+  'zh-cn': {
+    'translation.monitorLineCount': '字幕行数',
+    'translation.monitorAlignmentRisk': '对齐风险',
+    'translation.monitorAlignmentRiskCodes': '对齐警示代码',
+    'translation.alignmentRiskLow': '低风险',
+    'translation.alignmentRiskHigh': '高风险：请检查字幕对齐',
+  },
+  en: {
+    'translation.monitorLineCount': 'Subtitle lines',
+    'translation.monitorAlignmentRisk': 'Alignment risk',
+    'translation.monitorAlignmentRiskCodes': 'Alignment warning codes',
+    'translation.alignmentRiskLow': 'Low risk',
+    'translation.alignmentRiskHigh': 'High risk: check subtitle alignment',
+  },
+  jp: {
+    'translation.monitorLineCount': '字幕行数',
+    'translation.monitorAlignmentRisk': '整列リスク',
+    'translation.monitorAlignmentRiskCodes': '整列警告コード',
+    'translation.alignmentRiskLow': '低リスク',
+    'translation.alignmentRiskHigh': '高リスク: 字幕整列を確認',
+  },
+  de: {
+    'translation.monitorLineCount': 'Untertitelzeilen',
+    'translation.monitorAlignmentRisk': 'Ausrichtungsrisiko',
+    'translation.monitorAlignmentRiskCodes': 'Ausrichtungs-Warncodes',
+    'translation.alignmentRiskLow': 'Niedriges Risiko',
+    'translation.alignmentRiskHigh': 'Hohes Risiko: Untertitelausrichtung pruefen',
+  },
+};
+
+(Object.keys(translationAlignmentOverrides) as Language[]).forEach((language) => {
+  Object.assign(translations[language], translationAlignmentOverrides[language]);
+});

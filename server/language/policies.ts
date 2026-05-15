@@ -372,7 +372,7 @@ export const LANGUAGE_POLICIES: LanguagePolicy[] = [
   },
   {
     key: 'zh-cn',
-    aliases: ['zh-cn', 'zh-hans', 'zh-sg', 'simplified-chinese'],
+    aliases: ['zh-cn', 'zh-hans', 'zh-sg', 'simplified-chinese', 'simplified chinese', '简体中文', '簡體中文'],
     englishName: 'Simplified Chinese',
     nativeName: '\u7b80\u4f53\u4e2d\u6587',
     asr: {
@@ -396,7 +396,7 @@ export const LANGUAGE_POLICIES: LanguagePolicy[] = [
   },
   {
     key: 'zh-tw',
-    aliases: ['zh-tw', 'zh-hant', 'traditional-chinese'],
+    aliases: ['zh-tw', 'zh-hant', 'traditional-chinese', 'traditional chinese', '繁體中文', '繁体中文', '繁中'],
     englishName: 'Traditional Chinese',
     nativeName: '\u7e41\u9ad4\u4e2d\u6587',
     asr: {
