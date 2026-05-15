@@ -2675,7 +2675,7 @@ export class TranslationService {
 
     const expectedLineCount = Math.max(0, Math.round(Number(context.expectedLineCount || 0)));
     if (expectedLineCount > 1) {
-      const outputLineCount = this.countNonEmptyLines(normalizedTranslated);
+      const outputLineCount = this.countTranslatedContentLines(normalizedTranslated);
       if (outputLineCount < expectedLineCount) {
         issues.push('line_count_loss');
       }
@@ -2702,8 +2702,8 @@ export class TranslationService {
     };
   }
 
-  private static countNonEmptyLines(value: string) {
-    return String(value || '').split(/\r?\n/).filter((line) => line.trim()).length;
+  private static countTranslatedContentLines(value: string) {
+    return this.normalizeComparisonText(value).length;
   }
 
   private static mergeUniqueWarnings(...warningGroups: Array<string[] | undefined>) {
@@ -2746,7 +2746,7 @@ export class TranslationService {
     warnings: string[];
     qualityRetryCount: number;
   }) {
-    const outputLineCount = this.countNonEmptyLines(input.output);
+    const outputLineCount = this.countTranslatedContentLines(input.output);
     return {
       lineCountMatch: input.sourceLineCount <= 1 ? true : outputLineCount >= input.sourceLineCount,
       targetLanguageMatch: !input.warnings.includes('quality_issue_target_lang_mismatch'),

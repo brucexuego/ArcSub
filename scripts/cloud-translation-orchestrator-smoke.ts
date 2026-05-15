@@ -8,6 +8,7 @@ import { getCloudTranslateAdapter } from '../server/services/cloud_translate_ada
 import { resolveCloudTranslateProvider } from '../server/services/cloud_translate_provider.js';
 import { resolveCloudTranslateBatchingProfile } from '../server/services/cloud_translate/profiles/batching.js';
 import { openAiCompatibleChatAdapter } from '../server/services/llm/adapters/openai_chat_adapter.js';
+import { TranslationService } from '../server/services/translation_service.js';
 
 class SmokeProviderHttpError extends Error {
   status: number;
@@ -264,6 +265,19 @@ function assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible() {
   );
 }
 
+function assertPrefixOnlyTranslatedLinesAreCountedAsLoss() {
+  const issues = (TranslationService as any).getTranslationQualityIssues(
+    '[00:00:00] hello\n[00:00:01] world',
+    '[00:00:00]\n[00:00:01] [[L00002]]',
+    'Traditional Chinese',
+    { expectedLineCount: 2 }
+  );
+  assert(
+    Array.isArray(issues) && issues.includes('line_count_loss'),
+    'Prefix-only translated rows were counted as valid translated content.'
+  );
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -381,6 +395,7 @@ async function main() {
   assertExplicitProviderBatchingFalseDisablesDefaultProfile();
   assertOpenAiCompatibleIpv6LoopbackDisablesThinking();
   assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible();
+  assertPrefixOnlyTranslatedLinesAreCountedAsLoss();
 
   console.log('cloud translation orchestrator smoke passed');
 }
