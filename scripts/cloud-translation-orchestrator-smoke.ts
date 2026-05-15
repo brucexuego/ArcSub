@@ -9,6 +9,8 @@ import { resolveCloudTranslateProvider } from '../server/services/cloud_translat
 import { resolveCloudTranslateBatchingProfile } from '../server/services/cloud_translate/profiles/batching.js';
 import { openAiCompatibleChatAdapter } from '../server/services/llm/adapters/openai_chat_adapter.js';
 import { TranslationService } from '../server/services/translation_service.js';
+import { runLocalTranslationOrchestrator } from '../server/services/local_llm/orchestrators/local_translation_orchestrator.js';
+import { OpenvinoRuntimeManager } from '../server/openvino_runtime_manager.js';
 
 class SmokeProviderHttpError extends Error {
   status: number;
@@ -278,6 +280,110 @@ function assertPrefixOnlyTranslatedLinesAreCountedAsLoss() {
   );
 }
 
+async function assertTranslateGemmaCoverageLossFallsBackWhenChunkCannotSplit() {
+  const previousTranslateWithLocalModel = (OpenvinoRuntimeManager as any).translateWithLocalModel;
+  const generations = ['hello\nworld', 'translated one', 'translated two'];
+  (OpenvinoRuntimeManager as any).translateWithLocalModel = async () => generations.shift() || '完成';
+
+  try {
+    const result = await runLocalTranslationOrchestrator(
+      {
+        input: {
+          text: '[00:00:00] hello\n[00:00:01] world',
+          targetLang: 'Traditional Chinese',
+          enableJsonLineRepair: true,
+        },
+        localModel: {
+          id: 'smoke-translategemma',
+          type: 'translate',
+          displayName: 'Smoke TranslateGemma',
+          repoId: 'google/translategemma-smoke',
+          localSubdir: 'smoke-translategemma',
+          requiredFiles: [],
+          runtime: 'openvino-llm-node',
+          runtimeLayout: 'translate-llm',
+          installMode: 'hf-direct',
+          sourceFormat: 'openvino-ir',
+          conversionMethod: 'direct-download',
+          device: 'AUTO',
+          source: 'builtin',
+        } as any,
+        modelStrategy: {
+          family: 'translategemma',
+          promptStyle: 'chat',
+          generationStyle: 'chat',
+        } as any,
+        localProfile: {
+          profileId: 'smoke-translategemma',
+          profileFamily: 'translategemma',
+          baseline: { baselineConfidence: 'high', taskFamily: 'translation' },
+          usedFallbackBaseline: false,
+        } as any,
+        localTranslationProfile: {
+          effectivePromptStyle: 'chat',
+          modelProfile: { id: 'smoke-translategemma' },
+        } as any,
+        translationQualityMode: 'json_strict' as any,
+        residualRetryLimit: 0,
+        jsonRepairMaxLinesBeforeSplit: 0,
+      },
+      {
+        throwIfAborted: () => {},
+        buildLineSafeUnits,
+        buildSourceChunkText: (units) =>
+          units.map((unit) => `${unit.prefix}${String(unit.content || '').replace(/^(\[[^\]]+\]\s*)+/, '')}`).join('\n'),
+        buildLineSafeInput,
+        splitLineSafeUnits: (units) => [units],
+        splitLineSafeUnitsForLocalTranslation: async (units) => [units],
+        splitLineSafeUnitsForTranslateGemma: async (units, options) => {
+          options.onBatchPlan?.({
+            mode: 'fixed_lines',
+            batchCount: 1,
+            lineCounts: [units.length],
+            promptTokens: [0],
+            durationsMs: [],
+            totalDurationMs: null,
+            maxDurationMs: null,
+          } as any);
+          return [units];
+        },
+        stripStructuredPrefix: (line) => String(line || '').replace(/^(\[[^\]]+\]\s*)+/, '').trim(),
+        stripInjectedSpeakerContext: (line) => String(line || '').replace(/<<SPEAKER:[^>]+>>\s*/gi, '').trim(),
+        parseLocalTranslatedText: (raw) => String(raw || ''),
+        parseLineSafeOutput: () => null,
+        rebindByLineIndex: () => null,
+        normalizeTargetLanguageOutput: (text) => String(text || '').trim(),
+        getTranslationQualityIssues: (_source, translated) => {
+          const text = String(translated || '').trim().toLowerCase();
+          if (!text) return ['empty_output'];
+          if (/\bhello\b|\bworld\b/.test(text)) return ['pass_through'];
+          return [];
+        },
+        addQualityIssueWarnings: (issues, addWarning) => {
+          for (const issue of issues) addWarning(`quality_issue_${issue}`);
+        },
+        buildStrictRetryInstruction: () => 'Retry with a valid translation.',
+        buildTargetLanguageDescriptor: (targetLang) => targetLang,
+        estimateLocalMaxNewTokens: () => 64,
+        buildLocalTranslationPrompt: (input) => input.text,
+        buildLocalTranslationMessages: () => null,
+        buildLocalGenerationOptions: () => ({}),
+        repairLineAlignmentWithLocalJsonMap: async () => null,
+        isLikelyPassThroughTranslation: () => false,
+        isPlainTranslationProbeMode: () => false,
+        getTranslateRuntimeDebug: () => null,
+      } as any
+    );
+
+    assert(
+      result.translatedText.includes('translated one') && result.translatedText.includes('translated two'),
+      'TranslateGemma coverage-loss fallback did not recover with individual lines.'
+    );
+  } finally {
+    (OpenvinoRuntimeManager as any).translateWithLocalModel = previousTranslateWithLocalModel;
+  }
+}
+
 async function main() {
   const sample = ['[00:00:00] alpha', '[00:00:01] beta', '[00:00:02] gamma'].join('\n');
 
@@ -396,6 +502,7 @@ async function main() {
   assertOpenAiCompatibleIpv6LoopbackDisablesThinking();
   assertOllamaOpenAiCompatibleEndpointStaysOpenAiCompatible();
   assertPrefixOnlyTranslatedLinesAreCountedAsLoss();
+  await assertTranslateGemmaCoverageLossFallsBackWhenChunkCannotSplit();
 
   console.log('cloud translation orchestrator smoke passed');
 }

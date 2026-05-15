@@ -566,7 +566,7 @@ export async function runLocalTranslationOrchestrator(
       if (localPlainProbeMode) return false;
       const issues = deps.getTranslationQualityIssues(sourceLine, translatedLine, input.targetLang);
       deps.addQualityIssueWarnings(issues, addWarning);
-      return issues.length > 0;
+      return units.length > 1 && issues.length > 0;
     });
   };
 
@@ -589,7 +589,10 @@ export async function runLocalTranslationOrchestrator(
     }
 
     addWarning('translategemma_recursive_chunk_split_applied');
-    const [leftUnits, rightUnits] = deps.splitLineSafeUnits(units);
+    const [leftUnits = [], rightUnits = []] = deps.splitLineSafeUnits(units);
+    if (rightUnits.length === 0) {
+      return await translateTranslateGemmaUnitsIndividually(leftUnits.length > 0 ? leftUnits : units);
+    }
     const leftText = leftUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(leftUnits) : '';
     const rightText = rightUnits.length > 0 ? await translateTranslateGemmaSubtitleBatch(rightUnits) : '';
     return [leftText, rightText].filter(Boolean).join('\n');
