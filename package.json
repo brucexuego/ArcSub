@@ -54,7 +54,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "artplayer": "^5.4.0",
     "dotenv": "^17.2.3",
-    "express": "^4.21.2",
+    "express": "^4.22.2",
     "fs-extra": "^11.3.4",
     "hangul-romanization": "^1.0.1",
     "kuromoji": "^0.1.2",
