@@ -60,7 +60,6 @@ const handler: VideoSiteHandlerModule = {
     const directUrlResult = await runYtDlp([
       ...buildBaseYtDlpArgs(),
       '--impersonate', 'chrome',
-      '--extractor-args', 'youtube:player_client=android_vr,android,web',
       '-f', '18',
       '-g',
       watchUrl,

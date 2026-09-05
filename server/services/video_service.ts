@@ -264,7 +264,12 @@ export class VideoService {
               }
             }
             console.error(`[VideoService] Download failed. Stderr: ${lastError}`);
-            return reject(new Error(`Download failed with code ${code}. ${lastError.split('\n').pop()}`));
+            const errorDetail = lastError
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .pop();
+            return reject(new Error(`Download failed with code ${code}.${errorDetail ? ` ${errorDetail}` : ''}`));
           }
           const files = await fs.readdir(assetsDir);
           const videoFile = files.find((file) => file.startsWith(`${outputPrefix}.`) && !file.endsWith('.part'));
