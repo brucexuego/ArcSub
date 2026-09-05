@@ -7,8 +7,7 @@
     "hostSuffixes": ["youtube.com", "youtu.be"]
   },
   "ytDlp": {
-    "impersonate": "chrome",
-    "extractorArgs": ["youtube:player_client=android_vr,android,web"]
+    "impersonate": "chrome"
   },
   "playback": {
     "match": {
